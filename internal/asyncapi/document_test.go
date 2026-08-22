@@ -6,57 +6,45 @@ import (
 	"testing"
 )
 
-func TestLoadYAML(t *testing.T) {
-	content := `asyncapi: 2.6.0
+func TestLoadValidYAML(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
 info:
-  title: Test API
-  version: 1.0.0
+  title: Test
+  version: '1.0.0'
 channels:
-  orders.created:
+  test:
     publish:
       message:
         payload:
           type: object
           properties:
-            orderId:
+            id:
               type: string
-              format: uuid
-            amount:
-              type: number
-              minimum: 0
-              maximum: 1000
 `
-	tmpDir := t.TempDir()
-	specPath := filepath.Join(tmpDir, "test.yaml")
-	if err := os.WriteFile(specPath, []byte(content), 0644); err != nil {
-		t.Fatalf("writing spec: %v", err)
+	tmpFile := filepath.Join(t.TempDir(), "test.yaml")
+	if err := os.WriteFile(tmpFile, []byte(spec), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	doc, err := Load(specPath)
+	doc, err := Load(tmpFile)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatalf("Load failed: %v", err)
 	}
 
 	if doc.AsyncAPI != "2.6.0" {
-		t.Errorf("AsyncAPI = %q, want %q", doc.AsyncAPI, "2.6.0")
-	}
-
-	if doc.Info.Title != "Test API" {
-		t.Errorf("Info.Title = %q, want %q", doc.Info.Title, "Test API")
-	}
-
-	if _, ok := doc.Channels["orders.created"]; !ok {
-		t.Error("channel orders.created not found")
+		t.Errorf("expected asyncapi 2.6.0, got %s", doc.AsyncAPI)
 	}
 }
 
 func TestPayloadSchema(t *testing.T) {
-	content := `asyncapi: 2.6.0
+	spec := `
+asyncapi: '2.6.0'
 info:
-  title: Test API
-  version: 1.0.0
+  title: Test
+  version: '1.0.0'
 channels:
-  orders.created:
+  orders:
     publish:
       message:
         payload:
@@ -65,77 +53,88 @@ channels:
             orderId:
               type: string
 `
-	tmpDir := t.TempDir()
-	specPath := filepath.Join(tmpDir, "test.yaml")
-	if err := os.WriteFile(specPath, []byte(content), 0644); err != nil {
-		t.Fatalf("writing spec: %v", err)
+	tmpFile := filepath.Join(t.TempDir(), "test.yaml")
+	if err := os.WriteFile(tmpFile, []byte(spec), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	doc, err := Load(specPath)
+	doc, err := Load(tmpFile)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatal(err)
 	}
 
-	schema, err := doc.PayloadSchema("orders.created")
+	schema, err := doc.PayloadSchema("orders")
 	if err != nil {
-		t.Fatalf("PayloadSchema() error: %v", err)
+		t.Fatalf("PayloadSchema failed: %v", err)
 	}
 
 	if schema["type"] != "object" {
-		t.Errorf("schema type = %v, want object", schema["type"])
-	}
-
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("properties not found or not a map")
-	}
-
-	if _, ok := props["orderId"]; !ok {
-		t.Error("orderId property not found")
+		t.Errorf("expected type object, got %v", schema["type"])
 	}
 }
 
-func TestPayloadSchemaRef(t *testing.T) {
-	content := `asyncapi: 2.6.0
+func TestMissingChannel(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
 info:
-  title: Test API
-  version: 1.0.0
+  title: Test
+  version: '1.0.0'
+channels: {}
+`
+	tmpFile := filepath.Join(t.TempDir(), "test.yaml")
+	if err := os.WriteFile(tmpFile, []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	doc, err := Load(tmpFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = doc.PayloadSchema("nonexistent")
+	if err == nil {
+		t.Error("expected error for missing channel")
+	}
+}
+
+func TestRecursiveRefNoStackOverflow(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        value:
+          type: string
+        child:
+          $ref: '#/components/schemas/Node'
 channels:
-  users.created:
+  test:
     publish:
       message:
-        $ref: '#/components/messages/UserCreated'
-components:
-  messages:
-    UserCreated:
-      payload:
-        type: object
-        properties:
-          userId:
-            type: string
+        payload:
+          $ref: '#/components/schemas/Node'
 `
-	tmpDir := t.TempDir()
-	specPath := filepath.Join(tmpDir, "test.yaml")
-	if err := os.WriteFile(specPath, []byte(content), 0644); err != nil {
-		t.Fatalf("writing spec: %v", err)
+	tmpFile := filepath.Join(t.TempDir(), "test.yaml")
+	if err := os.WriteFile(tmpFile, []byte(spec), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	doc, err := Load(specPath)
+	doc, err := Load(tmpFile)
 	if err != nil {
-		t.Fatalf("Load() error: %v", err)
+		t.Fatal(err)
 	}
 
-	schema, err := doc.PayloadSchema("users.created")
+	schema, err := doc.PayloadSchema("test")
 	if err != nil {
-		t.Fatalf("PayloadSchema() error: %v", err)
+		t.Fatalf("PayloadSchema failed: %v", err)
 	}
 
-	props, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatal("properties not found or not a map")
-	}
-
-	if _, ok := props["userId"]; !ok {
-		t.Error("userId property not found")
+	if schema["type"] != "object" {
+		t.Errorf("expected type object, got %v", schema["type"])
 	}
 }

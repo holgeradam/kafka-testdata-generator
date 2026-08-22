@@ -2,7 +2,6 @@ package generator
 
 import (
 	"fmt"
-	"math"
 	"math/rand"
 	"sort"
 	"strings"
@@ -294,12 +293,17 @@ func (g *Generator) generateSKU() string {
 }
 
 func (g *Generator) generateFromPattern(pattern string) string {
-	if strings.HasPrefix(pattern, "^[A-Z]") && strings.Contains(pattern, "{N}") {
+	if strings.Contains(pattern, "{N}") {
 		result := pattern
 		for strings.Contains(result, "{N}") {
 			result = strings.Replace(result, "{N}", fmt.Sprintf("%d", g.rng.Intn(10)), 1)
 		}
-		result = strings.Replace(result, "[A-Z]", string(rune('A'+g.rng.Intn(26))), 1)
+		result = strings.ReplaceAll(result, "[A-Z]", func() string {
+			return string(rune('A' + g.rng.Intn(26)))
+		}())
+		result = strings.ReplaceAll(result, "[a-z]", func() string {
+			return string(rune('a' + g.rng.Intn(26)))
+		}())
 		return result
 	}
 	return g.randomString(8)
@@ -336,9 +340,6 @@ func normalizeSchema(schema map[string]any) map[string]any {
 	}
 	return result
 }
-
-// Ensure math import is used
-var _ = math.MaxInt64
 
 var firstNames = []string{
 	"Alice", "Bob", "Charlie", "Diana", "Edward", "Fiona", "George", "Hannah",

@@ -28,6 +28,11 @@ func New(broker string) (*Producer, error) {
 	return &Producer{client: client}, nil
 }
 
+// Ping checks if the broker is reachable.
+func (p *Producer) Ping(ctx context.Context) error {
+	return p.client.Ping(ctx)
+}
+
 // Send produces a single message to the given topic with the provided key and value.
 func (p *Producer) Send(ctx context.Context, topic string, key, value []byte) error {
 	record := &kgo.Record{

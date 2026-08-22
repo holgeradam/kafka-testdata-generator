@@ -6,9 +6,16 @@ test:
 test-kafka:
 	docker compose down -v 2>/dev/null || true
 	docker compose up -d
-	@echo "Waiting for Kafka to be ready..."
-	@until [ "$$(docker inspect --format='{{.State.Health.Status}}' kafka-testdata 2>/dev/null)" = "healthy" ]; do \
+	@echo "Waiting for Kafka to be ready (timeout: 30s)..."
+	@timeout=30; \
+	while [ "$$(docker inspect --format='{{.State.Health.Status}}' kafka-testdata 2>/dev/null)" != "healthy" ]; do \
 		sleep 1; \
+		timeout=$$((timeout - 1)); \
+		if [ $$timeout -le 0 ]; then \
+			echo "Error: Kafka failed to become ready"; \
+			docker compose down -v; \
+			exit 1; \
+		fi; \
 	done
 	@echo "Kafka is ready. Creating topic..."
 	@docker exec kafka-testdata /opt/kafka/bin/kafka-topics.sh \

@@ -221,9 +221,18 @@ func (d *Document) resolveRef(ref string) (any, error) {
 }
 
 func (d *Document) resolveRefs(schema map[string]any) error {
+	return d.resolveRefsWithSeen(schema, make(map[string]bool))
+}
+
+func (d *Document) resolveRefsWithSeen(schema map[string]any, seen map[string]bool) error {
 	for key, val := range schema {
 		if key == "$ref" {
 			if ref, ok := val.(string); ok {
+				if seen[ref] {
+					delete(schema, "$ref")
+					continue
+				}
+				seen[ref] = true
 				resolved, err := d.resolveRef(ref)
 				if err != nil {
 					return fmt.Errorf("resolving $ref %s: %w", ref, err)
@@ -233,13 +242,13 @@ func (d *Document) resolveRefs(schema map[string]any) error {
 						schema[k] = v
 					}
 					delete(schema, "$ref")
-					return d.resolveRefs(schema)
+					return d.resolveRefsWithSeen(schema, seen)
 				}
 			}
 		}
 
 		if nested, ok := val.(map[string]any); ok {
-			if err := d.resolveRefs(nested); err != nil {
+			if err := d.resolveRefsWithSeen(nested, seen); err != nil {
 				return err
 			}
 		}
@@ -247,7 +256,7 @@ func (d *Document) resolveRefs(schema map[string]any) error {
 		if arr, ok := val.([]any); ok {
 			for _, item := range arr {
 				if nested, ok := item.(map[string]any); ok {
-					if err := d.resolveRefs(nested); err != nil {
+					if err := d.resolveRefsWithSeen(nested, seen); err != nil {
 						return err
 					}
 				}

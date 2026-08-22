@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -91,6 +90,7 @@ func runDryRun(ctx context.Context, gen *generator.Generator, schema map[string]
 	var total, acked, failed int64
 	start := time.Now()
 
+loop:
 	for {
 		if count > 0 && total >= int64(count) {
 			break
@@ -98,7 +98,7 @@ func runDryRun(ctx context.Context, gen *generator.Generator, schema map[string]
 
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		default:
 		}
 
@@ -140,9 +140,15 @@ func runProduce(ctx context.Context, gen *generator.Generator, schema map[string
 	}
 	defer prod.Close()
 
+	if err := prod.Ping(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: broker %s unreachable: %v\n", broker, err)
+		os.Exit(1)
+	}
+
 	var total, acked, failed int64
 	start := time.Now()
 
+loop:
 	for {
 		if count > 0 && total >= int64(count) {
 			break
@@ -150,7 +156,7 @@ func runProduce(ctx context.Context, gen *generator.Generator, schema map[string
 
 		select {
 		case <-ctx.Done():
-			break
+			break loop
 		default:
 		}
 
@@ -197,15 +203,4 @@ func printStats(total, acked, failed int64, elapsed time.Duration, dryRun bool) 
 	}
 	fmt.Fprintf(os.Stderr, "\nStats [%s]: total=%d acked=%d failed=%d elapsed=%s\n",
 		mode, total, acked, failed, elapsed.Round(time.Millisecond))
-}
-
-func firstOrEmpty(s []string) string {
-	if len(s) > 0 {
-		return s[0]
-	}
-	return ""
-}
-
-func contains(s, substr string) bool {
-	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }

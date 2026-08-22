@@ -5,7 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestScenarioBasicDryRun(t *testing.T) {
@@ -139,6 +141,36 @@ func TestScenarioInvalidSpec(t *testing.T) {
 	err := cmd.Run()
 	if err == nil {
 		t.Error("expected error for nonexistent spec file")
+	}
+}
+
+func TestScenarioSignalHandling(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "100")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start command: %v", err)
+	}
+
+	// Send SIGINT after a short delay
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cmd.Process.Signal(syscall.SIGINT)
+	}()
+
+	// Wait should complete quickly after signal
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case <-done:
+		// Process exited - the important thing is that it didn't hang
+	case <-time.After(5 * time.Second):
+		cmd.Process.Kill()
+		t.Fatal("command did not exit after SIGINT within 5 seconds")
 	}
 }
 
