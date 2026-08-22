@@ -134,6 +134,35 @@ Or in dry-run mode:
 Stats [dry-run]: total=10 acked=10 failed=0 elapsed=12ms
 ```
 
+## Development
+
+### Testing
+
+Run unit and integration tests:
+
+```bash
+make test
+```
+
+### Testing with Kafka
+
+Spin up a local Kafka cluster (KRaft mode, no Zookeeper), run the tool against it, then shut down:
+
+```bash
+make test-kafka
+```
+
+This will:
+1. Start a single-node Kafka cluster in Docker
+2. Wait for Kafka to be healthy
+3. Generate 5 test records and produce them to Kafka
+4. Wait for you to press Enter
+5. Shut down Kafka and wipe all data
+
+### Docker Compose
+
+The `docker-compose.yml` runs a single-node Kafka cluster in KRaft mode on `localhost:9092`. The cluster starts with a blank slate every time (no persistent volumes).
+
 ## Future Features
 
 - Environment variable configuration
@@ -141,6 +170,7 @@ Stats [dry-run]: total=10 acked=10 failed=0 elapsed=12ms
 - Topic auto-creation
 - Configurable ack levels (`acks=all`)
 - Advanced key extraction with JSON path
+- Kafka UI for visual topic/message inspection
 
 ## License
 

@@ -18,6 +18,7 @@ func New(broker string) (*Producer, error) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(broker),
 		kgo.RequiredAcks(kgo.LeaderAck()),
+		kgo.DisableIdempotentWrite(),
 		kgo.MaxBufferedRecords(1000),
 		kgo.ProducerLinger(10*time.Millisecond),
 	)
