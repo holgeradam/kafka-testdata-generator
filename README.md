@@ -153,15 +153,19 @@ make test-kafka
 ```
 
 This will:
-1. Start a single-node Kafka cluster in Docker
+1. Start a single-node Kafka cluster in a container
 2. Wait for Kafka to be healthy
 3. Generate 5 test records and produce them to Kafka
 4. Wait for you to press Enter
 5. Shut down Kafka and wipe all data
 
+The Makefile auto-detects your container runtime and uses **Podman** or **Docker**, whichever is installed.
+
 ### Docker Compose
 
 The `docker-compose.yml` runs a single-node Kafka cluster in KRaft mode on `localhost:9092`. The cluster starts with a blank slate every time (no persistent volumes).
+
+Works with both `docker compose` and `podman compose` (which delegates to an external compose provider such as `docker-compose`).
 
 ## Future Features
 
