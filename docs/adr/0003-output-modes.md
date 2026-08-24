@@ -5,3 +5,5 @@ By default, generated payloads are produced to Kafka and aggregated stats (total
 Streaming is one-by-one in both modes, enabling piping: `kafka-testdata-generator -dry-run -count 10 | jq '.orderId'` works as expected.
 
 Continuous mode is triggered by `-count 0`, which runs indefinitely until interrupted (Ctrl+C). This is documented but requires no extra flag.
+
+In Dry run, when `-key` is set, the extracted Key value is echoed to stderr ahead of the stats. Stderr otherwise carries only warnings and stats; stdout carries only Payload NDJSON lines.
