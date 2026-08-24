@@ -14,11 +14,15 @@ _Avoid_: topic (use "Kafka topic" when referring to the broker-level concept)
 
 **Message schema**:
 A JSON Schema embedded in the AsyncAPI spec's channel message payload. Defines the structure and constraints of generated test data.
-_Aavoid_: payload schema
+_Avoid_: payload schema
 
 **Payload**:
 A single generated test record conforming to the message schema. Serialized as JSON.
 _Avoid_: message, record, event (use "payload" for the data, "message" for the Kafka envelope)
+
+**Conformance**:
+The generator's output promise: every Payload honors every Message schema constraint the tool understands; anything it cannot honor stops the run with a typed error rather than emitting non-conforming data. Validation never runs in the generation path.
+_Avoid_: payload validation, schema checking
 
 **Key**:
 The Kafka message key, extracted from a field in the generated payload. Used for partitioning. Configurable field name via CLI.
