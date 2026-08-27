@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 )
 
@@ -79,128 +79,41 @@ func main() {
 		cancel()
 	}()
 
+	var sink pipeline.Sink
 	if *dryRun {
-		runDryRun(ctx, gen, schema, *channel, *count, *rateLimit, *keyField)
+		sink = pipeline.NewStdoutSink(os.Stdout, os.Stderr)
 	} else {
-		runProduce(ctx, gen, schema, *channel, *broker, *count, *rateLimit, *keyField)
-	}
-}
-
-func runDryRun(ctx context.Context, gen *generator.Generator, schema map[string]any, channel string, count int, rateLimit time.Duration, keyField string) {
-	var total, acked, failed int64
-	start := time.Now()
-
-loop:
-	for {
-		if count > 0 && total >= int64(count) {
-			break
-		}
-
-		select {
-		case <-ctx.Done():
-			break loop
-		default:
-		}
-
-		payload := gen.Value(schema, "")
-		total++
-
-		if keyField != "" {
-			if key, ok := payload.(map[string]any)[keyField]; ok {
-				fmt.Fprintf(os.Stderr, "Key: %v\n", key)
-			} else {
-				fmt.Fprintf(os.Stderr, "Warning: field %q not found in payload\n", keyField)
-				failed++
-				continue
-			}
-		}
-
-		data, err := json.Marshal(payload)
+		prod, err := producer.New(*broker)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshaling payload: %v\n", err)
-			failed++
-			continue
+			fmt.Fprintf(os.Stderr, "Error connecting to Kafka: %v\n", err)
+			os.Exit(1)
 		}
-
-		fmt.Println(string(data))
-		acked++
-
-		time.Sleep(rateLimit)
+		if err := prod.Ping(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: broker %s unreachable: %v\n", *broker, err)
+			os.Exit(1)
+		}
+		sink = pipeline.NewKafkaSink(*channel, prod)
 	}
+	defer sink.Close()
 
-	elapsed := time.Since(start)
-	printStats(total, acked, failed, elapsed, true)
+	p := pipeline.New(pipeline.Config{
+		Generator: gen,
+		Schema:    schema,
+		Count:     *count,
+		RateLimit: *rateLimit,
+		KeyField:  *keyField,
+		Warn:      os.Stderr,
+	}, sink)
+
+	stats := p.Run(ctx)
+	printStats(stats, *dryRun)
 }
 
-func runProduce(ctx context.Context, gen *generator.Generator, schema map[string]any, channel, broker string, count int, rateLimit time.Duration, keyField string) {
-	prod, err := producer.New(broker)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to Kafka: %v\n", err)
-		os.Exit(1)
-	}
-	defer prod.Close()
-
-	if err := prod.Ping(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: broker %s unreachable: %v\n", broker, err)
-		os.Exit(1)
-	}
-
-	var total, acked, failed int64
-	start := time.Now()
-
-loop:
-	for {
-		if count > 0 && total >= int64(count) {
-			break
-		}
-
-		select {
-		case <-ctx.Done():
-			break loop
-		default:
-		}
-
-		payload := gen.Value(schema, "")
-		total++
-
-		var key []byte
-		if keyField != "" {
-			if k, ok := payload.(map[string]any)[keyField]; ok {
-				keyData, _ := json.Marshal(k)
-				key = keyData
-			} else {
-				fmt.Fprintf(os.Stderr, "Warning: field %q not found in payload, skipping\n", keyField)
-				failed++
-				continue
-			}
-		}
-
-		data, err := json.Marshal(payload)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error marshaling payload: %v\n", err)
-			failed++
-			continue
-		}
-
-		if err := prod.Send(ctx, channel, key, data); err != nil {
-			fmt.Fprintf(os.Stderr, "Error producing message: %v\n", err)
-			failed++
-			continue
-		}
-
-		acked++
-		time.Sleep(rateLimit)
-	}
-
-	elapsed := time.Since(start)
-	printStats(total, acked, failed, elapsed, false)
-}
-
-func printStats(total, acked, failed int64, elapsed time.Duration, dryRun bool) {
+func printStats(s pipeline.Stats, dryRun bool) {
 	mode := "kafka"
 	if dryRun {
 		mode = "dry-run"
 	}
 	fmt.Fprintf(os.Stderr, "\nStats [%s]: total=%d acked=%d failed=%d elapsed=%s\n",
-		mode, total, acked, failed, elapsed.Round(time.Millisecond))
+		mode, s.Total, s.Acked, s.Failed, s.Elapsed.Round(time.Millisecond))
 }
