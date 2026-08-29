@@ -335,9 +335,6 @@ func normalizeSchema(schema map[string]any) map[string]any {
 	for k, v := range schema {
 		result[k] = v
 	}
-	if _, ok := result["type"]; !ok {
-		result["type"] = "string"
-	}
 	return result
 }
 

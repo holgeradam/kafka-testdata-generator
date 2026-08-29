@@ -11,10 +11,24 @@ import (
 
 // Document represents a parsed AsyncAPI specification.
 type Document struct {
-	AsyncAPI    string              `yaml:"asyncapi" json:"asyncapi"`
-	Info        Info                `yaml:"info" json:"info"`
-	Channels    map[string]Channel  `yaml:"channels" json:"channels"`
-	Components  *Components         `yaml:"components,omitempty" json:"components,omitempty"`
+	AsyncAPI   string             `yaml:"asyncapi" json:"asyncapi"`
+	Info       Info               `yaml:"info" json:"info"`
+	Channels   map[string]Channel `yaml:"channels" json:"channels"`
+	Components *Components        `yaml:"components,omitempty" json:"components,omitempty"`
+
+	// raw is the whole spec decoded once into a navigable, JSON-normalized map
+	// that $ref resolution walks directly.
+	raw map[string]any
+}
+
+// UnsupportedRecursionError reports a cyclic $ref that the tool cannot yet
+// generate instances from. It carries the offending ref path.
+type UnsupportedRecursionError struct {
+	Ref string
+}
+
+func (e *UnsupportedRecursionError) Error() string {
+	return "unsupported recursive $ref in schema: " + e.Ref
 }
 
 type Info struct {
@@ -48,6 +62,8 @@ type Components struct {
 }
 
 // Load reads and parses an AsyncAPI specification from a YAML or JSON file.
+// The document is also decoded once into a navigable JSON-normalized map so
+// that $ref resolution can walk it directly instead of re-marshalling per ref.
 func Load(path string) (*Document, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -55,17 +71,45 @@ func Load(path string) (*Document, error) {
 	}
 
 	var doc Document
-	if strings.HasSuffix(path, ".json") {
-		if err := json.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("parsing JSON spec: %w", err)
-		}
-	} else {
-		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("parsing YAML spec: %w", err)
-		}
+	if err := decode(data, path, &doc); err != nil {
+		return nil, fmt.Errorf("parsing spec: %w", err)
 	}
 
+	raw, err := unmarshalRaw(data, path)
+	if err != nil {
+		return nil, err
+	}
+	doc.raw = raw
+
 	return &doc, nil
+}
+
+// decode unmarshals spec bytes into target, choosing YAML or JSON by suffix.
+func decode(data []byte, path string, target any) error {
+	if strings.HasSuffix(path, ".json") {
+		return json.Unmarshal(data, target)
+	}
+	return yaml.Unmarshal(data, target)
+}
+
+// unmarshalRaw decodes the spec bytes into a navigable map and normalizes it
+// through a JSON round-trip so every number is float64 regardless of whether
+// the source was YAML (integers) or JSON. This keeps numbers consistent with
+// the JSON round-trip the message structs already undergo.
+func unmarshalRaw(data []byte, path string) (map[string]any, error) {
+	var m map[string]any
+	if err := decode(data, path, &m); err != nil {
+		return nil, fmt.Errorf("parsing spec: %w", err)
+	}
+	buf, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("normalizing spec: %w", err)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(buf, &normalized); err != nil {
+		return nil, fmt.Errorf("normalizing spec: %w", err)
+	}
+	return normalized, nil
 }
 
 // PayloadSchema extracts the JSON Schema for the message payload of the given channel.
@@ -87,12 +131,117 @@ func (d *Document) PayloadSchema(channel string) (map[string]any, error) {
 		return nil, fmt.Errorf("no payload schema in message for channel %q", channel)
 	}
 
-	schema = normalizeMap(schema)
-	if err := d.resolveRefs(schema); err != nil {
+	resolved, err := d.resolveNode(schema, nil)
+	if err != nil {
 		return nil, fmt.Errorf("resolving refs: %w", err)
 	}
+	out, ok := resolved.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("payload schema for channel %q must be an object", channel)
+	}
 
-	return schema, nil
+	if ref := findPreservedRef(out); ref != "" {
+		return nil, &UnsupportedRecursionError{Ref: ref}
+	}
+
+	return out, nil
+}
+
+// resolveNode expands $ref nodes along a single path. The stack holds the refs
+// currently being expanded, so a ref that targets a node already on the stack
+// (a cycle) is preserved as a $ref node; diamonds resolve correctly because
+// each sibling starts a fresh path. Non-cyclic refs are fully expanded.
+func (d *Document) resolveNode(node any, stack []string) (any, error) {
+	if m, ok := node.(map[string]any); ok {
+		if ref, isRef := m["$ref"].(string); isRef {
+			if contains(stack, ref) {
+				return deepCopy(m), nil
+			}
+			target, err := d.resolveRef(ref)
+			if err != nil {
+				return nil, fmt.Errorf("resolving $ref %s: %w", ref, err)
+			}
+			return d.resolveNode(target, append(stack, ref))
+		}
+
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			rv, err := d.resolveNode(v, stack)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = rv
+		}
+		return out, nil
+	}
+
+	if arr, ok := node.([]any); ok {
+		out := make([]any, len(arr))
+		for i, item := range arr {
+			rv, err := d.resolveNode(item, stack)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = rv
+		}
+		return out, nil
+	}
+
+	return node, nil
+}
+
+// findPreservedRef returns the first $ref path left in a resolved schema, or
+// an empty string. Any surviving $ref means a cycle was preserved.
+func findPreservedRef(node map[string]any) string {
+	if ref, ok := node["$ref"].(string); ok {
+		return ref
+	}
+	for _, v := range node {
+		switch n := v.(type) {
+		case map[string]any:
+			if ref := findPreservedRef(n); ref != "" {
+				return ref
+			}
+		case []any:
+			for _, item := range n {
+				if m, ok := item.(map[string]any); ok {
+					if ref := findPreservedRef(m); ref != "" {
+						return ref
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func contains(stack []string, ref string) bool {
+	for _, s := range stack {
+		if s == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// deepCopy clones a nested value built from maps, slices, and scalars.
+func deepCopy(v any) any {
+	switch n := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, val := range n {
+			out[k] = deepCopy(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(n))
+		for i, item := range n {
+			out[i] = deepCopy(item)
+		}
+		return out
+	default:
+		return n
+	}
 }
 
 func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
@@ -114,21 +263,9 @@ func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
 	if ch.Messages != nil {
 		for _, v := range ch.Messages {
 			if m, ok := v.(map[string]any); ok {
-				msg := &Message{}
-				if ref, ok := m["$ref"].(string); ok {
-					resolved, err := d.resolveRef(ref)
-					if err != nil {
-						return nil, err
-					}
-					if rm, ok := resolved.(map[string]any); ok {
-						if err := mapToStruct(rm, msg); err != nil {
-							return nil, err
-						}
-					}
-				} else {
-					if err := mapToStruct(m, msg); err != nil {
-						return nil, err
-					}
+				msg, err := messageFromMap(d, m)
+				if err != nil {
+					return nil, err
 				}
 				return msg, nil
 			}
@@ -141,42 +278,18 @@ func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
 func (d *Document) normalizeMessages(raw any) ([]*Message, error) {
 	switch v := raw.(type) {
 	case map[string]any:
-		msg := &Message{}
-		if ref, ok := v["$ref"].(string); ok {
-			resolved, err := d.resolveRef(ref)
-			if err != nil {
-				return nil, err
-			}
-			if rm, ok := resolved.(map[string]any); ok {
-				if err := mapToStruct(rm, msg); err != nil {
-					return nil, err
-				}
-			}
-		} else {
-			if err := mapToStruct(v, msg); err != nil {
-				return nil, err
-			}
+		msg, err := messageFromMap(d, v)
+		if err != nil {
+			return nil, err
 		}
 		return []*Message{msg}, nil
 	case []any:
 		var msgs []*Message
 		for _, item := range v {
 			if m, ok := item.(map[string]any); ok {
-				msg := &Message{}
-				if ref, ok := m["$ref"].(string); ok {
-					resolved, err := d.resolveRef(ref)
-					if err != nil {
-						return nil, err
-					}
-					if rm, ok := resolved.(map[string]any); ok {
-						if err := mapToStruct(rm, msg); err != nil {
-							return nil, err
-						}
-					}
-				} else {
-					if err := mapToStruct(m, msg); err != nil {
-						return nil, err
-					}
+				msg, err := messageFromMap(d, m)
+				if err != nil {
+					return nil, err
 				}
 				msgs = append(msgs, msg)
 			}
@@ -187,25 +300,43 @@ func (d *Document) normalizeMessages(raw any) ([]*Message, error) {
 	}
 }
 
+// messageFromMap decodes one message map into a *Message, resolving a
+// message-level $ref when present. Unlike resolveNode, which expands schema
+// nodes into anonymous nested values, this works at the top-level message
+// boundary and decodes into the typed Message struct.
+func messageFromMap(d *Document, m map[string]any) (*Message, error) {
+	msg := &Message{}
+	if ref, ok := m["$ref"].(string); ok {
+		resolved, err := d.resolveRef(ref)
+		if err != nil {
+			return nil, err
+		}
+		rm, ok := resolved.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("resolved message %s is not an object", ref)
+		}
+		if err := mapToStruct(rm, msg); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := mapToStruct(m, msg); err != nil {
+			return nil, err
+		}
+	}
+	return msg, nil
+}
+
+// resolveRef resolves an internal (#/) reference by navigating the document's
+// raw map directly. External refs are rejected.
 func (d *Document) resolveRef(ref string) (any, error) {
 	if !strings.HasPrefix(ref, "#/") {
 		return nil, fmt.Errorf("external refs not supported: %s", ref)
 	}
 
-	// Convert document to map for navigation
-	data, err := json.Marshal(d)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling document: %w", err)
-	}
-	var docMap map[string]any
-	if err := json.Unmarshal(data, &docMap); err != nil {
-		return nil, fmt.Errorf("unmarshaling document: %w", err)
-	}
-
 	path := strings.TrimPrefix(ref, "#/")
 	parts := strings.Split(path, "/")
 
-	var current any = docMap
+	var current any = d.raw
 	for _, part := range parts {
 		m, ok := current.(map[string]any)
 		if !ok {
@@ -218,60 +349,6 @@ func (d *Document) resolveRef(ref string) (any, error) {
 	}
 
 	return current, nil
-}
-
-func (d *Document) resolveRefs(schema map[string]any) error {
-	return d.resolveRefsWithSeen(schema, make(map[string]bool))
-}
-
-func (d *Document) resolveRefsWithSeen(schema map[string]any, seen map[string]bool) error {
-	for key, val := range schema {
-		if key == "$ref" {
-			if ref, ok := val.(string); ok {
-				if seen[ref] {
-					delete(schema, "$ref")
-					continue
-				}
-				seen[ref] = true
-				resolved, err := d.resolveRef(ref)
-				if err != nil {
-					return fmt.Errorf("resolving $ref %s: %w", ref, err)
-				}
-				if rm, ok := resolved.(map[string]any); ok {
-					for k, v := range rm {
-						schema[k] = v
-					}
-					delete(schema, "$ref")
-					return d.resolveRefsWithSeen(schema, seen)
-				}
-			}
-		}
-
-		if nested, ok := val.(map[string]any); ok {
-			if err := d.resolveRefsWithSeen(nested, seen); err != nil {
-				return err
-			}
-		}
-
-		if arr, ok := val.([]any); ok {
-			for _, item := range arr {
-				if nested, ok := item.(map[string]any); ok {
-					if err := d.resolveRefsWithSeen(nested, seen); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func normalizeMap(raw map[string]any) map[string]any {
-	result := make(map[string]any)
-	for k, v := range raw {
-		result[k] = v
-	}
-	return result
 }
 
 func mapToStruct(m map[string]any, target any) error {
