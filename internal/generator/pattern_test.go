@@ -1,48 +1,20 @@
 package generator
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
-// mustValidate is the single wrapper around the third-party JSON Schema
-// validator (ADR-0006 Decision 3). It compiled the schema and validates the
-// value against it, failing the test if the value does not conform. Swapping
-// the validator implementation costs exactly this one helper.
+// mustValidate is the pattern-schema shim over the single validator wrapper
+// mustConform (ADR-0006 Decision 3): it validates value against a string schema
+// with the given pattern, failing the test if it does not conform.
 func mustValidate(t *testing.T, pattern string, value any) {
 	t.Helper()
-	schema := map[string]any{
-		"$schema": "http://json-schema.org/draft-07/schema#",
+	mustConform(t, map[string]any{
 		"type":    "string",
 		"pattern": pattern,
-	}
-	raw, err := json.Marshal(schema)
-	if err != nil {
-		t.Fatalf("marshal schema: %v", err)
-	}
-
-	c := jsonschema.NewCompiler()
-	c.Draft = jsonschema.Draft7
-	if err := c.AddResource("pattern.json", bytes.NewReader(raw)); err != nil {
-		t.Fatalf("add resource: %v", err)
-	}
-	sch, err := c.Compile("pattern.json")
-	if err != nil {
-		t.Fatalf("compile schema: %v", err)
-	}
-	if err := sch.Validate(value); err != nil {
-		if jErr, ok := err.(*jsonschema.ValidationError); ok {
-			t.Errorf("value %q does not conform to pattern %q: %s",
-				value, pattern, jErr.Causes)
-			return
-		}
-		t.Errorf("validate %q against pattern %q: %v", value, pattern, err)
-	}
+	}, value)
 }
 
 // TestPatternSupportProperty drives the documented subset through the real
