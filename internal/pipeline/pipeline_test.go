@@ -53,7 +53,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 		Count:     3,
 	}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Total != 3 {
 		t.Errorf("expected Total 3, got %d", stats.Total)
@@ -79,7 +79,7 @@ func TestRunStopsAtCount(t *testing.T) {
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Total != 2 || stats.Acked != 2 || stats.Failed != 0 {
 		t.Errorf("unexpected stats: %+v", stats)
@@ -97,7 +97,8 @@ func TestRunCancellationMidRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Stats, 1)
 	go func() {
-		done <- p.Run(ctx)
+		s, _ := p.Run(ctx)
+		done <- s
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -121,7 +122,7 @@ func TestRunCountsSendFailures(t *testing.T) {
 	sink := &fakeSink{err: errors.New("boom")}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Total != 3 || stats.Acked != 0 || stats.Failed != 3 {
 		t.Errorf("expected Total 3, Acked 0, Failed 3, got %+v", stats)
@@ -135,7 +136,7 @@ func TestRunCountsMissingKey(t *testing.T) {
 	// payload is missing that key and should be skipped as failed.
 	p := New(Config{Generator: gen, Schema: schemaFor("id"), Count: 3, KeyField: "nope"}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Total != 3 || stats.Acked != 0 || stats.Failed != 3 {
 		t.Errorf("expected Total 3, Acked 0, Failed 3, got %+v", stats)
@@ -157,13 +158,40 @@ func TestRunWarnsOnMissingKey(t *testing.T) {
 		Warn:      &warn,
 	}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Failed != 2 {
 		t.Errorf("expected 2 failed, got %d", stats.Failed)
 	}
 	if !strings.Contains(warn.String(), `field "nope" not found`) {
 		t.Errorf("expected missing-key warning in Warn writer, got %q", warn.String())
+	}
+}
+
+func TestRunAbortsOnGenerationError(t *testing.T) {
+	sink := &fakeSink{}
+	p := New(Config{
+		Generator: generator.New(1),
+		Schema:    map[string]any{"type": "widget"},
+		Count:     3,
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	var ue *generator.UnsupportedSchemaError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected *generator.UnsupportedSchemaError, got %v", err)
+	}
+	if ue.Keyword != "type" {
+		t.Errorf("keyword = %q, want type", ue.Keyword)
+	}
+	if ue.Path != generator.RootField {
+		t.Errorf("path = %q, want %q", ue.Path, generator.RootField)
+	}
+	if stats.Total != 0 || stats.Acked != 0 || stats.Failed != 0 {
+		t.Errorf("expected zero stats on abort, got %+v", stats)
+	}
+	if sink.count() != 0 {
+		t.Errorf("expected no sink calls on generation failure, got %d", sink.count())
 	}
 }
 
@@ -181,7 +209,7 @@ func TestRunAttachesKeyWhenPresent(t *testing.T) {
 	}
 	p := New(Config{Generator: gen, Schema: schema, Count: 2, KeyField: keyField}, sink)
 
-	stats := p.Run(context.Background())
+	stats, _ := p.Run(context.Background())
 
 	if stats.Failed != 0 || stats.Acked != 2 {
 		t.Errorf("expected all acked, got %+v", stats)

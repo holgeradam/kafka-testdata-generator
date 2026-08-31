@@ -30,3 +30,12 @@ Rate limiting remains inline `time.Sleep`. A sleeper seam is hypothetical until 
 - Produce-path SIGINT, send-failure counting, and missing-Key skip become unit-testable through a fake sink (leverage).
 - The twin-loop duplication class of bug is structurally removed.
 - Existing E2E tests against the binary keep passing unchanged; new unit tests target the Pipeline interface.
+
+## Stats and generation-error semantics
+
+Amended (2026-08-31): `Stats` distinguishes two very different failure classes, and the loop honours them differently.
+
+- **Generation errors abort the run.** When `Generator.Value` returns a typed error (the generator's `UnsupportedSchemaError` family, ADR-0006), the schema cannot be honoured at all, so every subsequent Payload would fail the same way. Emitting partial or silent-nil data is precisely what conformance forbids, so the run stops and the error propagates to the process edge rather than being counted and looped past. The script exits non-zero.
+- **`Stats.Failed` counts only sink send errors.** A Payload that generated and marshaled fine, but whose sink (Kafka produce, stdout write) reported an error, increments `Failed` and the loop continues - a transient transport failure on one record is not a reason to abandon the rest.
+
+This split keeps the two failure predicates disjoint: `Failed` never conflates "could not produce this record" with "could not honour the schema," so operators reading stats can tell a transport blip from a spec-incompatible Run. The missing-Key case (a configured Key field absent from a generated Payload) remains a skip that increments `Failed`, since that is a data-shape disagreement local to one Payload, not a universal schema failure.

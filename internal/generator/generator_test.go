@@ -16,7 +16,7 @@ func TestGenerateObject(t *testing.T) {
 		"required": []any{"name"},
 	}
 
-	result := gen.Value(schema, "")
+	result, _ := gen.Value(schema, RootField)
 	obj, ok := result.(map[string]any)
 	if !ok {
 		t.Fatalf("expected map, got %T", result)
@@ -45,7 +45,7 @@ func TestGenerateArray(t *testing.T) {
 		"maxItems": float64(5),
 	}
 
-	result := gen.Value(schema, "")
+	result, _ := gen.Value(schema, RootField)
 	arr, ok := result.([]any)
 	if !ok {
 		t.Fatalf("expected array, got %T", result)
@@ -81,7 +81,7 @@ func TestGenerateStringFormats(t *testing.T) {
 				"type":   "string",
 				"format": tt.format,
 			}
-			result := gen.Value(schema, "")
+			result, _ := gen.Value(schema, RootField)
 			if _, ok := result.(string); !ok {
 				t.Errorf("expected string, got %T", result)
 			}
@@ -98,7 +98,7 @@ func TestGenerateIntegerBounds(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		result := gen.Value(schema, "")
+		result, _ := gen.Value(schema, RootField)
 		num, ok := result.(int64)
 		if !ok {
 			t.Fatalf("expected int64, got %T", result)
@@ -118,7 +118,7 @@ func TestGenerateEnum(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
-		result := gen.Value(schema, "")
+		result, _ := gen.Value(schema, RootField)
 		str, ok := result.(string)
 		if !ok {
 			t.Fatalf("expected string, got %T", result)
@@ -146,8 +146,8 @@ func TestDeterministic(t *testing.T) {
 	gen2 := New(12345)
 
 	for i := 0; i < 10; i++ {
-		r1 := gen1.Value(schema, "")
-		r2 := gen2.Value(schema, "")
+		r1, _ := gen1.Value(schema, RootField)
+		r2, _ := gen2.Value(schema, RootField)
 
 		j1, _ := json.Marshal(r1)
 		j2, _ := json.Marshal(r2)

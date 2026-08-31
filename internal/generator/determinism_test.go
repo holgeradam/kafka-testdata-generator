@@ -17,8 +17,14 @@ func TestBasicDeterminism(t *testing.T) {
 			},
 		}
 
-		r1 := gen1.Value(schema, "")
-		r2 := gen2.Value(schema, "")
+		r1, err := gen1.Value(schema, RootField)
+		if err != nil {
+			t.Fatalf("gen1.Value error: %v", err)
+		}
+		r2, err := gen2.Value(schema, RootField)
+		if err != nil {
+			t.Fatalf("gen2.Value error: %v", err)
+		}
 
 		obj1 := r1.(map[string]any)
 		obj2 := r2.(map[string]any)

@@ -59,8 +59,11 @@ func New(cfg Config, sink Sink) *Pipeline {
 	return &Pipeline{cfg: cfg, sink: sink}
 }
 
-// Run executes the pipeline until Count payloads are handled or ctx is done.
-func (p *Pipeline) Run(ctx context.Context) Stats {
+// Run executes the pipeline until Count payloads are handled, ctx is done, or
+// generation of a Payload fails (ADR-0006): a schema the generator cannot
+// honour errors every Payload the same way, so the run stops and the error is
+// returned rather than being counted and looped past.
+func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	var total, acked, failed int64
 	start := time.Now()
 
@@ -76,7 +79,10 @@ loop:
 		default:
 		}
 
-		payload := p.cfg.Generator.Value(p.cfg.Schema, "")
+		payload, err := p.cfg.Generator.Value(p.cfg.Schema, generator.RootField)
+		if err != nil {
+			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
+		}
 		total++
 
 		var key []byte
@@ -107,7 +113,7 @@ loop:
 		time.Sleep(p.cfg.RateLimit)
 	}
 
-	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}
+	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil
 }
 
 // marshalKey extracts the value of keyField from the payload and returns its

@@ -48,7 +48,10 @@ func TestValueRecursiveTerminates(t *testing.T) {
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
-	result := gen.Value(root, "")
+	result, err := gen.Value(root, RootField)
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
 
 	deepest, depth := linkDepth(result)
 	if _, present := deepest["child"]; present {
@@ -67,7 +70,10 @@ func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
-	result := gen.Value(map[string]any{"$ref": "#/defs/Node"}, "")
+	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"}, RootField)
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
 
 	// The deepest node must omit the exhausted child field.
 	deepest, _ := linkDepth(result)
@@ -87,8 +93,14 @@ func TestValueRecursiveDeterministic(t *testing.T) {
 	gen2.SetRefResolver(r2r)
 
 	for i := 0; i < 10; i++ {
-		r1 := gen1.Value(root, "")
-		r2 := gen2.Value(root, "")
+		r1, err := gen1.Value(root, RootField)
+		if err != nil {
+			t.Fatalf("gen1.Value error: %v", err)
+		}
+		r2, err := gen2.Value(root, RootField)
+		if err != nil {
+			t.Fatalf("gen2.Value error: %v", err)
+		}
 
 		j1, _ := json.Marshal(r1)
 		j2, _ := json.Marshal(r2)
@@ -121,7 +133,10 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 		return nil, fmt.Errorf("unknown ref %s", ref)
 	})
 
-	result := gen.Value(map[string]any{"$ref": "#/defs/Node"}, "")
+	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"}, RootField)
+	if err != nil {
+		t.Fatalf("Value error: %v", err)
+	}
 
 	// Descend through first-child chains; the deepest array must be empty.
 	cur := result.(map[string]any)

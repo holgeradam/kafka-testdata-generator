@@ -108,7 +108,11 @@ func main() {
 		Warn:      os.Stderr,
 	}, sink)
 
-	stats := p.Run(ctx)
+	stats, err := p.Run(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	printStats(stats, *dryRun)
 }
 
