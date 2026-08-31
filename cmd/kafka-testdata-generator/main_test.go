@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"testing"
 	"time"
@@ -381,6 +382,35 @@ channels:
 
 	if run() != run() {
 		t.Error("identical (-seed, -now) must produce byte-identical output including date fields")
+	}
+}
+
+// TestScenarioSKUConforms proves the example spec's SKU pattern
+// (^[A-Z]{3}-[A-Z]{2}-\d{4}$) is honoured end to end: every generated sku value
+// must match it. This is the 'no silently-violating classes' acceptance case.
+func TestScenarioSKUConforms(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "10").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, out)
+	}
+
+	skuRe := regexp.MustCompile(`"sku":"([^"]+)"`)
+	matches := skuRe.FindAllStringSubmatch(string(out), -1)
+	if len(matches) == 0 {
+		t.Fatal("no sku values found in output")
+	}
+	pattern, cerr := regexp.Compile(`^[A-Z]{3}-[A-Z]{2}-\d{4}$`)
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+	for _, m := range matches {
+		if !pattern.MatchString(m[1]) {
+			t.Errorf("sku %q does not match pattern ^[A-Z]{3}-[A-Z]{2}-\\d{4}$", m[1])
+		}
 	}
 }
 

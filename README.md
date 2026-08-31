@@ -126,6 +126,28 @@ The tool reads AsyncAPI 2.x specifications and extracts message schemas from cha
 - Enum values and const
 - `allOf`, `oneOf`, `anyOf` composition
 
+### Supported Pattern Syntax
+
+`string` fields with a `pattern` are synthesized to conform to that regex.
+The generator supports the following documented subset; anything else
+surfaces a typed `UnsupportedPatternError` rather than a non-conforming value:
+
+| Construct | Meaning | Supported? |
+|-----------|---------|-----------|
+| `abc` | literal characters | ✓ |
+| `[A-Z]`, `[a-z]`, `[0-9]` | character classes (and ranges thereof) | ✓ |
+| `\d`, `\w`, `\s` | digit, word, whitespace | ✓ |
+| `{n}` | exactly `n` times | ✓ |
+| `{n,m}` | between `n` and `m` times | ✓ |
+| `*`, `+`, `?` | zero-or-more, one-or-more, optional | ✓ |
+| `(...)` | group | ✓ |
+| `\|` | alternation | ✓ |
+| `^`, `$` | anchors (ignored for synthesis) | ✓ |
+| `.` | any character | ✗ |
+| `[^...]` | negated class | ✗ |
+| `\D`, `\W`, `\S`, `\b`, ... | other escapes | ✗ |
+| `{n,}` | unbounded quantifier | ✗ |
+
 ### Field Name Heuristics
 
 The generator uses field names to generate realistic data:
