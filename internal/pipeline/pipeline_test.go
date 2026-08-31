@@ -40,6 +40,27 @@ func (f *fakeSink) count() int {
 	return len(f.recorded)
 }
 
+// blockingSink is a Sink whose Send blocks until the context is done, then
+// returns the context error - faithfully reproducing the produce path, where
+// franz-go's ProduceSync observes an in-flight cancellation and returns the
+// context error (producer.go: rctx.Err()). Its released behavior lets a test
+// gate cancellation on the moment the first send is in flight.
+type blockingSink struct {
+	blocked chan struct{}
+}
+
+func newBlockingSink() *blockingSink {
+	return &blockingSink{blocked: make(chan struct{})}
+}
+
+func (b *blockingSink) Send(ctx context.Context, _ Outgoing) error {
+	close(b.blocked)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (b *blockingSink) Close() error { return nil }
+
 // schemaFor builds a minimal object schema with the given key field.
 func schemaFor(keyField string) map[string]any {
 	if keyField == "" {
@@ -118,6 +139,49 @@ func TestRunCancellationMidRun(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancellation")
+	}
+}
+
+// TestRunCancellationInterruptsBlockedSend proves the produce-path teardown: a
+// cancellation while a Sink.Send is blocked in-flight (as KafkaSink.Send is,
+// via ProduceSync(ctx, ...)) must be observed by the blocked send and must not
+// hang the pipeline. This is the #4 gap - TestRunCancellationMidRun covers
+// cancellation only between sends, not during one. The blocked send returns the
+// context error (matching the real produce path), so the interrupted payload is
+// counted as failed, not acked.
+func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
+	gen := generator.New(1, testNow())
+	sink := newBlockingSink()
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000}, sink)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Stats, 1)
+	go func() {
+		s, _ := p.Run(ctx)
+		done <- s
+	}()
+
+	// Wait until the first Send is blocked in-flight, then cancel.
+	select {
+	case <-sink.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send never blocked")
+	}
+	cancel()
+
+	// The pipeline must observe the cancelled send and shut down cleanly. The
+	// in-flight payload is a failure (context-cancelled), not an ack - the same
+	// accounting a real Kafka produce hit by cancellation produces.
+	select {
+	case stats := <-done:
+		if stats.Total < 1 {
+			t.Errorf("expected at least one payload to be in flight before cancellation, got %+v", stats)
+		}
+		if stats.Failed != 1 {
+			t.Errorf("expected the interrupted send to count as 1 failure, got %+v", stats)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after cancel interrupting a blocked send")
 	}
 }
 
