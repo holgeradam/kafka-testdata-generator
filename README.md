@@ -217,7 +217,6 @@ Works with both `docker compose` and `podman compose` (which delegates to an ext
 - Topic auto-creation
 - Configurable ack levels (`acks=all`)
 - Advanced key extraction with JSON path
-- Kafka UI for visual topic/message inspection
 
 ## License
 
