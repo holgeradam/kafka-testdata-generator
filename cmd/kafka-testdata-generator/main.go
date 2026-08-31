@@ -24,6 +24,8 @@ func main() {
 	keyField := flag.String("key", "", "Field name to extract as Kafka message key")
 	dryRun := flag.Bool("dry-run", false, "Generate payloads without producing to Kafka")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "Random seed for reproducibility")
+	acksFlag := newAcksFlag()
+	flag.Var(acksFlag, "acks", "Acks level: 1 (leader) or all (all in-sync replicas)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -50,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *dryRun && (*broker != "localhost:9092" || *keyField != "") {
+	if *dryRun && (*broker != "localhost:9092" || *keyField != "" || acksFlag.set) {
 		fmt.Fprintln(os.Stderr, "Warning: dry-run mode disregards Kafka options")
 	}
 
@@ -84,7 +86,7 @@ func main() {
 	if *dryRun {
 		sink = pipeline.NewStdoutSink(os.Stdout, os.Stderr)
 	} else {
-		prod, err := producer.New(*broker)
+		prod, err := producer.New(*broker, producer.Options{Acks: acksFlag.acks})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error connecting to Kafka: %v\n", err)
 			os.Exit(1)
@@ -117,4 +119,32 @@ func printStats(s pipeline.Stats, dryRun bool) {
 	}
 	fmt.Fprintf(os.Stderr, "\nStats [%s]: total=%d acked=%d failed=%d elapsed=%s\n",
 		mode, s.Total, s.Acked, s.Failed, s.Elapsed.Round(time.Millisecond))
+}
+
+// acksFlag is a flag.Value accepting "1" or "all" (case-insensitive) for the
+// Kafka acknowledgement level. Invalid values fail at parse time with a hint.
+type acksFlag struct {
+	acks producer.Acks
+	set  bool
+}
+
+func newAcksFlag() *acksFlag {
+	return &acksFlag{acks: producer.AcksLeader}
+}
+
+// Set parses the -acks value case-insensitively via producer.ParseAcks; the
+// flag package reports the to/from string.
+func (a *acksFlag) Set(v string) error {
+	acks, err := producer.ParseAcks(v)
+	if err != nil {
+		return fmt.Errorf("invalid -acks: %w", err)
+	}
+	a.acks = acks
+	a.set = true
+	return nil
+}
+
+// String satisfies flag.Value and is used for the flag default and usage.
+func (a *acksFlag) String() string {
+	return a.acks.String()
 }

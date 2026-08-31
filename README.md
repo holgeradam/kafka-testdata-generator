@@ -76,6 +76,14 @@ Control the rate of record generation:
 kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -rate 100ms
 ```
 
+### Acknowledgement Level
+
+Choose the broker acknowledgement level (see "Acks and Durability"):
+
+```bash
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -acks all
+```
+
 ## CLI Options
 
 | Flag | Default | Description |
@@ -88,6 +96,16 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-key` | `` | Field name to extract as Kafka message key |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | current time | Random seed for reproducibility |
+| `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
+
+### Acks and Durability
+
+When producing to Kafka you can choose the acknowledgment level with `-acks`:
+
+- **`-acks 1` (default)**: the leader acknowledges after writing the record locally. Lower latency, but records can be lost if the leader fails over before replicas catch up.
+- **`-acks all`**: every in-sync replica must acknowledge before success is reported. Stronger durability at higher latency, and it enables Kafka's idempotent producer (server-side duplicate suppression).
+
+This tool generates disposable test data, so `1` is a sensible default; use `all` when the produced records need to survive a broker failover.
 
 ## AsyncAPI Specification
 

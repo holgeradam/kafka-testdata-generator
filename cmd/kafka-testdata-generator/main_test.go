@@ -238,6 +238,54 @@ func TestScenarioInvalidSpec(t *testing.T) {
 	}
 }
 
+// TestScenarioAcksFlagAccept verifies -acks accepts both levels, case-insensitively,
+// and that the default (flag absent) still runs (covered by every other scenario).
+func TestScenarioAcksFlagAccept(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	for _, acks := range []string{"1", "all", "ALL", "All", "aLl", "aLL"} {
+		cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+			"-dry-run", "-count", "1", "-acks", acks)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("-acks %s: expected success, got %v\noutput: %s", acks, err, out)
+		}
+	}
+}
+
+// TestScenarioAcksFlagReject verifies an unsupported -acks value fails at parse
+// time (before any spec is loaded) with a usage hint.
+func TestScenarioAcksFlagReject(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-acks", "garbage").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -acks garbage to be rejected at parse time")
+	}
+	if !strContains(string(out), "acks") {
+		t.Errorf("expected usage hint naming -acks, got: %s", out)
+	}
+}
+
+// TestScenarioDryRunWarnsOnAcks verifies the dry-run warning learns -acks: setting
+// it alongside dry-run (where Kafka options are disregarded) must warn.
+func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-acks", "all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, out)
+	}
+	if !strContains(string(out), "dry-run mode disregards Kafka options") {
+		t.Errorf("expected dry-run Kafka-options warning when -acks set, got: %s", out)
+	}
+}
+
 func TestScenarioSignalHandling(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
