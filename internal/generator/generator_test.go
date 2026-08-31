@@ -39,8 +39,8 @@ func TestGenerateObject(t *testing.T) {
 func TestGenerateArray(t *testing.T) {
 	gen := New(42)
 	schema := map[string]any{
-		"type": "array",
-		"items": map[string]any{"type": "string"},
+		"type":     "array",
+		"items":    map[string]any{"type": "string"},
 		"minItems": float64(2),
 		"maxItems": float64(5),
 	}

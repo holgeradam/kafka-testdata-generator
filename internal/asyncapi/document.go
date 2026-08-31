@@ -21,16 +21,6 @@ type Document struct {
 	raw map[string]any
 }
 
-// UnsupportedRecursionError reports a cyclic $ref that the tool cannot yet
-// generate instances from. It carries the offending ref path.
-type UnsupportedRecursionError struct {
-	Ref string
-}
-
-func (e *UnsupportedRecursionError) Error() string {
-	return "unsupported recursive $ref in schema: " + e.Ref
-}
-
 type Info struct {
 	Title       string `yaml:"title" json:"title"`
 	Version     string `yaml:"version" json:"version"`
@@ -38,15 +28,15 @@ type Info struct {
 }
 
 type Channel struct {
-	Ref         string            `yaml:"$ref,omitempty" json:"$ref,omitempty"`
-	Messages    map[string]any    `yaml:"messages,omitempty" json:"messages,omitempty"`
-	Publish     *Operation        `yaml:"publish,omitempty" json:"publish,omitempty"`
-	Subscribe   *Operation        `yaml:"subscribe,omitempty" json:"subscribe,omitempty"`
-	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Ref         string         `yaml:"$ref,omitempty" json:"$ref,omitempty"`
+	Messages    map[string]any `yaml:"messages,omitempty" json:"messages,omitempty"`
+	Publish     *Operation     `yaml:"publish,omitempty" json:"publish,omitempty"`
+	Subscribe   *Operation     `yaml:"subscribe,omitempty" json:"subscribe,omitempty"`
+	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 type Operation struct {
-	Message     any    `yaml:"message,omitempty" json:"message,omitempty"`
+	Message any `yaml:"message,omitempty" json:"message,omitempty"`
 }
 
 type Message struct {
@@ -140,11 +130,23 @@ func (d *Document) PayloadSchema(channel string) (map[string]any, error) {
 		return nil, fmt.Errorf("payload schema for channel %q must be an object", channel)
 	}
 
-	if ref := findPreservedRef(out); ref != "" {
-		return nil, &UnsupportedRecursionError{Ref: ref}
-	}
-
+	// Cyclic refs are preserved as $ref nodes in `out`; the generator walks
+	// them within its depth budget.
 	return out, nil
+}
+
+// ResolveRef returns the schema node a $ref points at, for the generator to
+// follow preserved cyclic $ref nodes within its depth budget.
+func (d *Document) ResolveRef(ref string) (map[string]any, error) {
+	v, err := d.resolveRef(ref)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("ref %s does not resolve to a schema object", ref)
+	}
+	return m, nil
 }
 
 // resolveNode expands $ref nodes along a single path. The stack holds the refs
@@ -188,31 +190,6 @@ func (d *Document) resolveNode(node any, stack []string) (any, error) {
 	}
 
 	return node, nil
-}
-
-// findPreservedRef returns the first $ref path left in a resolved schema, or
-// an empty string. Any surviving $ref means a cycle was preserved.
-func findPreservedRef(node map[string]any) string {
-	if ref, ok := node["$ref"].(string); ok {
-		return ref
-	}
-	for _, v := range node {
-		switch n := v.(type) {
-		case map[string]any:
-			if ref := findPreservedRef(n); ref != "" {
-				return ref
-			}
-		case []any:
-			for _, item := range n {
-				if m, ok := item.(map[string]any); ok {
-					if ref := findPreservedRef(m); ref != "" {
-						return ref
-					}
-				}
-			}
-		}
-	}
-	return ""
 }
 
 func contains(stack []string, ref string) bool {

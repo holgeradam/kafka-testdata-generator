@@ -10,9 +10,20 @@ import (
 
 // Generator creates random test data from JSON Schema.
 type Generator struct {
-	rng      *rand.Rand
-	baseTime time.Time
+	rng        *rand.Rand
+	baseTime   time.Time
+	resolveRef RefResolver
 }
+
+// RefResolver resolves a $ref string to its schema node. The schema module
+// provides the implementation; it is injected so the generator can follow
+// preserved cyclic $ref nodes within its depth budget.
+type RefResolver func(ref string) (map[string]any, error)
+
+// maxRecursionDepth bounds how many nested $ref expansions the generator walks
+// for cyclic schemas (ADR-0005). Enough for realistic trees, small enough to
+// stay fast.
+const maxRecursionDepth = 8
 
 // New creates a new Generator with the given seed.
 func New(seed int64) *Generator {
@@ -22,9 +33,22 @@ func New(seed int64) *Generator {
 	}
 }
 
+// SetRefResolver wires the schema module's $ref resolution into the generator.
+func (g *Generator) SetRefResolver(r RefResolver) {
+	g.resolveRef = r
+}
+
 // Value generates a random value matching the given JSON Schema.
 func (g *Generator) Value(schema map[string]any, fieldName string) any {
+	return g.value(schema, fieldName, 0)
+}
+
+func (g *Generator) value(schema map[string]any, fieldName string, depth int) any {
 	schema = normalizeSchema(schema)
+
+	if ref, ok := schema["$ref"].(string); ok {
+		return g.refValue(ref, fieldName, depth)
+	}
 
 	if ex, ok := schema["example"]; ok {
 		return ex
@@ -42,21 +66,21 @@ func (g *Generator) Value(schema map[string]any, fieldName string) any {
 	}
 
 	if allOf, ok := schema["allOf"].([]any); ok {
-		return g.mergeAllOf(allOf, fieldName)
+		return g.mergeAllOf(allOf, fieldName, depth)
 	}
 	if oneOf, ok := schema["oneOf"].([]any); ok && len(oneOf) > 0 {
-		return g.Value(oneOf[g.rng.Intn(len(oneOf))].(map[string]any), fieldName)
+		return g.value(oneOf[g.rng.Intn(len(oneOf))].(map[string]any), fieldName, depth)
 	}
 	if anyOf, ok := schema["anyOf"].([]any); ok && len(anyOf) > 0 {
-		return g.Value(anyOf[g.rng.Intn(len(anyOf))].(map[string]any), fieldName)
+		return g.value(anyOf[g.rng.Intn(len(anyOf))].(map[string]any), fieldName, depth)
 	}
 
 	typ := schema["type"].(string)
 	switch typ {
 	case "object":
-		return g.object(schema, fieldName)
+		return g.object(schema, fieldName, depth)
 	case "array":
-		return g.array(schema, fieldName)
+		return g.array(schema, fieldName, depth)
 	case "string":
 		return g.string(schema, fieldName)
 	case "integer":
@@ -70,7 +94,21 @@ func (g *Generator) Value(schema map[string]any, fieldName string) any {
 	}
 }
 
-func (g *Generator) object(schema map[string]any, parentFieldName string) map[string]any {
+// refValue follows a preserved $ref node. When the depth budget is exhausted,
+// the node is treated as absent (nil) so the caller can skip the field or
+// empty the array, mirroring how optional-field sampling truncates shape.
+func (g *Generator) refValue(ref, fieldName string, depth int) any {
+	if g.resolveRef == nil || depth >= maxRecursionDepth {
+		return nil
+	}
+	target, err := g.resolveRef(ref)
+	if err != nil {
+		return nil
+	}
+	return g.value(target, fieldName, depth+1)
+}
+
+func (g *Generator) object(schema map[string]any, parentFieldName string, depth int) map[string]any {
 	result := make(map[string]any)
 	props, _ := schema["properties"].(map[string]any)
 	required, _ := schema["required"].([]any)
@@ -85,7 +123,13 @@ func (g *Generator) object(schema map[string]any, parentFieldName string) map[st
 	for _, name := range names {
 		ps := props[name].(map[string]any)
 		if g.shouldInclude(name, required) {
-			result[name] = g.Value(ps, name)
+			v := g.value(ps, name, depth)
+			// nil means this node is absent: an optional field is just skipped,
+			// and even a required field is dropped once its subtree exhausts the
+			// depth budget (an incomplete object beats an infinite one).
+			if v != nil {
+				result[name] = v
+			}
 		}
 	}
 
@@ -101,7 +145,7 @@ func (g *Generator) shouldInclude(fieldName string, required []any) bool {
 	return g.rng.Intn(100) < 85
 }
 
-func (g *Generator) array(schema map[string]any, parentFieldName string) []any {
+func (g *Generator) array(schema map[string]any, parentFieldName string, depth int) []any {
 	items, _ := schema["items"].(map[string]any)
 	if items == nil {
 		return []any{}
@@ -117,9 +161,12 @@ func (g *Generator) array(schema map[string]any, parentFieldName string) []any {
 	}
 
 	count := minItems + g.rng.Intn(maxItems-minItems+1)
-	result := make([]any, count)
+	result := make([]any, 0, count)
 	for i := 0; i < count; i++ {
-		result[i] = g.Value(items, parentFieldName)
+		item := g.value(items, parentFieldName, depth)
+		if item != nil {
+			result = append(result, item)
+		}
 	}
 	return result
 }
@@ -206,7 +253,7 @@ func toFloat64(v any) (float64, bool) {
 	}
 }
 
-func (g *Generator) mergeAllOf(allOf []any, fieldName string) any {
+func (g *Generator) mergeAllOf(allOf []any, fieldName string, depth int) any {
 	merged := make(map[string]any)
 	for _, sub := range allOf {
 		if m, ok := sub.(map[string]any); ok {
@@ -215,7 +262,7 @@ func (g *Generator) mergeAllOf(allOf []any, fieldName string) any {
 			}
 		}
 	}
-	return g.Value(merged, fieldName)
+	return g.value(merged, fieldName, depth)
 }
 
 func (g *Generator) generateByFieldName(name string) string {

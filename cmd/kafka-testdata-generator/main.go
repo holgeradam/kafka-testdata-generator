@@ -67,6 +67,7 @@ func main() {
 	}
 
 	gen := generator.New(*seed)
+	gen.SetRefResolver(doc.ResolveRef)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

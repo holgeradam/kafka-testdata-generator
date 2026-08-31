@@ -123,6 +123,100 @@ func TestScenarioMissingSpec(t *testing.T) {
 	}
 }
 
+// writeTempSpec writes a spec to a temp file and returns its path.
+func writeTempSpec(t *testing.T, spec string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "recursive.yaml")
+	if err := os.WriteFile(p, []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestScenarioRecursiveSpec exercises a self-referential (category-tree) spec
+// end to end: it must terminate quickly at any seed, produce finite output, and
+// be deterministic for a fixed seed.
+func TestScenarioRecursiveSpec(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: Categories
+  version: '1.0.0'
+components:
+  schemas:
+    Category:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+        children:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/Category'
+channels:
+  categories:
+    publish:
+      message:
+        payload:
+          $ref: '#/components/schemas/Category'
+`)
+
+	seeds := []string{"1", "42", "20260831", "9999"}
+	for _, seed := range seeds {
+		// Termination at any seed: the command must finish quickly.
+		done := make(chan error, 1)
+		cmd := exec.Command(bin, "-spec", spec, "-channel", "categories",
+			"-dry-run", "-count", "5", "-seed", seed)
+		var out []byte
+		var err error
+		go func() {
+			out, err = cmd.CombinedOutput()
+			done <- err
+		}()
+
+		select {
+		case <-done:
+			if err != nil {
+				t.Fatalf("seed %s: command failed: %v\noutput: %s", seed, err, out)
+			}
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+			t.Fatalf("seed %s: recursive spec did not terminate within 5s", seed)
+		}
+
+		lines := filterJSONLines(string(out))
+		if len(lines) != 5 {
+			t.Errorf("seed %s: expected 5 JSON lines, got %d", seed, len(lines))
+		}
+	}
+
+	// Determinism: identical output for a fixed seed.
+	runForSeed := func(seed string) []string {
+		cmd := exec.Command(bin, "-spec", spec, "-channel", "categories",
+			"-dry-run", "-count", "3", "-seed", seed)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("seed %s: command failed: %v", seed, err)
+		}
+		return filterJSONLines(string(out))
+	}
+	a := runForSeed("777")
+	b := runForSeed("777")
+	if len(a) != len(b) {
+		t.Fatalf("deterministic runs differ in length: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Errorf("recursive output differs on line %d:\n  run1: %s\n  run2: %s", i, a[i], b[i])
+		}
+	}
+}
+
 func TestScenarioMissingChannel(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")

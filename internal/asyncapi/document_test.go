@@ -1,7 +1,6 @@
 package asyncapi
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +104,28 @@ func objectProp(schema map[string]any, name string) map[string]any {
 	return m
 }
 
+// hasRef reports whether any $ref remains anywhere in a resolved schema node.
+func hasRef(v any) bool {
+	switch n := v.(type) {
+	case map[string]any:
+		if _, ok := n["$ref"].(string); ok {
+			return true
+		}
+		for _, child := range n {
+			if hasRef(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range n {
+			if hasRef(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestPayloadSchema(t *testing.T) {
 	spec := `
 asyncapi: '2.6.0'
@@ -203,8 +224,8 @@ channels:
 	if objectProp(home, "street") == nil || objectProp(work, "street") == nil {
 		t.Error("expected both siblings to keep their nested street property")
 	}
-	if ref := findPreservedRef(schema); ref != "" {
-		t.Errorf("expected no $ref to remain in the resolved diamond schema, found %s", ref)
+	if hasRef(schema) {
+		t.Error("expected no $ref to remain in the resolved diamond schema")
 	}
 }
 
@@ -264,81 +285,22 @@ channels:
 		t.Errorf("expected allOf ref expanded to Tag object, got %v", first["type"])
 	}
 
-	if ref := findPreservedRef(schema); ref != "" {
-		t.Errorf("expected no $ref to remain in the resolved nested schema, found %s", ref)
+	if hasRef(schema) {
+		t.Error("expected no $ref to remain in the resolved nested schema")
 	}
 }
 
-// TestPayloadSchemaRefErrors covers every ref shape that must fail loudly:
-// self and mutual cycles (typed UnsupportedRecursionError naming the ref), a
-// missing target, and an external (non-#/) ref.
+// TestPayloadSchemaRefErrors covers ref shapes that must fail loudly: a
+// missing target and an external (non-#/) ref.
 func TestPayloadSchemaRefErrors(t *testing.T) {
 	cases := []struct {
-		name string
-		spec string
-		// wantRecursion means the failure must be a typed UnsupportedRecursionError.
-		wantRecursion bool
-		// wantContain, when non-empty, must appear in the error text.
+		name        string
+		spec        string
 		wantContain string
 	}{
 		{
-			name:         "self-cycle",
-			wantRecursion: true,
-			wantContain:  "#/components/schemas/Node",
-			spec: `
-asyncapi: '2.6.0'
-info:
-  title: Test
-  version: '1.0.0'
-components:
-  schemas:
-    Node:
-      type: object
-      properties:
-        value:
-          type: string
-        child:
-          $ref: '#/components/schemas/Node'
-channels:
-  test:
-    publish:
-      message:
-        payload:
-          $ref: '#/components/schemas/Node'
-`,
-		},
-		{
-			name:         "mutual-cycle",
-			wantRecursion: true,
-			wantContain:  "#/components/schemas/A",
-			spec: `
-asyncapi: '2.6.0'
-info:
-  title: Test
-  version: '1.0.0'
-components:
-  schemas:
-    A:
-      type: object
-      properties:
-        b:
-          $ref: '#/components/schemas/B'
-    B:
-      type: object
-      properties:
-        a:
-          $ref: '#/components/schemas/A'
-channels:
-  test:
-    publish:
-      message:
-        payload:
-          $ref: '#/components/schemas/A'
-`,
-		},
-		{
-			name:         "missing-target",
-			wantContain:  "not found",
+			name:        "missing-target",
+			wantContain: "not found",
 			spec: `
 asyncapi: '2.6.0'
 info:
@@ -355,8 +317,8 @@ channels:
 `,
 		},
 		{
-			name:         "external-ref",
-			wantContain:  "external",
+			name:        "external-ref",
+			wantContain: "external",
 			spec: `
 asyncapi: '2.6.0'
 info:
@@ -383,17 +345,120 @@ channels:
 			if err == nil {
 				t.Fatal("expected an error for this ref shape")
 			}
-			if tt.wantRecursion {
-				var rec *UnsupportedRecursionError
-				if !errors.As(err, &rec) {
-					t.Fatalf("expected *UnsupportedRecursionError, got %T: %v", err, err)
-				}
-			}
-			if tt.wantContain != "" && !strings.Contains(err.Error(), tt.wantContain) {
+			if !strings.Contains(err.Error(), tt.wantContain) {
 				t.Errorf("error should contain %q, got %q", tt.wantContain, err.Error())
 			}
 		})
 	}
+}
+
+// TestPayloadSchemaCyclicPreserved covers self and mutual cycles: they do NOT
+// error (the generator walks them with a depth budget); instead the cycle is
+// preserved as a $ref node in the resolved schema.
+func TestPayloadSchemaCyclicPreserved(t *testing.T) {
+	cases := []struct {
+		name string
+		spec string
+		// ref is the preserved $ref path expected in the resolved schema.
+		ref string
+	}{
+		{
+			name: "self-cycle",
+			ref:  "#/components/schemas/Node",
+			spec: `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        value:
+          type: string
+        child:
+          $ref: '#/components/schemas/Node'
+channels:
+  test:
+    publish:
+      message:
+        payload:
+          $ref: '#/components/schemas/Node'
+`,
+		},
+		{
+			name: "mutual-cycle",
+			ref:  "#/components/schemas/A",
+			spec: `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+components:
+  schemas:
+    A:
+      type: object
+      properties:
+        b:
+          $ref: '#/components/schemas/B'
+    B:
+      type: object
+      properties:
+        a:
+          $ref: '#/components/schemas/A'
+channels:
+  test:
+    publish:
+      message:
+        payload:
+          $ref: '#/components/schemas/A'
+`,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, err := Load(writeSpec(t, tt.spec))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			schema, err := doc.PayloadSchema("test")
+			if err != nil {
+				t.Fatalf("cyclic schema should not error, got %v", err)
+			}
+			if schema["type"] != "object" {
+				t.Errorf("expected payload to resolve, got type %v", schema["type"])
+			}
+			found := findRefPath(schema, tt.ref)
+			if !found {
+				t.Errorf("expected preserved $ref %q to survive in the resolved schema", tt.ref)
+			}
+		})
+	}
+}
+
+// findRefPath reports whether a $ref equal to path appears anywhere in a node.
+func findRefPath(v any, path string) bool {
+	switch n := v.(type) {
+	case map[string]any:
+		if n["$ref"] == path {
+			return true
+		}
+		for _, child := range n {
+			if findRefPath(child, path) {
+				return true
+			}
+		}
+	case []any:
+		for _, item := range n {
+			if findRefPath(item, path) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestPayloadSchemaMessageRef guards the collapsed message-extraction helper:
