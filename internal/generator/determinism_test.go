@@ -5,8 +5,8 @@ import (
 )
 
 func TestBasicDeterminism(t *testing.T) {
-	gen1 := New(42)
-	gen2 := New(42)
+	gen1 := New(42, fixedNow())
+	gen2 := New(42, fixedNow())
 
 	for i := 0; i < 10; i++ {
 		schema := map[string]any{

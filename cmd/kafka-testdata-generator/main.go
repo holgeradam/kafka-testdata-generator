@@ -24,6 +24,8 @@ func main() {
 	keyField := flag.String("key", "", "Field name to extract as Kafka message key")
 	dryRun := flag.Bool("dry-run", false, "Generate payloads without producing to Kafka")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "Random seed for reproducibility")
+	nowFlag := newNowFlag()
+	flag.Var(nowFlag, "now", "Clock for date fields (RFC3339; default now)")
 	acksFlag := newAcksFlag()
 	flag.Var(acksFlag, "acks", "Acks level: 1 (leader) or all (all in-sync replicas)")
 
@@ -68,7 +70,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	gen := generator.New(*seed)
+	gen := generator.New(*seed, nowFlag.now)
 	gen.SetRefResolver(doc.ResolveRef)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -151,4 +153,31 @@ func (a *acksFlag) Set(v string) error {
 // String satisfies flag.Value and is used for the flag default and usage.
 func (a *acksFlag) String() string {
 	return a.acks.String()
+}
+
+// nowFlag is a flag.Value accepting an RFC3339 timestamp for the generator's
+// explicit clock. It defaults to wall-clock so omitting -now still works; an
+// invalid value fails at parse time with a hint.
+type nowFlag struct {
+	now time.Time
+}
+
+func newNowFlag() *nowFlag {
+	return &nowFlag{now: time.Now()}
+}
+
+// Set parses the -now value as RFC3339; the flag package reports parse errors
+// at flag.Parse time.
+func (n *nowFlag) Set(v string) error {
+	parsed, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return fmt.Errorf("invalid -now: %w", err)
+	}
+	n.now = parsed
+	return nil
+}
+
+// String satisfies flag.Value and is used for the flag default and usage.
+func (n *nowFlag) String() string {
+	return n.now.Format(time.RFC3339)
 }

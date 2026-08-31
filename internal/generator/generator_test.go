@@ -6,7 +6,7 @@ import (
 )
 
 func TestGenerateObject(t *testing.T) {
-	gen := New(42)
+	gen := New(42, fixedNow())
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -37,7 +37,7 @@ func TestGenerateObject(t *testing.T) {
 }
 
 func TestGenerateArray(t *testing.T) {
-	gen := New(42)
+	gen := New(42, fixedNow())
 	schema := map[string]any{
 		"type":     "array",
 		"items":    map[string]any{"type": "string"},
@@ -63,7 +63,7 @@ func TestGenerateArray(t *testing.T) {
 }
 
 func TestGenerateStringFormats(t *testing.T) {
-	gen := New(42)
+	gen := New(42, fixedNow())
 
 	tests := []struct {
 		format string
@@ -90,7 +90,7 @@ func TestGenerateStringFormats(t *testing.T) {
 }
 
 func TestGenerateIntegerBounds(t *testing.T) {
-	gen := New(42)
+	gen := New(42, fixedNow())
 	schema := map[string]any{
 		"type":    "integer",
 		"minimum": float64(10),
@@ -110,7 +110,7 @@ func TestGenerateIntegerBounds(t *testing.T) {
 }
 
 func TestGenerateEnum(t *testing.T) {
-	gen := New(42)
+	gen := New(42, fixedNow())
 	schema := map[string]any{
 		"type": "string",
 		"enum": []any{"a", "b", "c"},
@@ -142,8 +142,8 @@ func TestDeterministic(t *testing.T) {
 		},
 	}
 
-	gen1 := New(12345)
-	gen2 := New(12345)
+	gen1 := New(12345, fixedNow())
+	gen2 := New(12345, fixedNow())
 
 	for i := 0; i < 10; i++ {
 		r1, _ := gen1.Value(schema, RootField)

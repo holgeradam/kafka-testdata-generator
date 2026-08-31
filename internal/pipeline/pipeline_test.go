@@ -12,6 +12,10 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 )
 
+func testNow() time.Time {
+	return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+}
+
 type fakeSink struct {
 	mu       sync.Mutex
 	recorded []Outgoing
@@ -45,7 +49,7 @@ func schemaFor(keyField string) map[string]any {
 }
 
 func TestRunProducesCountPayloads(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	p := New(Config{
 		Generator: gen,
@@ -75,7 +79,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 }
 
 func TestRunStopsAtCount(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2}, sink)
 
@@ -90,7 +94,7 @@ func TestRunStopsAtCount(t *testing.T) {
 }
 
 func TestRunCancellationMidRun(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000}, sink)
 
@@ -118,7 +122,7 @@ func TestRunCancellationMidRun(t *testing.T) {
 }
 
 func TestRunCountsSendFailures(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{err: errors.New("boom")}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3}, sink)
 
@@ -130,7 +134,7 @@ func TestRunCountsSendFailures(t *testing.T) {
 }
 
 func TestRunCountsMissingKey(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	// Schema generates an object WITHOUT the configured key field, so every
 	// payload is missing that key and should be skipped as failed.
@@ -147,7 +151,7 @@ func TestRunCountsMissingKey(t *testing.T) {
 }
 
 func TestRunWarnsOnMissingKey(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	var warn bytes.Buffer
 	p := New(Config{
@@ -171,7 +175,7 @@ func TestRunWarnsOnMissingKey(t *testing.T) {
 func TestRunAbortsOnGenerationError(t *testing.T) {
 	sink := &fakeSink{}
 	p := New(Config{
-		Generator: generator.New(1),
+		Generator: generator.New(1, testNow()),
 		Schema:    map[string]any{"type": "widget"},
 		Count:     3,
 	}, sink)
@@ -196,7 +200,7 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 }
 
 func TestRunAttachesKeyWhenPresent(t *testing.T) {
-	gen := generator.New(1)
+	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	// Schema REQUIRES "id", which doubles as the key field.
 	keyField := "id"

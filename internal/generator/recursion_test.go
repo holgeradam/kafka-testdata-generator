@@ -44,7 +44,7 @@ func linkDepth(root any) (deepest map[string]any, depth int) {
 
 func TestValueRecursiveTerminates(t *testing.T) {
 	root := map[string]any{"$ref": "#/defs/Node"}
-	gen := New(42)
+	gen := New(42, fixedNow())
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
@@ -66,7 +66,7 @@ func TestValueRecursiveTerminates(t *testing.T) {
 }
 
 func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
-	gen := New(7)
+	gen := New(7, fixedNow())
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
@@ -85,10 +85,10 @@ func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 func TestValueRecursiveDeterministic(t *testing.T) {
 	root := map[string]any{"$ref": "#/defs/Node"}
 
-	gen1 := New(99)
+	gen1 := New(99, fixedNow())
 	_, r1r := selfRefSchema()
 	gen1.SetRefResolver(r1r)
-	gen2 := New(99)
+	gen2 := New(99, fixedNow())
 	_, r2r := selfRefSchema()
 	gen2.SetRefResolver(r2r)
 
@@ -125,7 +125,7 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 			},
 		},
 	}
-	gen := New(3)
+	gen := New(3, fixedNow())
 	gen.SetRefResolver(func(ref string) (map[string]any, error) {
 		if ref == "#/defs/Node" {
 			return node, nil

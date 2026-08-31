@@ -316,6 +316,74 @@ func TestScenarioSignalHandling(t *testing.T) {
 	}
 }
 
+// TestScenarioNowFlagAccept verifies the -now RFC3339 flag parses and the run
+// succeeds; the flag is defaulted to wall-clock so omission is covered by every
+// other scenario.
+func TestScenarioNowFlagAccept(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-now", "2026-01-02T03:04:05Z").CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected -now to parse and run, got %v\noutput: %s", err, out)
+	}
+}
+
+// TestScenarioNowFlagReject verifies an invalid -now value fails at parse time,
+// before any spec is loaded.
+func TestScenarioNowFlagReject(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-now", "not-a-time").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected invalid -now to be rejected at parse time")
+	}
+	if !strContains(string(out), "now") {
+		t.Errorf("expected usage hint naming -now, got: %s", out)
+	}
+}
+
+// TestScenarioDeterministicWithNow proves a fixed -seed AND -now yields
+// byte-identical output including date-formatted fields. A temp spec with a
+// date-format field is used so the clock path is exercised end to end.
+func TestScenarioDeterministicWithNow(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: Dated
+  version: '1.0.0'
+channels:
+  dated:
+    publish:
+      message:
+        payload:
+          type: object
+          required:
+            - created
+          properties:
+            created:
+              type: string
+              format: date
+`)
+
+	run := func() string {
+		out, err := exec.Command(bin, "-spec", spec, "-channel", "dated",
+			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z").CombinedOutput()
+		if err != nil {
+			t.Fatalf("command failed: %v\noutput: %s", err, out)
+		}
+		return string(out)
+	}
+
+	if run() != run() {
+		t.Error("identical (-seed, -now) must produce byte-identical output including date fields")
+	}
+}
+
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()

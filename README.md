@@ -62,10 +62,12 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 
 ### Deterministic Generation
 
-Use a fixed seed for reproducible results:
+Use a fixed seed **and** a fixed clock for fully reproducible results. The seed
+drives the random values, while the clock (`-now`) anchors date-formatted
+fields, so byte-identical output requires both to be pinned:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -seed 12345 -dry-run
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -seed 12345 -now 2026-01-02T03:04:05Z -dry-run
 ```
 
 ### Rate Limiting
@@ -96,6 +98,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-key` | `` | Field name to extract as Kafka message key |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | current time | Random seed for reproducibility |
+| `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
 
 ### Acks and Durability

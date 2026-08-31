@@ -58,11 +58,13 @@ func (e *UnsupportedSchemaError) Error() string {
 	return msg
 }
 
-// New creates a new Generator with the given seed.
-func New(seed int64) *Generator {
+// New creates a new Generator with the given seed and explicit clock. The now
+// value feeds date/date-time format synthesis, so determinism requires both a
+// fixed seed and a fixed now (ADR-0006 Decision 4); there is no hidden clock.
+func New(seed int64, now time.Time) *Generator {
 	return &Generator{
 		rng:      rand.New(rand.NewSource(seed)),
-		baseTime: time.Now(),
+		baseTime: now,
 	}
 }
 
