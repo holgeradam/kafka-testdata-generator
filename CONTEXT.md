@@ -25,7 +25,7 @@ The generator's output promise, defined per Wire format. Every Payload honors ev
 _Avoid_: payload validation, schema checking
 
 **Key**:
-The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is a field extracted from the generated Payload; in AVRO mode it is generated from the key avsc.
+The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is sourced from `bindings.kafka.key` when present, falling back to `-key` field extraction, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode it is generated from the key avsc.
 _Avoid_: partition key
 
 **Dry run**:

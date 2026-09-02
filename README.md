@@ -95,7 +95,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-broker` | `localhost:9092` | Kafka broker address |
 | `-count` | `10` | Number of records to generate (0 = infinite) |
 | `-rate` | `10ms` | Minimum time between messages |
-| `-key` | `` | Field name to extract as Kafka message key |
+| `-key` | `` | Field name to extract as Kafka message key (overrides binding-derived keys; see Key section) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | current time | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
@@ -109,6 +109,16 @@ When producing to Kafka you can choose the acknowledgment level with `-acks`:
 - **`-acks all`**: every in-sync replica must acknowledge before success is reported. Stronger durability at higher latency, and it enables Kafka's idempotent producer (server-side duplicate suppression).
 
 This tool generates disposable test data, so `1` is a sensible default; use `all` when the produced records need to survive a broker failover.
+
+### Key source and serialization (JSON mode)
+
+In JSON mode, the key source is chosen in this order:
+
+1. **`-key fieldName`** (CLI override): extracts the named top-level field from the generated payload. When both `-key` and a binding-derived key are present, the CLI flag wins (with a warning).
+2. **`message.bindings.kafka.key`** (AsyncAPI binding): generates a key value from the message binding's schema independently of payload fields, using the same generator as the payload.
+3. **Neither**: produces a null key (Kafka convention, random partition), with an info message on stderr.
+
+Key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`), a number as its decimal text, and an object or array as JSON. This matches standard Kafka key conventions where the key is the raw serialized value, not a JSON wrapper.
 
 ## AsyncAPI Specification
 
