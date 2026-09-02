@@ -32,13 +32,16 @@ func TestScenarioDeterministic(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	// Determinism requires a fixed seed AND a fixed -now (ADR-0006 Decision 4);
+	// without -now the wall-clock second boundary between the two runs would
+	// shift the date-time fields by one second.
+	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out1, err := cmd1.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 1 failed: %v\noutput: %s", err, out1)
 	}
 
-	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out2, err := cmd2.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 2 failed: %v\noutput: %s", err, out2)
@@ -371,17 +374,25 @@ channels:
               format: date
 `)
 
-	run := func() string {
+	run := func() []string {
 		out, err := exec.Command(bin, "-spec", spec, "-channel", "dated",
 			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z").CombinedOutput()
 		if err != nil {
 			t.Fatalf("command failed: %v\noutput: %s", err, out)
 		}
-		return string(out)
+		return filterJSONLines(string(out))
 	}
 
-	if run() != run() {
-		t.Error("identical (-seed, -now) must produce byte-identical output including date fields")
+	if len(run()) != len(run()) {
+		t.Fatal("identical (-seed, -now) must produce the same number of payload lines")
+	}
+
+	lines1 := run()
+	lines2 := run()
+	for i := range lines1 {
+		if lines1[i] != lines2[i] {
+			t.Errorf("line %d differs:\n  run1: %s\n  run2: %s", i, lines1[i], lines2[i])
+		}
 	}
 }
 

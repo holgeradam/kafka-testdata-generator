@@ -1,0 +1,30 @@
+{
+  "type": "record",
+  "name": "Order",
+  "namespace": "com.example",
+  "fields": [
+    {"name": "orderId", "type": "string"},
+    {"name": "customerId", "type": "string"},
+    {"name": "amount", "type": "double"},
+    {"name": "currency", "type": {"type": "enum", "name": "Currency", "symbols": ["USD", "EUR", "GBP", "JPY"]}},
+    {"name": "status", "type": {"type": "enum", "name": "OrderStatus", "symbols": ["pending", "confirmed", "shipped", "delivered", "cancelled"]}},
+    {"name": "items", "type": {"type": "array", "items": {
+      "type": "record",
+      "name": "OrderItem",
+      "fields": [
+        {"name": "sku", "type": "string"},
+        {"name": "quantity", "type": "int"},
+        {"name": "price", "type": "double"}
+      ]
+    }}},
+    {"name": "shippingAddress", "type": ["null", {
+      "type": "record",
+      "name": "Address",
+      "fields": [
+        {"name": "street", "type": "string"},
+        {"name": "city", "type": "string"},
+        {"name": "country", "type": "string"}
+      ]
+    }], "default": null}
+  ]
+}
