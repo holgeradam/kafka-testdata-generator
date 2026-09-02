@@ -17,3 +17,13 @@ The coupling is an invariant owned by `producer.New`: idempotency is derived fro
 
 Consequence worth naming: with idempotency off under `acks=1`, retries can duplicate or drop records during failover. This tool generates disposable test data, so that trade is deliberate; consumers needing stronger guarantees should run with `-acks all`.
 
+## Registry client (amended 2026-09-02, see ADR-0007)
+
+Franz-go remains the Kafka producer. The AVRO path (ADR-0007) additionally uses the
+`confluent-kafka-go` schema-registry package for registry lookups and its `AvroSerializer`.
+That package is librdkafka-linked and thus reintroduces the C dependency ADR-0001 originally
+excluded - accepted here because the standalone pure-Go `schema-registry-sdk-go` (Apache-2.0)
+is barely maintained, and the better-maintained registry client is the C-linked one. The C
+dependency is confined to the schema-registry/serdes path; Kafka producing itself stays pure-Go.
+
+
