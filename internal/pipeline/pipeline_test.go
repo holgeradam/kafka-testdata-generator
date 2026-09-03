@@ -76,6 +76,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 		Generator: gen,
 		Schema:    schemaFor(""),
 		Count:     3,
+		Encoder:   JsonEncoder{},
 	}, sink)
 
 	stats, _ := p.Run(context.Background())
@@ -102,7 +103,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 func TestRunStopsAtCount(t *testing.T) {
 	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, Encoder: JsonEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -117,7 +118,7 @@ func TestRunStopsAtCount(t *testing.T) {
 func TestRunCancellationMidRun(t *testing.T) {
 	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Stats, 1)
@@ -152,7 +153,7 @@ func TestRunCancellationMidRun(t *testing.T) {
 func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 	gen := generator.New(1, testNow())
 	sink := newBlockingSink()
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Stats, 1)
@@ -188,7 +189,7 @@ func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 func TestRunCountsSendFailures(t *testing.T) {
 	gen := generator.New(1, testNow())
 	sink := &fakeSink{err: errors.New("boom")}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3, Encoder: JsonEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -202,7 +203,7 @@ func TestRunCountsMissingKey(t *testing.T) {
 	sink := &fakeSink{}
 	// Schema generates an object WITHOUT the configured key field, so every
 	// payload is missing that key and should be skipped as failed.
-	p := New(Config{Generator: gen, Schema: schemaFor("id"), Count: 3, KeyField: "nope"}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor("id"), Count: 3, KeyField: "nope", Encoder: JsonEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -223,6 +224,7 @@ func TestRunWarnsOnMissingKey(t *testing.T) {
 		Schema:    schemaFor("id"),
 		Count:     2,
 		KeyField:  "nope",
+		Encoder:   JsonEncoder{},
 		Warn:      &warn,
 	}, sink)
 
@@ -242,6 +244,7 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 		Generator: generator.New(1, testNow()),
 		Schema:    map[string]any{"type": "widget"},
 		Count:     3,
+		Encoder:   JsonEncoder{},
 	}, sink)
 
 	stats, err := p.Run(context.Background())
@@ -275,7 +278,7 @@ func TestRunAttachesKeyWhenPresent(t *testing.T) {
 			"id": map[string]any{"type": "string"},
 		},
 	}
-	p := New(Config{Generator: gen, Schema: schema, Count: 2, KeyField: keyField}, sink)
+	p := New(Config{Generator: gen, Schema: schema, Count: 2, KeyField: keyField, Encoder: JsonEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 

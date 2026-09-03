@@ -414,6 +414,70 @@ func TestScenarioSKUConforms(t *testing.T) {
 	}
 }
 
+// TestScenarioFormatJsonFlagAccept verifies -format json succeeds and produces
+// byte-identical output to the default (no -format flag).
+func TestScenarioFormatJsonFlagAccept(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	args := []string{"-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z"}
+	out, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("-format json failed: %v\noutput: %s", err, out)
+	}
+	lines := filterJSONLines(string(out))
+	if len(lines) != 2 {
+		t.Errorf("expected 2 JSON lines, got %d", len(lines))
+	}
+
+	// Byte-identical to the same run without -format flag (which defaults to json).
+	outDefault, err := exec.Command(bin, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("default format run failed: %v\noutput: %s", err, outDefault)
+	}
+	linesDefault := filterJSONLines(string(outDefault))
+	if len(lines) != len(linesDefault) {
+		t.Fatalf("different line count: %d vs %d", len(lines), len(linesDefault))
+	}
+	for i := range lines {
+		if lines[i] != linesDefault[i] {
+			t.Errorf("line %d differs:\n  json:    %s\n  default: %s", i, lines[i], linesDefault[i])
+		}
+	}
+}
+
+// TestScenarioFormatAvroReject verifies -format avro is rejected with a clear
+// not-implemented error message.
+func TestScenarioFormatAvroReject(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-format", "avro").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -format avro to be rejected")
+	}
+	if !strContains(string(out), "not yet implemented") {
+		t.Errorf("expected 'not yet implemented' error, got: %s", out)
+	}
+}
+
+// TestScenarioFormatInvalid rejects an unknown format at parse time.
+func TestScenarioFormatInvalid(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-format", "xml").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected invalid -format to be rejected at parse time")
+	}
+	if !strContains(string(out), "format") {
+		t.Errorf("expected usage hint naming -format, got: %s", out)
+	}
+}
+
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()

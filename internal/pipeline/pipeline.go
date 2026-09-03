@@ -2,7 +2,6 @@ package pipeline
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -32,6 +31,7 @@ type Config struct {
 	Count     int
 	RateLimit time.Duration
 	KeyField  string
+	Encoder   Encoder
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
 	// edge (main) passes stderr; tests pass a buffer.
@@ -47,8 +47,8 @@ type Stats struct {
 }
 
 // Pipeline drives a run: generate each Payload from the Message schema, extract
-// the Key, marshal once, and hand bytes to the configured Sink until Count is
-// reached or the context is cancelled.
+// the Key, encode via the injected Encoder, and hand bytes to the configured
+// Sink until Count is reached or the context is cancelled.
 type Pipeline struct {
 	cfg  Config
 	sink Sink
@@ -85,9 +85,9 @@ loop:
 		}
 		total++
 
-		var key []byte
+		var key any
 		if p.cfg.KeyField != "" {
-			key = marshalKey(payload, p.cfg.KeyField)
+			key = extractKey(payload, p.cfg.KeyField)
 			if key == nil {
 				p.warnf("Warning: field %q not found in payload, skipping\n", p.cfg.KeyField)
 				failed++
@@ -95,13 +95,13 @@ loop:
 			}
 		}
 
-		data, err := json.Marshal(payload)
+		keyBytes, data, err := p.cfg.Encoder.Encode(key, payload)
 		if err != nil {
 			failed++
 			continue
 		}
 
-		if err := p.sink.Send(ctx, Outgoing{Key: key, Payload: data}); err != nil {
+		if err := p.sink.Send(ctx, Outgoing{Key: keyBytes, Payload: data}); err != nil {
 			failed++
 			continue
 		}
@@ -116,9 +116,9 @@ loop:
 	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil
 }
 
-// marshalKey extracts the value of keyField from the payload and returns its
-// JSON bytes, or nil if the field is absent so the caller can count a failure.
-func marshalKey(payload any, keyField string) []byte {
+// extractKey pulls the value of keyField from the generated payload. Returns
+// nil when the field is absent so the caller can count a failure and skip.
+func extractKey(payload any, keyField string) any {
 	m, ok := payload.(map[string]any)
 	if !ok {
 		return nil
@@ -127,11 +127,7 @@ func marshalKey(payload any, keyField string) []byte {
 	if !ok {
 		return nil
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	return b
+	return v
 }
 
 func (p *Pipeline) warnf(format string, args ...any) {

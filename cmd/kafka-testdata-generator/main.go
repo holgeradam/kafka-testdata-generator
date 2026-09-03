@@ -28,6 +28,8 @@ func main() {
 	flag.Var(nowFlag, "now", "Clock for date fields (RFC3339; default now)")
 	acksFlag := newAcksFlag()
 	flag.Var(acksFlag, "acks", "Acks level: 1 (leader) or all (all in-sync replicas)")
+	formatFlag := newFormatFlag()
+	flag.Var(formatFlag, "format", "Output wire format: json (default) or avro")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -101,12 +103,19 @@ func main() {
 	}
 	defer sink.Close()
 
+	enc, err := newEncoder(formatFlag.format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
 	p := pipeline.New(pipeline.Config{
 		Generator: gen,
 		Schema:    schema,
 		Count:     *count,
 		RateLimit: *rateLimit,
 		KeyField:  *keyField,
+		Encoder:   enc,
 		Warn:      os.Stderr,
 	}, sink)
 
@@ -116,6 +125,19 @@ func main() {
 		os.Exit(1)
 	}
 	printStats(stats, *dryRun)
+}
+
+// newEncoder constructs the Encoder for the given wire format. Only json is
+// implemented; avro returns a clear error until the AvroEncoder lands.
+func newEncoder(format string) (pipeline.Encoder, error) {
+	switch format {
+	case "json":
+		return pipeline.JsonEncoder{}, nil
+	case "avro":
+		return nil, fmt.Errorf("-format avro is not yet implemented")
+	default:
+		return nil, fmt.Errorf("unknown format %q (supported: json, avro)", format)
+	}
 }
 
 func printStats(s pipeline.Stats, dryRun bool) {
@@ -180,4 +202,30 @@ func (n *nowFlag) Set(v string) error {
 // String satisfies flag.Value and is used for the flag default and usage.
 func (n *nowFlag) String() string {
 	return n.now.Format(time.RFC3339)
+}
+
+// formatFlag is a flag.Value accepting "json" or "avro" (case-sensitive) for
+// the output wire format. Invalid values fail at parse time with a hint.
+type formatFlag struct {
+	format string
+}
+
+func newFormatFlag() *formatFlag {
+	return &formatFlag{format: "json"}
+}
+
+// Set parses the -format value; the flag package reports parse errors.
+func (f *formatFlag) Set(v string) error {
+	switch v {
+	case "json", "avro":
+		f.format = v
+	default:
+		return fmt.Errorf("invalid -format %q (supported: json, avro)", v)
+	}
+	return nil
+}
+
+// String satisfies flag.Value and is used for the flag default and usage.
+func (f *formatFlag) String() string {
+	return f.format
 }
