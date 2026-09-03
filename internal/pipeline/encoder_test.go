@@ -34,18 +34,21 @@ func TestJsonEncoderPayloadBytesAreJsonMarshal(t *testing.T) {
 	}
 }
 
-// TestJsonEncoderKeyBytesMatchMarshal proves that key encoding produces the
-// exact same bytes as json.Marshal applied to the extracted value, preserving
-// byte-identical output with the original marshalKey path.
-func TestJsonEncoderKeyBytesMatchMarshal(t *testing.T) {
+// TestJsonEncoderKeyPlainScalar proves the plain-scalar key contract (ADR-0006
+// / CONTEXT.md Key entry): a string key becomes raw UTF-8 bytes, a number
+// becomes decimal text, and an object/array stays JSON. Key bytes are never
+// JSON-wrapped scalars.
+func TestJsonEncoderKeyPlainScalar(t *testing.T) {
 	cases := []struct {
 		name string
 		key  any
+		want string
 	}{
-		{"string", "id-123"},
-		{"number", float64(42)},
-		{"bool", true},
-		{"null", nil},
+		{"string", "cust-1", "cust-1"},
+		{"number", float64(42), "42"},
+		{"bool", true, "true"},
+		{"object", map[string]any{"a": 1}, `{"a":1}`},
+		{"array", []any{1, 2}, "[1,2]"},
 	}
 
 	enc := JsonEncoder{}
@@ -55,18 +58,8 @@ func TestJsonEncoderKeyBytesMatchMarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Encode: %v", err)
 			}
-			if tc.key == nil {
-				if keyBytes != nil {
-					t.Errorf("expected nil keyBytes for nil key, got %s", keyBytes)
-				}
-				return
-			}
-			expected, err := json.Marshal(tc.key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(keyBytes) != string(expected) {
-				t.Errorf("key bytes differ:\n  got  %s\n  want %s", keyBytes, expected)
+			if string(keyBytes) != tc.want {
+				t.Errorf("key = %q, want %q", keyBytes, tc.want)
 			}
 		})
 	}
@@ -99,8 +92,8 @@ func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if string(keyBytes) != `"abc-123"` {
-		t.Errorf("key = %s, want \"abc-123\"", keyBytes)
+	if string(keyBytes) != `abc-123` {
+		t.Errorf("key = %s, want abc-123", keyBytes)
 	}
 	if string(payloadBytes) != `{"orderId":"abc-123"}` {
 		t.Errorf("payload = %s, want {\"orderId\":\"abc-123\"}", payloadBytes)

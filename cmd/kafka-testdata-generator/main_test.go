@@ -548,6 +548,136 @@ func filterJSONLines(output string) []string {
 	return lines
 }
 
+func TestScenarioKeyBindingGeneratesKey(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: Bindings
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              type: string
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`)
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "2", "-seed", "42").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, out)
+	}
+	// Key lines go to stderr via CombinedOutput; stdout has NDJSON payloads.
+	// The key binding should produce non-empty keys (visible as Key: lines).
+	if !strContains(string(out), "Key: ") {
+		t.Errorf("expected Key echo from binding, got:\n%s", out)
+	}
+}
+
+func TestScenarioKeyBindingOverriddenByKeyFlag(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: Bindings
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              type: string
+        payload:
+          type: object
+          required:
+            - orderId
+          properties:
+            orderId:
+              type: string
+`)
+	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "1", "-seed", "42", "-key", "orderId").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, combined)
+	}
+	if !strContains(string(combined), "binding overridden") {
+		t.Errorf("expected binding override warning, got:\n%s", combined)
+	}
+}
+
+func TestScenarioNullKeyInfoMessage(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: NoKey
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`)
+	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "1", "-seed", "42").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, combined)
+	}
+	if !strContains(string(combined), "no key configured") {
+		t.Errorf("expected null-key info message, got:\n%s", combined)
+	}
+}
+
+func TestScenarioKeyBindingResolvesRef(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: RefBinding
+  version: '1.0.0'
+components:
+  schemas:
+    OrderKey:
+      type: string
+      format: uuid
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              $ref: '#/components/schemas/OrderKey'
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`)
+	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "2", "-seed", "42").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, combined)
+	}
+	// UUID-formatted keys should be echoed from the binding.
+	if !strContains(string(combined), "Key: ") {
+		t.Errorf("expected Key echo from resolved ref binding, got:\n%s", combined)
+	}
+}
+
 func splitLines(s string) []string {
 	var result []string
 	start := 0

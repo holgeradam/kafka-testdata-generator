@@ -496,3 +496,137 @@ channels:
 		t.Errorf("expected message-level $ref to resolve payload, got type %v", schema["type"])
 	}
 }
+
+func TestKeyBindingPresent(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              type: string
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binding, err := doc.KeyBinding("orders")
+	if err != nil {
+		t.Fatalf("KeyBinding failed: %v", err)
+	}
+	if binding == nil {
+		t.Fatal("expected non-nil binding")
+	}
+	if binding["type"] != "string" {
+		t.Errorf("expected binding type string, got %v", binding["type"])
+	}
+}
+
+func TestKeyBindingAbsent(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binding, err := doc.KeyBinding("orders")
+	if err != nil {
+		t.Fatalf("KeyBinding failed: %v", err)
+	}
+	if binding != nil {
+		t.Errorf("expected nil binding when absent, got %v", binding)
+	}
+}
+
+func TestKeyBindingResolvesRef(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+components:
+  schemas:
+    OrderKey:
+      type: string
+      format: uuid
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              $ref: '#/components/schemas/OrderKey'
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	binding, err := doc.KeyBinding("orders")
+	if err != nil {
+		t.Fatalf("KeyBinding failed: %v", err)
+	}
+	if binding == nil {
+		t.Fatal("expected non-nil binding")
+	}
+	if binding["type"] != "string" {
+		t.Errorf("expected resolved binding type string, got %v", binding["type"])
+	}
+	if binding["format"] != "uuid" {
+		t.Errorf("expected resolved binding format uuid, got %v", binding["format"])
+	}
+	if hasRef(binding) {
+		t.Error("expected no $ref to remain in resolved binding")
+	}
+}
+
+func TestKeyBindingMissingChannel(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info:
+  title: Test
+  version: '1.0.0'
+channels: {}
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = doc.KeyBinding("nonexistent")
+	if err == nil {
+		t.Error("expected error for missing channel")
+	}
+}

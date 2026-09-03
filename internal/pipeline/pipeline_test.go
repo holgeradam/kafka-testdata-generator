@@ -294,3 +294,148 @@ func TestRunAttachesKeyWhenPresent(t *testing.T) {
 		}
 	}
 }
+
+func TestRunBindingKeyGenerated(t *testing.T) {
+	gen := generator.New(1, testNow())
+	sink := &fakeSink{}
+	binding := map[string]any{"type": "string"}
+	p := New(Config{
+		Generator:  gen,
+		Schema:     schemaFor(""),
+		Count:      2,
+		KeyBinding: binding,
+		Encoder:    JsonEncoder{},
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Acked != 2 {
+		t.Errorf("expected 2 acked, got %d", stats.Acked)
+	}
+	for _, o := range sink.recorded {
+		if len(o.Key) == 0 {
+			t.Error("expected non-empty key bytes from binding")
+		}
+	}
+}
+
+func TestRunBindingOverriddenByKeyFlag(t *testing.T) {
+	gen := generator.New(1, testNow())
+	sink := &fakeSink{}
+	var warn bytes.Buffer
+	binding := map[string]any{"type": "string"}
+	schema := map[string]any{
+		"type":     "object",
+		"required": []any{"id"},
+		"properties": map[string]any{
+			"id": map[string]any{"type": "string"},
+		},
+	}
+	p := New(Config{
+		Generator:  gen,
+		Schema:     schema,
+		Count:      1,
+		KeyBinding: binding,
+		KeyField:   "id",
+		Encoder:    JsonEncoder{},
+		Warn:       &warn,
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Acked != 1 {
+		t.Errorf("expected 1 acked, got %d", stats.Acked)
+	}
+	if !strings.Contains(warn.String(), "binding overridden") {
+		t.Errorf("expected binding-override warning, got %q", warn.String())
+	}
+}
+
+func TestRunNullKeyInfoMessage(t *testing.T) {
+	gen := generator.New(1, testNow())
+	sink := &fakeSink{}
+	var warn bytes.Buffer
+	p := New(Config{
+		Generator: gen,
+		Schema:    schemaFor(""),
+		Count:     1,
+		Encoder:   JsonEncoder{},
+		Warn:      &warn,
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Acked != 1 {
+		t.Errorf("expected 1 acked, got %d", stats.Acked)
+	}
+	if !strings.Contains(warn.String(), "no key configured") {
+		t.Errorf("expected null-key info message, got %q", warn.String())
+	}
+	for _, o := range sink.recorded {
+		if len(o.Key) != 0 {
+			t.Errorf("expected nil/empty key bytes for null key, got %v", o.Key)
+		}
+	}
+}
+
+func TestRunBindingSchemaError(t *testing.T) {
+	gen := generator.New(1, testNow())
+	sink := &fakeSink{}
+	binding := map[string]any{"type": "widget"}
+	p := New(Config{
+		Generator:  gen,
+		Schema:     schemaFor(""),
+		Count:      1,
+		KeyBinding: binding,
+		Encoder:    JsonEncoder{},
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	var ue *generator.UnsupportedSchemaError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected *generator.UnsupportedSchemaError, got %v", err)
+	}
+	if ue.Keyword != "type" {
+		t.Errorf("keyword = %q, want type", ue.Keyword)
+	}
+	if stats.Total != 0 || stats.Acked != 0 {
+		t.Errorf("expected zero stats on abort, got %+v", stats)
+	}
+}
+
+// TestRunBindingUnresolvableRefAborts proves an unhonorable binding schema
+// (an unresolvable $ref, per the #11 spec + ADR-0006) aborts the run with a
+// typed error rather than producing non-conforming keys.
+func TestRunBindingUnresolvableRefAborts(t *testing.T) {
+	gen := generator.New(1, testNow())
+	gen.SetRefResolver(func(ref string) (map[string]any, error) {
+		return nil, errors.New("no such definition")
+	})
+	sink := &fakeSink{}
+	binding := map[string]any{"$ref": "#/components/schemas/Missing"}
+	p := New(Config{
+		Generator:  gen,
+		Schema:     schemaFor(""),
+		Count:      1,
+		KeyBinding: binding,
+		Encoder:    JsonEncoder{},
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	var ue *generator.UnsupportedSchemaError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected *generator.UnsupportedSchemaError, got %v", err)
+	}
+	if ue.Keyword != "$ref" {
+		t.Errorf("keyword = %q, want $ref", ue.Keyword)
+	}
+	if stats.Total != 0 || stats.Acked != 0 {
+		t.Errorf("expected zero stats on abort, got %+v", stats)
+	}
+}

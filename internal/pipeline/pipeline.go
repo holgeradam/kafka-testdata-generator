@@ -31,7 +31,12 @@ type Config struct {
 	Count     int
 	RateLimit time.Duration
 	KeyField  string
-	Encoder   Encoder
+	// KeyBinding is the resolved message.bindings.kafka.key schema, or nil when
+	// the spec declares no key binding. When non-nil and KeyField is empty, the
+	// Key is generated from this schema instead of being extracted from the
+	// Payload.
+	KeyBinding map[string]any
+	Encoder    Encoder
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
 	// edge (main) passes stderr; tests pass a buffer.
@@ -67,6 +72,16 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	var total, acked, failed int64
 	start := time.Now()
 
+	hasBinding := p.cfg.KeyBinding != nil
+	hasKeyField := p.cfg.KeyField != ""
+
+	if !hasBinding && !hasKeyField {
+		p.warnf("no key configured, producing with a null key\n")
+	}
+	if hasBinding && hasKeyField {
+		p.warnf("Warning: -key overrides binding, binding overridden\n")
+	}
+
 loop:
 	for {
 		if p.cfg.Count > 0 && total >= int64(p.cfg.Count) {
@@ -79,14 +94,25 @@ loop:
 		default:
 		}
 
+		var key any
+		var err error
+		if hasBinding && !hasKeyField {
+			// Binding present, no -key: generate key from binding schema first so
+			// an unhonorable binding aborts the run before any payload is counted.
+			key, err = p.cfg.Generator.Value(p.cfg.KeyBinding, "key")
+			if err != nil {
+				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
+			}
+		}
+
 		payload, err := p.cfg.Generator.Value(p.cfg.Schema, generator.RootField)
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}
 		total++
 
-		var key any
-		if p.cfg.KeyField != "" {
+		if hasKeyField {
+			// Binding absent or overridden: extract from payload.
 			key = extractKey(payload, p.cfg.KeyField)
 			if key == nil {
 				p.warnf("Warning: field %q not found in payload, skipping\n", p.cfg.KeyField)

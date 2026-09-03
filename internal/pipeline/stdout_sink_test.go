@@ -34,13 +34,13 @@ func TestStdoutSinkEchoesKeyToStderr(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	s := NewStdoutSink(&out, &errBuf)
 
-	o := Outgoing{Key: []byte(`"cust-1"`), Payload: []byte(`{"id":"cust-1"}`)}
+	o := Outgoing{Key: []byte(`cust-1`), Payload: []byte(`{"id":"cust-1"}`)}
 	if err := s.Send(context.Background(), o); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if !strings.Contains(errBuf.String(), "Key: cust-1") {
-		t.Errorf("expected Key echo in stderr, got %q", errBuf.String())
+		t.Errorf("expected raw Key echo in stderr, got %q", errBuf.String())
 	}
 	if !strings.Contains(out.String(), `{"id":"cust-1"}`) {
 		t.Errorf("expected payload in stdout, got %q", out.String())

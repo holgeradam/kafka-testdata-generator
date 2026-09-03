@@ -72,6 +72,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	keyBinding, err := doc.KeyBinding(*channel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error extracting key binding: %v\n", err)
+		os.Exit(1)
+	}
+
 	gen := generator.New(*seed, nowFlag.now)
 	gen.SetRefResolver(doc.ResolveRef)
 
@@ -110,13 +116,14 @@ func main() {
 	}
 
 	p := pipeline.New(pipeline.Config{
-		Generator: gen,
-		Schema:    schema,
-		Count:     *count,
-		RateLimit: *rateLimit,
-		KeyField:  *keyField,
-		Encoder:   enc,
-		Warn:      os.Stderr,
+		Generator:  gen,
+		Schema:     schema,
+		Count:      *count,
+		RateLimit:  *rateLimit,
+		KeyField:   *keyField,
+		KeyBinding: keyBinding,
+		Encoder:    enc,
+		Warn:       os.Stderr,
 	}, sink)
 
 	stats, err := p.Run(ctx)

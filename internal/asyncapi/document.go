@@ -43,6 +43,7 @@ type Message struct {
 	Ref         string         `yaml:"$ref,omitempty" json:"$ref,omitempty"`
 	Name        string         `yaml:"name,omitempty" json:"name,omitempty"`
 	Payload     map[string]any `yaml:"payload,omitempty" json:"payload,omitempty"`
+	Bindings    map[string]any `yaml:"bindings,omitempty" json:"bindings,omitempty"`
 	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
@@ -100,6 +101,47 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 		return nil, fmt.Errorf("normalizing spec: %w", err)
 	}
 	return normalized, nil
+}
+
+// KeyBinding extracts the message-level kafka key binding schema for the given
+// channel. Returns nil when no binding is present. The returned schema has $ref
+// nodes resolved so it can be fed directly to the Generator.
+func (d *Document) KeyBinding(channel string) (map[string]any, error) {
+	ch, ok := d.Channels[channel]
+	if !ok {
+		return nil, fmt.Errorf("channel %q not found in spec", channel)
+	}
+
+	msg, err := d.resolveChannelMessage(ch)
+	if err != nil {
+		return nil, err
+	}
+
+	if msg.Bindings == nil {
+		return nil, nil
+	}
+
+	kafka, ok := msg.Bindings["kafka"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+
+	keySchema, ok := kafka["key"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+
+	resolved, err := d.resolveNode(keySchema, nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolving key binding refs: %w", err)
+	}
+
+	out, ok := resolved.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("key binding schema must be an object")
+	}
+
+	return out, nil
 }
 
 // PayloadSchema extracts the JSON Schema for the message payload of the given channel.
