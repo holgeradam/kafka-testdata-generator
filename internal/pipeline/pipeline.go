@@ -142,18 +142,104 @@ loop:
 	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil
 }
 
-// extractKey pulls the value of keyField from the generated payload. Returns
-// nil when the field is absent so the caller can count a failure and skip.
+// extractKey pulls the value of keyField from the generated payload. keyField is
+// a dotted JSON path (object traversals and array indexing, e.g. customer.id or
+// items[0].sku); a plain top-level name works unchanged. Returns nil when the
+// path is empty, an intermediate segment is missing, or an index is out of
+// range, so the caller can count a failure and skip.
 func extractKey(payload any, keyField string) any {
-	m, ok := payload.(map[string]any)
+	segments, ok := parseKeyPath(keyField)
 	if !ok {
 		return nil
 	}
-	v, ok := m[keyField]
-	if !ok {
-		return nil
+	return resolveKeyPath(payload, segments)
+}
+
+// keySegment is one step of a JSON key path: a field name, or an array index.
+type keySegment struct {
+	// field is the object field name; used when index is -1.
+	field string
+	// index is the array index; -1 means this step is a field access.
+	index int
+}
+
+// parseKeyPath splits a dotted JSON path (with optional [n] array indexing)
+// into segments. Returns ok=false on an empty path or a malformed fragment
+// (e.g. an unbalanced bracket).
+func parseKeyPath(path string) ([]keySegment, bool) {
+	if path == "" {
+		return nil, false
 	}
-	return v
+	var (
+		segments []keySegment
+		buf      []byte
+	)
+	flushField := func() {
+		if len(buf) > 0 {
+			segments = append(segments, keySegment{field: string(buf), index: -1})
+			buf = buf[:0]
+		}
+	}
+	var i int
+	for i < len(path) {
+		switch c := path[i]; c {
+		case '.':
+			flushField()
+			i++
+		case '[':
+			flushField()
+			close := i + 1
+			for close < len(path) && path[close] != ']' {
+				close++
+			}
+			if close >= len(path) {
+				return nil, false
+			}
+			idxStr := path[i+1 : close]
+			if idxStr == "" {
+				return nil, false
+			}
+			n := 0
+			for _, d := range idxStr {
+				if d < '0' || d > '9' {
+					return nil, false
+				}
+				n = n*10 + int(d-'0')
+			}
+			segments = append(segments, keySegment{index: n})
+			i = close + 1
+		default:
+			buf = append(buf, c)
+			i++
+		}
+	}
+	flushField()
+	return segments, true
+}
+
+// resolveKeyPath walks the segments through the payload, returning the value at
+// the end of the path or nil when any step fails.
+func resolveKeyPath(current any, segments []keySegment) any {
+	for _, seg := range segments {
+		if seg.index >= 0 {
+			arr, ok := current.([]any)
+			if !ok || seg.index >= len(arr) {
+				return nil
+			}
+			current = arr[seg.index]
+			continue
+		}
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		v, ok := m[seg.field]
+		if !ok {
+			return nil
+		}
+		current = v
+	}
+	return current
 }
 
 func (p *Pipeline) warnf(format string, args ...any) {

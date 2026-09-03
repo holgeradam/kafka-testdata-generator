@@ -678,6 +678,150 @@ channels:
 	}
 }
 
+// runKeyScenario runs the binary in dry-run against the given spec body with
+// the supplied -key, and returns the combined output. It fails the test if the
+// command errors.
+func runKeyScenario(t *testing.T, specBody, key string) string {
+	t.Helper()
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, specBody)
+	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "2", "-seed", "42", "-key", key).CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, combined)
+	}
+	return string(combined)
+}
+
+// TestScenarioKeyJSONPathNested proves -key resolves a dotted nested object
+// field end to end: the key is echoed to stderr, not a missing-key skip.
+func TestScenarioKeyJSONPathNested(t *testing.T) {
+	combined := runKeyScenario(t, `
+asyncapi: '2.6.0'
+info:
+  title: Path
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          required:
+            - customer
+          properties:
+            customer:
+              type: object
+              required:
+                - id
+              properties:
+                id:
+                  type: string
+`, "customer.id")
+	if !strContains(combined, "Key: ") {
+		t.Errorf("expected Key echo from nested JSON path, got:\n%s", combined)
+	}
+	if strContains(combined, "not found in payload") {
+		t.Errorf("nested path should not skip records, got:\n%s", combined)
+	}
+}
+
+// TestScenarioKeyJSONPathArrayIndex proves -key resolves an array index with a
+// field traversal (items[0].sku) end to end without skipping records.
+func TestScenarioKeyJSONPathArrayIndex(t *testing.T) {
+	combined := runKeyScenario(t, `
+asyncapi: '2.6.0'
+info:
+  title: Path
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          required:
+            - items
+          properties:
+            items:
+              type: array
+              minItems: 1
+              maxItems: 3
+              items:
+                type: object
+                required:
+                  - sku
+                properties:
+                  sku:
+                    type: string
+`, "items[0].sku")
+	if !strContains(combined, "Key: ") {
+		t.Errorf("expected Key echo from array-index JSON path, got:\n%s", combined)
+	}
+	if strContains(combined, "not found in payload") {
+		t.Errorf("array-index path should not skip records, got:\n%s", combined)
+	}
+}
+
+// TestScenarioKeyJSONPathMissingSegment proves a missing JSON path segment
+// yields the documented missing-key skip behaviour (record skipped, no Key echo).
+func TestScenarioKeyJSONPathMissingSegment(t *testing.T) {
+	combined := runKeyScenario(t, `
+asyncapi: '2.6.0'
+info:
+  title: Path
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          required:
+            - customer
+          properties:
+            customer:
+              type: object
+              properties:
+                id:
+                  type: string
+`, "customer.missing")
+	if !strContains(combined, "not found in payload") {
+		t.Errorf("expected missing-path warning, got:\n%s", combined)
+	}
+	if strContains(combined, "Key: ") {
+		t.Errorf("missing path segment must skip the record (no Key echo), got:\n%s", combined)
+	}
+}
+
+// TestScenarioKeyTopLevelStillWorks guards backwards compatibility: a plain
+// top-level -key name keeps working as before.
+func TestScenarioKeyTopLevelStillWorks(t *testing.T) {
+	combined := runKeyScenario(t, `
+asyncapi: '2.6.0'
+info:
+  title: TopLevel
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        payload:
+          type: object
+          required:
+            - orderId
+          properties:
+            orderId:
+              type: string
+`, "orderId")
+	if !strContains(combined, "Key: ") {
+		t.Errorf("expected key echo from top-level key, got:\n%s", combined)
+	}
+	if strContains(combined, "not found in payload") {
+		t.Errorf("top-level key must not warn on missing field, got:\n%s", combined)
+	}
+}
+
 func splitLines(s string) []string {
 	var result []string
 	start := 0
