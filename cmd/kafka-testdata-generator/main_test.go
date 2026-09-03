@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -348,40 +349,85 @@ func TestScenarioNowFlagReject(t *testing.T) {
 }
 
 // TestScenarioDeterministicWithNow proves a fixed -seed AND -now yields
-// byte-identical output including date-formatted fields. A temp spec with a
-// date-format field is used so the clock path is exercised end to end.
+// byte-identical JSON output including date-formatted fields. A spec with both
+// date and non-date fields exercises the clock and seed paths end to end.
 func TestScenarioDeterministicWithNow(t *testing.T) {
 	bin := buildBinary(t)
 	spec := writeTempSpec(t, `
 asyncapi: '2.6.0'
 info:
-  title: Dated
+  title: Mixed
   version: '1.0.0'
 channels:
-  dated:
+  mixed:
     publish:
       message:
         payload:
           type: object
           required:
+            - name
             - created
           properties:
+            name:
+              type: string
             created:
               type: string
               format: date
+            updated:
+              type: string
+              format: date-time
 `)
 
-	run := func() string {
-		out, err := exec.Command(bin, "-spec", spec, "-channel", "dated",
-			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z").CombinedOutput()
+	run := func() []string {
+		cmd := exec.Command(bin, "-spec", spec, "-channel", "mixed",
+			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
+		out, err := cmd.Output()
 		if err != nil {
-			t.Fatalf("command failed: %v\noutput: %s", err, out)
+			t.Fatalf("command failed: %v", err)
 		}
-		return string(out)
+		return filterJSONLines(string(out))
 	}
 
-	if run() != run() {
-		t.Error("identical (-seed, -now) must produce byte-identical output including date fields")
+	lines1, lines2 := run(), run()
+	if len(lines1) != len(lines2) {
+		t.Fatalf("different number of lines: %d vs %d", len(lines1), len(lines2))
+	}
+	for i := range lines1 {
+		if lines1[i] != lines2[i] {
+			t.Errorf("line %d differs:\n  run1: %s\n  run2: %s", i, lines1[i], lines2[i])
+		}
+	}
+
+	// A different -now must change date fields but keep seed-driven fields identical.
+	runWithNow := func(now string) []string {
+		cmd := exec.Command(bin, "-spec", spec, "-channel", "mixed",
+			"-dry-run", "-count", "3", "-seed", "42", "-now", now)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("command failed: %v", err)
+		}
+		return filterJSONLines(string(out))
+	}
+
+	linesA := runWithNow("2026-01-02T03:04:05Z")
+	linesB := runWithNow("2025-06-15T10:00:00Z")
+	if len(linesA) != len(linesB) {
+		t.Fatalf("different number of lines: %d vs %d", len(linesA), len(linesB))
+	}
+	for i := range linesA {
+		var objA, objB map[string]any
+		if err := json.Unmarshal([]byte(linesA[i]), &objA); err != nil {
+			t.Fatalf("line %d: invalid JSON: %v", i, err)
+		}
+		if err := json.Unmarshal([]byte(linesB[i]), &objB); err != nil {
+			t.Fatalf("line %d: invalid JSON: %v", i, err)
+		}
+		if objA["name"] != objB["name"] {
+			t.Errorf("line %d: seed-driven field 'name' differs: %v vs %v", i, objA["name"], objB["name"])
+		}
+		if objA["created"] == objB["created"] {
+			t.Errorf("line %d: date field 'created' must differ for different -now", i)
+		}
 	}
 }
 
