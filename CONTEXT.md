@@ -33,8 +33,12 @@ Mode where the tool generates records and prints them to stdout without producin
 _Avoid_: console mode, stdout mode
 
 **Pipeline**:
-The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO.
+The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation; `*generator.Generator` satisfies it, and tests substitute a fake.
 _Avoid_: runner, loop, producer loop
+
+**ValueGenerator**:
+The seam between the Pipeline and record generation: one method, `Value(schema) (any, error)`, promises a Payload honouring the Message schema or a typed conformance error. Adapters pass the deletion test: `*generator.Generator` in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
+_Avoid_: generator interface, data source
 
 **Encoder**:
 The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter per format: JsonEncoder for JSON mode, AvroEncoder for AVRO mode. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. The Pipeline never sees format conventions.

@@ -48,7 +48,7 @@ func TestValueRecursiveTerminates(t *testing.T) {
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
-	result, err := gen.Value(root, RootField)
+	result, err := gen.Value(root)
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 	_, resolver := selfRefSchema()
 	gen.SetRefResolver(resolver)
 
-	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"}, RootField)
+	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}
@@ -93,11 +93,11 @@ func TestValueRecursiveDeterministic(t *testing.T) {
 	gen2.SetRefResolver(r2r)
 
 	for i := 0; i < 10; i++ {
-		r1, err := gen1.Value(root, RootField)
+		r1, err := gen1.Value(root)
 		if err != nil {
 			t.Fatalf("gen1.Value error: %v", err)
 		}
-		r2, err := gen2.Value(root, RootField)
+		r2, err := gen2.Value(root)
 		if err != nil {
 			t.Fatalf("gen2.Value error: %v", err)
 		}
@@ -133,7 +133,7 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 		return nil, fmt.Errorf("unknown ref %s", ref)
 	})
 
-	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"}, RootField)
+	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}

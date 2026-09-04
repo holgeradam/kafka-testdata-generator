@@ -27,14 +27,14 @@ func assertUnsupported(t *testing.T, err error, keyword, path string) {
 
 func TestValueUnsupportedType(t *testing.T) {
 	gen := New(42, fixedNow())
-	_, err := gen.Value(map[string]any{"type": "widget"}, RootField)
-	assertUnsupported(t, err, "type", RootField)
+	_, err := gen.Value(map[string]any{"type": "widget"})
+	assertUnsupported(t, err, "type", RootPath)
 }
 
 func TestValueNoType(t *testing.T) {
 	gen := New(42, fixedNow())
-	_, err := gen.Value(map[string]any{"minimum": 5}, RootField)
-	assertUnsupported(t, err, "type", RootField)
+	_, err := gen.Value(map[string]any{"minimum": 5})
+	assertUnsupported(t, err, "type", RootPath)
 }
 
 func TestValueNestedUnsupportedPath(t *testing.T) {
@@ -46,8 +46,8 @@ func TestValueNestedUnsupportedPath(t *testing.T) {
 			"widget": map[string]any{"type": "gadget"},
 		},
 	}
-	_, err := gen.Value(schema, RootField)
-	assertUnsupported(t, err, "type", RootField+".widget")
+	_, err := gen.Value(schema)
+	assertUnsupported(t, err, "type", RootPath+".widget")
 }
 
 func TestValueArrayUnsupportedItemPath(t *testing.T) {
@@ -58,7 +58,7 @@ func TestValueArrayUnsupportedItemPath(t *testing.T) {
 		"minItems": float64(1),
 		"maxItems": float64(3),
 	}
-	_, err := gen.Value(schema, RootField)
+	_, err := gen.Value(schema)
 	var ue *UnsupportedSchemaError
 	if !errors.As(err, &ue) {
 		t.Fatalf("expected *UnsupportedSchemaError, got %T (%v)", err, err)
@@ -66,8 +66,8 @@ func TestValueArrayUnsupportedItemPath(t *testing.T) {
 	if ue.Keyword != "type" {
 		t.Errorf("keyword = %q, want type", ue.Keyword)
 	}
-	if ue.Path[:len(RootField)+1] != RootField+"[" {
-		t.Errorf("path %q should be an array element under %q", ue.Path, RootField)
+	if ue.Path[:len(RootPath)+1] != RootPath+"[" {
+		t.Errorf("path %q should be an array element under %q", ue.Path, RootPath)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
 					t.Errorf("schema[%d] panicked: %v", i, r)
 				}
 			}()
-			_, _ = gen.Value(s, RootField)
+			_, _ = gen.Value(s)
 		}()
 	}
 }
@@ -108,8 +108,8 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 			"a": "not-a-schema-object",
 		},
 	}
-	_, err := gen.Value(schema, RootField)
-	assertUnsupported(t, err, "properties", RootField+".a")
+	_, err := gen.Value(schema)
+	assertUnsupported(t, err, "properties", RootPath+".a")
 }
 
 func TestValueRefResolutionError(t *testing.T) {
@@ -117,12 +117,12 @@ func TestValueRefResolutionError(t *testing.T) {
 	gen.SetRefResolver(func(ref string) (map[string]any, error) {
 		return nil, errors.New("no such definition")
 	})
-	_, err := gen.Value(map[string]any{"$ref": "#/defs/Missing"}, RootField)
-	assertUnsupported(t, err, "$ref", RootField)
+	_, err := gen.Value(map[string]any{"$ref": "#/defs/Missing"})
+	assertUnsupported(t, err, "$ref", RootPath)
 }
 
 func TestValueRefMissingResolver(t *testing.T) {
 	gen := New(1, fixedNow())
-	_, err := gen.Value(map[string]any{"$ref": "#/defs/Node"}, RootField)
-	assertUnsupported(t, err, "$ref", RootField)
+	_, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
+	assertUnsupported(t, err, "$ref", RootPath)
 }

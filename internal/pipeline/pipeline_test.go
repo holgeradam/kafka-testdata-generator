@@ -12,6 +12,20 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 )
 
+// fakeGenerator is a controlled ValueGenerator: it returns a fixed Payload
+// (and optional error) for every Value call, so pipeline tests exercise Pipeline
+// mechanics without loading a schema or driving an RNG. Tests that need real
+// generation semantics (key-binding synthesis, schema-error aborts) keep using
+// *generator.Generator through the same interface.
+type fakeGenerator struct {
+	payload any
+	err     error
+}
+
+func (f *fakeGenerator) Value(_ map[string]any) (any, error) {
+	return f.payload, f.err
+}
+
 func testNow() time.Time {
 	return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 }
@@ -70,7 +84,7 @@ func schemaFor(keyField string) map[string]any {
 }
 
 func TestRunProducesCountPayloads(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	p := New(Config{
 		Generator: gen,
@@ -101,7 +115,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 }
 
 func TestRunStopsAtCount(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, Encoder: JsonEncoder{}}, sink)
 
@@ -116,7 +130,7 @@ func TestRunStopsAtCount(t *testing.T) {
 }
 
 func TestRunCancellationMidRun(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
 
@@ -151,7 +165,7 @@ func TestRunCancellationMidRun(t *testing.T) {
 // context error (matching the real produce path), so the interrupted payload is
 // counted as failed, not acked.
 func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := newBlockingSink()
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
 
@@ -187,7 +201,7 @@ func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 }
 
 func TestRunCountsSendFailures(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{err: errors.New("boom")}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3, Encoder: JsonEncoder{}}, sink)
 
@@ -199,10 +213,10 @@ func TestRunCountsSendFailures(t *testing.T) {
 }
 
 func TestRunCountsMissingKey(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	// Schema generates an object WITHOUT the configured key field, so every
-	// payload is missing that key and should be skipped as failed.
+	// The fake payload lacks the configured key field, so every payload is
+	// missing that key and should be skipped as failed.
 	p := New(Config{Generator: gen, Schema: schemaFor("id"), Count: 3, KeyField: "nope", Encoder: JsonEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
@@ -216,7 +230,7 @@ func TestRunCountsMissingKey(t *testing.T) {
 }
 
 func TestRunWarnsOnMissingKey(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
 	p := New(Config{
@@ -240,8 +254,9 @@ func TestRunWarnsOnMissingKey(t *testing.T) {
 
 func TestRunAbortsOnGenerationError(t *testing.T) {
 	sink := &fakeSink{}
+	gen := &fakeGenerator{err: &generator.UnsupportedSchemaError{Keyword: "type", Path: generator.RootPath}}
 	p := New(Config{
-		Generator: generator.New(1, testNow()),
+		Generator: gen,
 		Schema:    map[string]any{"type": "widget"},
 		Count:     3,
 		Encoder:   JsonEncoder{},
@@ -255,8 +270,8 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 	if ue.Keyword != "type" {
 		t.Errorf("keyword = %q, want type", ue.Keyword)
 	}
-	if ue.Path != generator.RootField {
-		t.Errorf("path = %q, want %q", ue.Path, generator.RootField)
+	if ue.Path != generator.RootPath {
+		t.Errorf("path = %q, want %q", ue.Path, generator.RootPath)
 	}
 	if stats.Total != 0 || stats.Acked != 0 || stats.Failed != 0 {
 		t.Errorf("expected zero stats on abort, got %+v", stats)
@@ -267,9 +282,9 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 }
 
 func TestRunAttachesKeyWhenPresent(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "some-key-value"}}
 	sink := &fakeSink{}
-	// Schema REQUIRES "id", which doubles as the key field.
+	// Payload carries the configured key field "id".
 	keyField := "id"
 	schema := map[string]any{
 		"type":     "object",
@@ -296,6 +311,9 @@ func TestRunAttachesKeyWhenPresent(t *testing.T) {
 }
 
 func TestRunBindingKeyGenerated(t *testing.T) {
+	// The binding path synthesizes a Key from the binding schema via the real
+	// generator, so it stays on *generator.Generator through the ValueGenerator
+	// seam.
 	gen := generator.New(1, testNow())
 	sink := &fakeSink{}
 	binding := map[string]any{"type": "string"}
@@ -322,7 +340,7 @@ func TestRunBindingKeyGenerated(t *testing.T) {
 }
 
 func TestRunBindingOverriddenByKeyFlag(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "key-from-payload"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
 	binding := map[string]any{"type": "string"}
@@ -356,7 +374,7 @@ func TestRunBindingOverriddenByKeyFlag(t *testing.T) {
 }
 
 func TestRunNullKeyInfoMessage(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
 	p := New(Config{

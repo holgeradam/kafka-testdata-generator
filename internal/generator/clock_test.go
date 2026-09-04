@@ -42,7 +42,7 @@ func TestNewAnchorsDateToNow(t *testing.T) {
 	now := fixedNow()
 	gen := New(42, now)
 
-	result, err := gen.Value(dateSchema(), RootField)
+	result, err := gen.Value(dateSchema())
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}
@@ -65,11 +65,11 @@ func TestNewSameSeedSameNowDeterministicDates(t *testing.T) {
 	gen2 := New(7, now)
 
 	for i := 0; i < 5; i++ {
-		r1, err := gen1.Value(dateSchema(), RootField)
+		r1, err := gen1.Value(dateSchema())
 		if err != nil {
 			t.Fatalf("gen1.Value error: %v", err)
 		}
-		r2, err := gen2.Value(dateSchema(), RootField)
+		r2, err := gen2.Value(dateSchema())
 		if err != nil {
 			t.Fatalf("gen2.Value error: %v", err)
 		}
@@ -86,11 +86,11 @@ func TestNewDifferentNowChangesDatesOnly(t *testing.T) {
 	genA := New(42, time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
 	genB := New(42, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
 
-	rA, err := genA.Value(dateSchema(), RootField)
+	rA, err := genA.Value(dateSchema())
 	if err != nil {
 		t.Fatalf("genA.Value error: %v", err)
 	}
-	rB, err := genB.Value(dateSchema(), RootField)
+	rB, err := genB.Value(dateSchema())
 	if err != nil {
 		t.Fatalf("genB.Value error: %v", err)
 	}

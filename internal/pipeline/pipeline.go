@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"time"
-
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 )
 
 // Outgoing is a fully-marshalled message ready for a sink: the raw Payload
@@ -24,9 +22,20 @@ type Sink interface {
 	Close() error
 }
 
+// ValueGenerator is the seam between the Pipeline and payload generation. The
+// generator produces a random value honouring the given JSON Schema, or a typed
+// error when it cannot (ADR-0006). The Pipeline depends only on this interface;
+// *generator.Generator satisfies it, and tests substitute a fake so pipeline
+// tests never load a schema or touch an RNG.
+type ValueGenerator interface {
+	// Value generates a value conforming to schema, or an error when the schema
+	// contains a construct that cannot be honoured.
+	Value(schema map[string]any) (any, error)
+}
+
 // Config carries the fixed inputs of a run.
 type Config struct {
-	Generator *generator.Generator
+	Generator ValueGenerator
 	Schema    map[string]any
 	Count     int
 	RateLimit time.Duration
@@ -99,13 +108,13 @@ loop:
 		if hasBinding && !hasKeyField {
 			// Binding present, no -key: generate key from binding schema first so
 			// an unhonorable binding aborts the run before any payload is counted.
-			key, err = p.cfg.Generator.Value(p.cfg.KeyBinding, "key")
+			key, err = p.cfg.Generator.Value(p.cfg.KeyBinding)
 			if err != nil {
 				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 			}
 		}
 
-		payload, err := p.cfg.Generator.Value(p.cfg.Schema, generator.RootField)
+		payload, err := p.cfg.Generator.Value(p.cfg.Schema)
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}

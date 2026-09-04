@@ -17,11 +17,11 @@ func TestBasicDeterminism(t *testing.T) {
 			},
 		}
 
-		r1, err := gen1.Value(schema, RootField)
+		r1, err := gen1.Value(schema)
 		if err != nil {
 			t.Fatalf("gen1.Value error: %v", err)
 		}
-		r2, err := gen2.Value(schema, RootField)
+		r2, err := gen2.Value(schema)
 		if err != nil {
 			t.Fatalf("gen2.Value error: %v", err)
 		}
