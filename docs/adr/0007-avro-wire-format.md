@@ -29,25 +29,38 @@ AVRO mode follows the avsc directly - a value avsc for the Payload and a key avs
 mirroring how applications actually produce records. The AsyncAPI JSON Schema payload governs
 generation only in JSON mode.
 
+Amended (2026-09-08, AVRO vertical 3): vertical 3 ships Payload-only. The value avsc drives
+generation and encoding; the `-avro-key-schema` file is parsed and validated up front but its
+encoding lands in the later Key vertical (5), so the Key keeps the plain-scalar or null contract
+until then.
+
 ### 4. Conformance is per Wire format
 
 Conformance (ADR-0006) is now defined per format: JSON mode honors the Message schema; AVRO mode
 honors the avsc. Whichever schema governs a mode, anything it cannot honor stops the run with a
 typed error rather than emitting non-conforming data.
 
-### 5. Registry client, keep franz-go
+### 5. Registry client and serializer: pure-Go confluent-avro-go, franz-go stays
 
-Franz-go stays the Kafka producer (ADR-0001). The `confluent-kafka-go` schema-registry package
-provides the registry client and its `AvroSerializer` (Apache-2.0); this reintroduces a
-C-linked dependency on the registry path, which ADR-0001 records as an accepted amendment. The
-whole serializer runs inside the `AvroEncoder`, accepting an HTTP round-trip to the registry to
-register/look up the schema ID before encoding.
+Franz-go stays the Kafka producer (ADR-0001). The registry client and the generic Avro encoder
+come from `confluentinc/confluent-avro-go/v2` (Apache-2.0), a pure-Go module with no cgo or
+librdkafka dependency. The whole interaction runs inside the `AvroEncoder`: one HTTP round-trip
+to the registry registers/looks up the schema ID up front, then every record is framed with that
+ID and Avro-encoded by the generic marshaller. Because the encoder registers and honors the
+exact user avsc, the bytes that go on the wire are always registry-valid Confluent form.
 
 Amended (2026-09-08, AVRO vertical 2): avsc parsing depends on `actgardner/gogen-avro/v10`
-directly, because that is the exact schema parser the Confluent Go serde delegates to. Deferring
-the full `confluent-kafka-go` module to the serializer path (vertical 3) keeps the CGO/librdkafka
+directly, because that is the exact schema parser the Confluent Go Avro serde delegates to.
+Deferring the full `confluent-kafka-go` module to the serializer path kept the CGO/librdkafka
 requirement and that module's large dependency tree out of the build until byte encoding is real,
-while the parse model stays byte-for-byte consistent with what the serializer will encode against.
+while the parse model stays byte-for-byte consistent with what the serializer encodes against.
+
+Amended (2026-09-08, AVRO vertical 3): the serializer path lands on `confluent-avro-go/v2` rather
+than `confluent-kafka-go`'s serde/avro. Deriving a `schema.AvroSchema` from the serialized map
+value - what that serde's map path enforces - cannot register an explicit user avsc for map
+values, which ADR decision 3 requires. Generic encoding registers and honors the exact avsc
+instead, and drops the cgo/librdkafka build entirely (the confluent-kafka-go dependency existed
+only for encoding; the whole vertical is now pure Go).
 
 ### 6. CLI flags and registry requirement
 

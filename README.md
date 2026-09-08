@@ -8,6 +8,7 @@ A CLI tool that reads an AsyncAPI specification, generates random test data conf
 - Generates realistic test data based on JSON Schema constraints
 - Supports all standard JSON Schema types and formats
 - Produces to Kafka with configurable broker and topic
+- Produces Confluent-framed Avro from an explicit value avsc via a Schema Registry
 - Dry-run mode for console output without Kafka
 - Deterministic generation with seed control
 - Rate limiting for controlled test data production
@@ -86,6 +87,26 @@ Choose the broker acknowledgement level (see "Acks and Durability"):
 kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -acks all
 ```
 
+### AVRO Wire Format
+
+Produce Confluent-framed Avro (magic byte `0x00` + registry schema ID + Avro binary) to a
+Schema Registry-backed topic, using an explicit value avsc:
+
+```bash
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created \
+  -format avro -avro-schema order.avsc -registry http://localhost:8081
+```
+
+- Generation follows the avsc, not the AsyncAPI JSON Schema.
+- The value avsc is registered under `<channel>-value`; the returned schema ID is what gets
+  framed on the wire, so any Confluent-compatible consumer can deserialize the records.
+- `-registry` is required only when producing (never in `-dry-run`); under `-format json` it is
+  rejected.
+- Dry run renders generated avro values as JSON on stdout (the formal avro display rendering is a
+  later vertical).
+- Spec key bindings are ignored under `-format avro` (warning); use `-key` to extract a field
+  from the avro-native payload as the message key. Key avsc encoding is a later vertical.
+
 ## CLI Options
 
 | Flag | Default | Description |
@@ -103,6 +124,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-format` | `json` | Output wire format: `json` (default) or `avro` |
 | `-avro-schema` | `` | Path to value avsc file (required with `-format avro`) |
 | `-avro-key-schema` | `` | Path to key avsc file (mutually exclusive with `-key` under `-format avro`) |
+| `-registry` | `` | Confluent Schema Registry base URL (required with `-format avro` when producing) |
 
 ### Acks and Durability
 
@@ -122,6 +144,10 @@ In JSON mode, the key source is chosen in this order:
 3. **Neither**: produces a null key (Kafka convention, random partition), with an info message on stderr.
 
 Key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`), a number as its decimal text, and an object or array as JSON. This matches standard Kafka key conventions where the key is the raw serialized value, not a JSON wrapper.
+
+In AVRO mode the same plain-scalar contract applies, but keys come from `-key` extraction over the
+generated avro-native payload (spec key bindings are ignored with a warning); key avsc encoding
+arrives in a later vertical.
 
 ## AsyncAPI Specification
 

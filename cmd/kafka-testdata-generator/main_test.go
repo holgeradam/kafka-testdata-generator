@@ -503,21 +503,174 @@ func TestScenarioFormatJsonFlagAccept(t *testing.T) {
 	}
 }
 
-// TestScenarioFormatAvroReject verifies -format avro reaches the generation
-// gate: the avsc parses, then the run stops with the not-implemented error
-// (value generation is vertical 3).
-func TestScenarioFormatAvroReject(t *testing.T) {
+// TestScenarioFormatAvroDryRun drives -format avro through the generation path
+// end to end in dry-run: the avsc parses, generated AVRO values render as JSON
+// for display (vertical 4 owns the formal rendering), and a fixed seed+now is
+// byte-deterministic. Dry-run never touches a registry.
+func TestScenarioFormatAvroDryRun(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`)
+
+	run := func() ([]string, string) {
+		out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z",
+			"-format", "avro", "-avro-schema", avsc).CombinedOutput()
+		if err != nil {
+			t.Fatalf("avro dry-run failed: %v\noutput: %s", err, out)
+		}
+		return filterJSONLines(string(out)), string(out)
+	}
+
+	lines, full := run()
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 JSON lines, got %d\n%s", len(lines), full)
+	}
+	if !strContains(full, "total=3") {
+		t.Errorf("expected stats total=3, got:\n%s", full)
+	}
+
+	second, _ := run()
+	if len(lines) != len(second) {
+		t.Fatalf("deterministic runs differ in length: %d vs %d", len(lines), len(second))
+	}
+	for i := range lines {
+		if lines[i] != second[i] {
+			t.Errorf("avro dry-run output differs on line %d:\n  run1: %s\n  run2: %s", i, lines[i], second[i])
+		}
+	}
+}
+
+// TestScenarioAvroRegistryRequiredWhenProducing verifies a registry is
+// mandatory to produce -format avro (registration is how Confluent-tagged data
+// gets its schema ID). Dry-run stays registry-free.
+func TestScenarioAvroRegistryRequiredWhenProducing(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 
 	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
+		"-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
 	if err == nil {
-		t.Fatal("expected -format avro to be rejected")
+		t.Fatal("expected producing avro without -registry to be rejected")
 	}
-	if !strContains(string(out), "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' error, got: %s", out)
+	if !strContains(string(out), "-registry is required") {
+		t.Errorf("expected '-registry is required' error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroRegistryInvalidUnderJSON verifies -registry alone does not
+// enable avro: it is only valid with -format avro (ADR-0007 decision 6 style).
+func TestScenarioAvroRegistryInvalidUnderJSON(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-registry", "http://registry:8081").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -registry under json format to be rejected")
+	}
+	if !strContains(string(out), "only valid with -format avro") {
+		t.Errorf("expected -registry-is-avro-only error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroDryRunIgnoresRegistry verifies dry-run never opens a registry
+// connection: passing -registry alongside dry-run warns and proceeds without it.
+func TestScenarioAvroDryRunIgnoresRegistry(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-format", "avro", "-avro-schema", avsc,
+		"-registry", "http://127.0.0.1:1").CombinedOutput()
+	if err != nil {
+		t.Fatalf("avro dry-run with -registry must succeed, got %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "dry-run mode disregards") {
+		t.Errorf("expected dry-run registry warning, got:\n%s", out)
+	}
+	if l := filterJSONLines(string(out)); len(l) != 2 {
+		t.Errorf("expected 2 JSON lines, got %d\n%s", len(l), out)
+	}
+}
+
+// TestScenarioAvroProduceContactsBrokerNotRegistry verifies the produce path
+// wires -registry into the AvroEncoder without short-circuiting: with an
+// unreachable broker the run fails at the broker ping, never on registry flag
+// handling (registration itself is covered by the pipeline AvroEncoder tests).
+func TestScenarioAvroProduceContactsBrokerNotRegistry(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-count", "1", "-format", "avro", "-avro-schema", avsc,
+		"-broker", "127.0.0.1:1", "-registry", "http://127.0.0.1:1").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected the unreachable broker to fail the run")
+	}
+	if !strContains(string(out), "unreachable") {
+		t.Errorf("expected broker-unreachable error, got: %s", out)
+	}
+	if strContains(string(out), "schema registry") {
+		t.Errorf("run should fail at the broker ping before any registry call, got: %s", out)
+	}
+}
+
+// TestScenarioAvroKeyBindingIgnored verifies spec key bindings are ignored under
+// -format avro (they generate JSON values, not AVRO-natural keys): a warning
+// names the override and the run proceeds.
+func TestScenarioAvroKeyBindingIgnored(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `
+asyncapi: '2.6.0'
+info:
+  title: Bindings
+  version: '1.0.0'
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              type: string
+        payload:
+          type: object
+          properties:
+            id:
+              type: string
+`)
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "ignored under -format avro") {
+		t.Errorf("expected key-binding ignored warning, got:\n%s", out)
+	}
+}
+
+// TestScenarioAvroUnhonorableAvsc verifies an avsc the generator cannot honour
+// stops the run with the typed generation error instead of emitting data that
+// violates the avsc (issue #22 AC4, ADR-0006/0007): a record validly referencing
+// itself with no null escape can never terminate, so generation must fail.
+func TestScenarioAvroUnhonorableAvsc(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "cycle.avsc", `{"type":"record","name":"Node","fields":[{"name":"next","type":"Node"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-seed", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
+	if err == nil {
+		t.Fatal("expected an unhonorable avsc to fail the run")
+	}
+	if !strContains(string(out), "cannot generate a conforming value") {
+		t.Errorf("expected the typed generation error, got: %s", out)
 	}
 }
 

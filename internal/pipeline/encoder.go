@@ -29,13 +29,9 @@ type JsonEncoder struct{}
 // Encode marshals the payload to JSON and the key to plain-scalar bytes. When
 // key is nil the returned keyBytes is nil (the pipeline skips sending).
 func (e JsonEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
-	var keyBytes []byte
-	if key != nil {
-		var err error
-		keyBytes, err = plainScalarKey(key)
-		if err != nil {
-			return nil, nil, err
-		}
+	keyBytes, err := encodeKeyBytes(key)
+	if err != nil {
+		return nil, nil, err
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -69,4 +65,14 @@ func plainScalarKey(key any) ([]byte, error) {
 		}
 		return b, nil
 	}
+}
+
+// encodeKeyBytes renders a key via the plain-scalar contract shared by every
+// encoder adapter. A nil key yields nil bytes (the run produces a null key);
+// extracting the guard here keeps the two adapters' Key behaviour identical.
+func encodeKeyBytes(key any) ([]byte, error) {
+	if key == nil {
+		return nil, nil
+	}
+	return plainScalarKey(key)
 }

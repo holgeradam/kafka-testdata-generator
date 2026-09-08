@@ -33,6 +33,7 @@ func main() {
 	flag.Var(formatFlag, "format", "Output wire format: json (default) or avro")
 	avroSchemaPath := flag.String("avro-schema", "", "Path to value avsc file (required with -format avro)")
 	avroKeySchemaPath := flag.String("avro-key-schema", "", "Path to key avsc file (mutually exclusive with -key under -format avro)")
+	registryURL := flag.String("registry", "", "Confluent Schema Registry base URL (required with -format avro when producing)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -73,13 +74,28 @@ func main() {
 			flag.Usage()
 			os.Exit(1)
 		}
-	} else if *avroSchemaPath != "" || *avroKeySchemaPath != "" {
-		fmt.Fprintln(os.Stderr, "Error: -avro-schema and -avro-key-schema are only valid with -format avro")
-		flag.Usage()
-		os.Exit(1)
+		// Producing AVRO data needs Confluent framing (magic byte + registry
+		// schema ID, ADR-0007 decision 2), and registration of the value avsc is
+		// how that ID comes to exist. Dry-run never touches a registry.
+		if !*dryRun && *registryURL == "" {
+			fmt.Fprintln(os.Stderr, "Error: -registry is required with -format avro when producing")
+			flag.Usage()
+			os.Exit(1)
+		}
+	} else {
+		if *avroSchemaPath != "" || *avroKeySchemaPath != "" {
+			fmt.Fprintln(os.Stderr, "Error: -avro-schema and -avro-key-schema are only valid with -format avro")
+			flag.Usage()
+			os.Exit(1)
+		}
+		if *registryURL != "" {
+			fmt.Fprintln(os.Stderr, "Error: -registry is only valid with -format avro")
+			flag.Usage()
+			os.Exit(1)
+		}
 	}
 
-	if *dryRun && (*broker != "localhost:9092" || *keyField != "" || acksFlag.set) {
+	if *dryRun && (*broker != "localhost:9092" || *keyField != "" || acksFlag.set || *registryURL != "") {
 		fmt.Fprintln(os.Stderr, "Warning: dry-run mode disregards Kafka options")
 	}
 
@@ -99,6 +115,15 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error extracting key binding: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Key bindings declare a JSON-schema-shaped key, but under -format avro the
+	// Key is either extracted from the AVRO-native payload (via -key) or stays
+	// null. Generating a JSON-shaped key value would silently violate the avsc
+	// key contract, so bindings are ignored under avro with a warning.
+	if formatFlag.format == "avro" && keyBinding != nil {
+		fmt.Fprintln(os.Stderr, "Warning: key bindings are ignored under -format avro")
+		keyBinding = nil
 	}
 
 	gen := generator.New(*seed, nowFlag.now)
@@ -133,34 +158,42 @@ func main() {
 	defer sink.Close()
 
 	var avroModel *avro.Schema
-	var avroKeyModel *avro.Schema
 	if formatFlag.format == "avro" {
 		// Parse the value avsc (and key avsc when supplied) up front so a
 		// malformed schema surfaces a typed error before any pipeline work
-		// (ADR-0007 decision 4). The models feed the AvroEncoder once
-		// generation lands (vertical 3).
+		// (ADR-0007 decision 4). The value model drives AVRO generation; its
+		// raw avsc is what the AvroEncoder registers with the registry.
 		avroModel, err = loadAvroSchema(*avroSchemaPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		if *avroKeySchemaPath != "" {
-			avroKeyModel, err = loadAvroSchema(*avroKeySchemaPath)
-			if err != nil {
+			if _, err := loadAvroSchema(*avroKeySchemaPath); err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
+			// Key avsc encoding is a later vertical; parsing still validates it.
+			fmt.Fprintln(os.Stderr, "Warning: -avro-key-schema encoding is not yet implemented; keys follow the plain-scalar or null contract")
 		}
 	}
 
-	enc, err := newEncoder(formatFlag.format, avroModel, avroKeyModel)
+	// AVRO generation follows the value avsc model instead of the JSON Schema
+	// (ADR-0007 decision 3); the adapter keeps the Pipeline on the same seam by
+	// ignoring the JSON schema argument.
+	valueGenerator := pipeline.ValueGenerator(gen)
+	if formatFlag.format == "avro" {
+		valueGenerator = &avroValueGenerator{generator: avro.NewGenerator(*seed, nowFlag.now), model: avroModel}
+	}
+
+	enc, err := newEncoder(ctx, formatFlag.format, *registryURL, *channel, avroModel, *dryRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	p := pipeline.New(pipeline.Config{
-		Generator:  gen,
+		Generator:  valueGenerator,
 		Schema:     schema,
 		Count:      *count,
 		RateLimit:  *rateLimit,
@@ -178,17 +211,38 @@ func main() {
 	printStats(stats, *dryRun)
 }
 
-// newEncoder constructs the Encoder for the given wire format. Only json is
-// implemented; avro returns a clear error until the AvroEncoder lands. The
-// value and key avro models are threaded through so vertical 3 consumes them
-// without plumbing changes.
-func newEncoder(format string, valueModel, keyModel *avro.Schema) (pipeline.Encoder, error) {
+// avroValueGenerator is a pipeline.ValueGenerator adapter: AVRO generation
+// follows the parsed value avsc model, so the JSON schema argument from the
+// Pipeline is ignored and every Value honours the model (ADR-0007 decision 3).
+type avroValueGenerator struct {
+	generator *avro.Generator
+	model     *avro.Schema
+}
+
+func (g *avroValueGenerator) Value(_ map[string]any) (any, error) {
+	return g.generator.Value(g.model.Root)
+}
+
+// newEncoder constructs the Encoder for the given wire format. json marshals
+// generated values directly; avro returns an AvroEncoder that registers the
+// exact value avsc under <topic>-value and frames payloads with the
+// registry-assigned schema ID. Dry-run avro still uses JsonEncoder: vertical 4
+// owns the formal display rendering, dry-run here just shows the generated
+// value as JSON.
+func newEncoder(ctx context.Context, format, registryURL, topic string, valueModel *avro.Schema, dryRun bool) (pipeline.Encoder, error) {
 	switch format {
 	case "json":
 		return pipeline.JsonEncoder{}, nil
 	case "avro":
-		_, _ = valueModel, keyModel // awaited by the AvroEncoder (vertical 3)
-		return nil, fmt.Errorf("-format avro is not yet implemented")
+		if valueModel == nil {
+			return nil, fmt.Errorf("-format avro requires the value avsc")
+		}
+		if dryRun {
+			// Dry-run shows the generated avro-native value as JSON and never
+			// opens a registry connection; vertical 4 owns the formal display.
+			return pipeline.JsonEncoder{}, nil
+		}
+		return pipeline.NewAvroEncoder(ctx, registryURL, topic+"-value", string(valueModel.Raw()))
 	default:
 		return nil, fmt.Errorf("unknown format %q (supported: json, avro)", format)
 	}

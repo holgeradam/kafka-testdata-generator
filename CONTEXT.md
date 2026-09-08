@@ -25,7 +25,7 @@ The generator's output promise, defined per Wire format. Every Payload honors ev
 _Avoid_: payload validation, schema checking
 
 **Key**:
-The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is sourced from `bindings.kafka.key` when present, falling back to `-key` field extraction, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode it is generated from the key avsc.
+The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is sourced from `bindings.kafka.key` when present, falling back to `-key` field extraction, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode Key bindings are ignored (warning) and the Key comes from `-key` extraction over the avro-native Payload, or null; key avsc encoding is a later vertical.
 _Avoid_: partition key
 
 **Dry run**:
@@ -41,7 +41,7 @@ The seam between the Pipeline and record generation: one method, `Value(schema) 
 _Avoid_: generator interface, data source
 
 **Encoder**:
-The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter per format: JsonEncoder for JSON mode, AvroEncoder for AVRO mode. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. The Pipeline never sees format conventions.
+The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter per format: JsonEncoder for JSON mode, AvroEncoder for AVRO mode. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<channel>-value` and frames payloads with the registry-assigned schema ID. The Pipeline never sees format conventions.
 _Avoid_: serializer, marshaler, codec
 
 **Wire format**:
@@ -53,7 +53,7 @@ An explicit Apache Avro schema (JSON) supplied by the user for AVRO mode. It is 
 _Avoid_: avro schema (only when unambiguous), Avro serialization schema
 
 **Avro model**:
-The in-memory form of an avsc produced by `avro.Parse` in `internal/avro`: shared nodes for records, enums, and fixed, plus primitives, unions, arrays, maps, and the in-scope logical types (timestamp-*, date, time-*, decimal). Parsing delegates to the same gogen-avro parser the Confluent Go Avro serde uses, so a schema the serializer accepts parses identically into the model; anything the model cannot honour surfaces a `ParseError`. Governs generation in AVRO mode the way the Message schema does in JSON mode.
+The in-memory form of an avsc produced by `avro.Parse` in `internal/avro`: shared nodes for records, enums, and fixed, plus primitives, unions, arrays, maps, and the in-scope logical types (timestamp-*, date, time-*, decimal). Parsing delegates to the same gogen-avro parser the Confluent Go Avro encoder path uses, so a schema the encoder accepts parses identically into the model; anything the model cannot honour surfaces a `ParseError`. Its root type and raw bytes drive generation in AVRO mode (`avro.Generator`) and registry registration (`AvroEncoder`) the way the Message schema does in JSON mode.
 _Avoid_: parsed schema, avro schema model, generation model
 
 **Output sink**:
