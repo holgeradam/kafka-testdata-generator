@@ -43,6 +43,12 @@ C-linked dependency on the registry path, which ADR-0001 records as an accepted 
 whole serializer runs inside the `AvroEncoder`, accepting an HTTP round-trip to the registry to
 register/look up the schema ID before encoding.
 
+Amended (2026-09-08, AVRO vertical 2): avsc parsing depends on `actgardner/gogen-avro/v10`
+directly, because that is the exact schema parser the Confluent Go serde delegates to. Deferring
+the full `confluent-kafka-go` module to the serializer path (vertical 3) keeps the CGO/librdkafka
+requirement and that module's large dependency tree out of the build until byte encoding is real,
+while the parse model stays byte-for-byte consistent with what the serializer will encode against.
+
 ### 6. CLI flags and registry requirement
 
 - `-format json|avro` (default `json`); the Avro flags are invalid for `json`.

@@ -100,6 +100,9 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-seed` | current time | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
+| `-format` | `json` | Output wire format: `json` (default) or `avro` |
+| `-avro-schema` | `` | Path to value avsc file (required with `-format avro`) |
+| `-avro-key-schema` | `` | Path to key avsc file (mutually exclusive with `-key` under `-format avro`) |
 
 ### Acks and Durability
 

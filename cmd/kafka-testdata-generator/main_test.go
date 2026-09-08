@@ -135,6 +135,16 @@ func writeTempSpec(t *testing.T, spec string) string {
 	return p
 }
 
+// writeTempAvsc writes an avsc to a temp file and returns its path.
+func writeTempAvsc(t *testing.T, name, avsc string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte(avsc), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // TestScenarioRecursiveSpec exercises a self-referential (category-tree) spec
 // end to end: it must terminate quickly at any seed, produce finite output, and
 // be deterministic for a fixed seed.
@@ -493,19 +503,89 @@ func TestScenarioFormatJsonFlagAccept(t *testing.T) {
 	}
 }
 
-// TestScenarioFormatAvroReject verifies -format avro is rejected with a clear
-// not-implemented error message.
+// TestScenarioFormatAvroReject verifies -format avro reaches the generation
+// gate: the avsc parses, then the run stops with the not-implemented error
+// (value generation is vertical 3).
 func TestScenarioFormatAvroReject(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 
 	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-format", "avro").CombinedOutput()
+		"-dry-run", "-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
 	if err == nil {
 		t.Fatal("expected -format avro to be rejected")
 	}
 	if !strContains(string(out), "not yet implemented") {
 		t.Errorf("expected 'not yet implemented' error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroMissingSchema verifies -format avro requires -avro-schema.
+func TestScenarioAvroMissingSchema(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-format", "avro").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -format avro without -avro-schema to be rejected")
+	}
+	if !strContains(string(out), "-avro-schema is required") {
+		t.Errorf("expected '-avro-schema is required' error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroKeySchemaKeyMutuallyExclusive verifies -avro-key-schema and
+// -key cannot both be set under -format avro.
+func TestScenarioAvroKeySchemaKeyMutuallyExclusive(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-format", "avro",
+		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc, "-key", "id").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -avro-key-schema with -key to be rejected")
+	}
+	if !strContains(string(out), "mutually exclusive") {
+		t.Errorf("expected mutual-exclusion error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroFlagsInvalidUnderJSON verifies the avro flags are rejected
+// unless -format avro is selected (ADR-0007 decision 6).
+func TestScenarioAvroFlagsInvalidUnderJSON(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-avro-schema", avsc).CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -avro-schema under json format to be rejected")
+	}
+	if !strContains(string(out), "only valid with -format avro") {
+		t.Errorf("expected avro-flags-need-avro error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroMalformedAvsc verifies a malformed avsc surfaces a typed
+// error naming the problem, not a panic.
+func TestScenarioAvroMalformedAvsc(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "broken.avsc", `{"type": "record", "name": "Order"`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
+	if err == nil {
+		t.Fatal("expected malformed avsc to be rejected")
+	}
+	if !strContains(string(out), "avro: invalid avsc") {
+		t.Errorf("expected typed avsc parse error, got: %s", out)
 	}
 }
 

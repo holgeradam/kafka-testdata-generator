@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
+	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
@@ -30,6 +31,8 @@ func main() {
 	flag.Var(acksFlag, "acks", "Acks level: 1 (leader) or all (all in-sync replicas)")
 	formatFlag := newFormatFlag()
 	flag.Var(formatFlag, "format", "Output wire format: json (default) or avro")
+	avroSchemaPath := flag.String("avro-schema", "", "Path to value avsc file (required with -format avro)")
+	avroKeySchemaPath := flag.String("avro-key-schema", "", "Path to key avsc file (mutually exclusive with -key under -format avro)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -52,6 +55,26 @@ func main() {
 
 	if *channel == "" {
 		fmt.Fprintln(os.Stderr, "Error: -channel is required")
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	// AVRO flag surface (ADR-0007 decision 6): the avro flags are invalid for
+	// json; under avro, -avro-schema is required and -avro-key-schema excludes
+	// -key. Validation happens before any file is loaded.
+	if formatFlag.format == "avro" {
+		if *avroSchemaPath == "" {
+			fmt.Fprintln(os.Stderr, "Error: -avro-schema is required with -format avro")
+			flag.Usage()
+			os.Exit(1)
+		}
+		if *avroKeySchemaPath != "" && *keyField != "" {
+			fmt.Fprintln(os.Stderr, "Error: -avro-key-schema and -key are mutually exclusive under -format avro")
+			flag.Usage()
+			os.Exit(1)
+		}
+	} else if *avroSchemaPath != "" || *avroKeySchemaPath != "" {
+		fmt.Fprintln(os.Stderr, "Error: -avro-schema and -avro-key-schema are only valid with -format avro")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -109,7 +132,28 @@ func main() {
 	}
 	defer sink.Close()
 
-	enc, err := newEncoder(formatFlag.format)
+	var avroModel *avro.Schema
+	var avroKeyModel *avro.Schema
+	if formatFlag.format == "avro" {
+		// Parse the value avsc (and key avsc when supplied) up front so a
+		// malformed schema surfaces a typed error before any pipeline work
+		// (ADR-0007 decision 4). The models feed the AvroEncoder once
+		// generation lands (vertical 3).
+		avroModel, err = loadAvroSchema(*avroSchemaPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		if *avroKeySchemaPath != "" {
+			avroKeyModel, err = loadAvroSchema(*avroKeySchemaPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	}
+
+	enc, err := newEncoder(formatFlag.format, avroModel, avroKeyModel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -135,16 +179,29 @@ func main() {
 }
 
 // newEncoder constructs the Encoder for the given wire format. Only json is
-// implemented; avro returns a clear error until the AvroEncoder lands.
-func newEncoder(format string) (pipeline.Encoder, error) {
+// implemented; avro returns a clear error until the AvroEncoder lands. The
+// value and key avro models are threaded through so vertical 3 consumes them
+// without plumbing changes.
+func newEncoder(format string, valueModel, keyModel *avro.Schema) (pipeline.Encoder, error) {
 	switch format {
 	case "json":
 		return pipeline.JsonEncoder{}, nil
 	case "avro":
+		_, _ = valueModel, keyModel // awaited by the AvroEncoder (vertical 3)
 		return nil, fmt.Errorf("-format avro is not yet implemented")
 	default:
 		return nil, fmt.Errorf("unknown format %q (supported: json, avro)", format)
 	}
+}
+
+// loadAvroSchema reads an avsc file and parses it into the Avro model,
+// wrapping read failures and propagating the typed *avro.ParseError.
+func loadAvroSchema(path string) (*avro.Schema, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading avsc %s: %w", path, err)
+	}
+	return avro.Parse(b)
 }
 
 func printStats(s pipeline.Stats, dryRun bool) {
