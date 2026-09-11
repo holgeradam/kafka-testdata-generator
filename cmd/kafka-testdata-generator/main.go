@@ -226,9 +226,10 @@ func (g *avroValueGenerator) Value(_ map[string]any) (any, error) {
 // newEncoder constructs the Encoder for the given wire format. json marshals
 // generated values directly; avro returns an AvroEncoder that registers the
 // exact value avsc under <topic>-value and frames payloads with the
-// registry-assigned schema ID. Dry-run avro still uses JsonEncoder: vertical 4
-// owns the formal display rendering, dry-run here just shows the generated
-// value as JSON.
+// registry-assigned schema ID. Dry-run avro returns the AvroDisplayEncoder,
+// which renders each value in the Avro JSON encoding - readable text, with
+// logical types in their human-readable form - from the local avsc and never
+// opens a registry connection (ADR-0007 decision 7).
 func newEncoder(ctx context.Context, format, registryURL, topic string, valueModel *avro.Schema, dryRun bool) (pipeline.Encoder, error) {
 	switch format {
 	case "json":
@@ -238,9 +239,9 @@ func newEncoder(ctx context.Context, format, registryURL, topic string, valueMod
 			return nil, fmt.Errorf("-format avro requires the value avsc")
 		}
 		if dryRun {
-			// Dry-run shows the generated avro-native value as JSON and never
-			// opens a registry connection; vertical 4 owns the formal display.
-			return pipeline.JsonEncoder{}, nil
+			// Display renders from the parsed avsc alone; the registry flag is
+			// disregarded with the standard dry-run warning in main.
+			return pipeline.NewAvroDisplayEncoder(valueModel), nil
 		}
 		return pipeline.NewAvroEncoder(ctx, registryURL, topic+"-value", string(valueModel.Raw()))
 	default:

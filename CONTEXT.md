@@ -41,7 +41,7 @@ The seam between the Pipeline and record generation: one method, `Value(schema) 
 _Avoid_: generator interface, data source
 
 **Encoder**:
-The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter per format: JsonEncoder for JSON mode, AvroEncoder for AVRO mode. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<channel>-value` and frames payloads with the registry-assigned schema ID. The Pipeline never sees format conventions.
+The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter exists per format: JsonEncoder for JSON mode (its Encode serves both Dry run and produce), and under AVRO two - AvroEncoder for producing, and AvroDisplayEncoder for Dry run. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<channel>-value` and frames payloads with the registry-assigned schema ID. AvroDisplayEncoder renders the Avro JSON encoding from the local avsc and never touches a registry. The Pipeline never sees format conventions.
 _Avoid_: serializer, marshaler, codec
 
 **Wire format**:

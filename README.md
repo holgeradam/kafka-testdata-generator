@@ -102,8 +102,11 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
   framed on the wire, so any Confluent-compatible consumer can deserialize the records.
 - `-registry` is required only when producing (never in `-dry-run`); under `-format json` it is
   rejected.
-- Dry run renders generated avro values as JSON on stdout (the formal avro display rendering is a
-  later vertical).
+- Dry run renders generated avro values in the Avro JSON encoding - the readable spec-defined text
+  form, with logical types in their human-readable representation (dates as calendar days,
+  timestamps as ISO 8601 instants, decimals as base-10 strings) - straight from the local avsc,
+  never contacting a registry; a supplied `-registry` draws the standard dry-run warning and is
+  ignored.
 - Spec key bindings are ignored under `-format avro` (warning); use `-key` to extract a field
   from the avro-native payload as the message key. Key avsc encoding is a later vertical.
 

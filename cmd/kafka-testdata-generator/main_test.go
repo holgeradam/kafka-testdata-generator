@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -503,34 +506,70 @@ func TestScenarioFormatJsonFlagAccept(t *testing.T) {
 	}
 }
 
-// TestScenarioFormatAvroDryRun drives -format avro through the generation path
-// end to end in dry-run: the avsc parses, generated AVRO values render as JSON
-// for display (vertical 4 owns the formal rendering), and a fixed seed+now is
+// TestScenarioFormatAvroDryRunRendersAvroJSON drives -format avro through the
+// generation path end to end in dry-run: the avsc parses, generated AVRO values
+// render as the canonical Avro JSON encoding (readable strings and numbers, not
+// raw Go structs or Confluent framing), and a fixed seed+now is
 // byte-deterministic. Dry-run never touches a registry.
-func TestScenarioFormatAvroDryRun(t *testing.T) {
+func TestScenarioFormatAvroDryRunRendersAvroJSON(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "rich.avsc", `{"type":"record","name":"Order","fields":[
+		{"name":"id","type":"string"},
+		{"name":"qty","type":"int"},
+		{"name":"day","type":{"type":"int","logicalType":"date"}},
+		{"name":"amt","type":{"type":"bytes","logicalType":"decimal","precision":10,"scale":2}}
+	]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z",
+		"-format", "avro", "-avro-schema", avsc).CombinedOutput()
+	if err != nil {
+		t.Fatalf("avro dry-run failed: %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "total=3") {
+		t.Errorf("expected stats total=3, got:\n%s", out)
+	}
+
+	lines := filterJSONLines(string(out))
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 AVRO JSON lines, got %d\n%s", len(lines), out)
+	}
+	// Dates render as readable calendars days, decimals as base-10 strings,
+	// never as a raw byte blob or a numeric timestamp.
+	if !strContains(string(out), `"day":"`) {
+		t.Errorf("date must render as a readable calendar string, got:\n%s", out)
+	}
+	if !strContains(string(out), `"amt":"`) {
+		t.Errorf("decimal must render as a base-10 string, got:\n%s", out)
+	}
+	if strContains(string(out), "AA==") {
+		t.Errorf("bytes must not render as base64, got:\n%s", out)
+	}
+}
+
+// TestScenarioFormatAvroDryRunDeterministic proves the formal rendering keeps
+// the fixed seed+now byte-determinism of the AVRO generation path.
+func TestScenarioFormatAvroDryRunDeterministic(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`)
 
-	run := func() ([]string, string) {
+	run := func() []string {
 		out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
 			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z",
 			"-format", "avro", "-avro-schema", avsc).CombinedOutput()
 		if err != nil {
 			t.Fatalf("avro dry-run failed: %v\noutput: %s", err, out)
 		}
-		return filterJSONLines(string(out)), string(out)
+		return filterJSONLines(string(out))
 	}
 
-	lines, full := run()
+	lines := run()
 	if len(lines) != 3 {
-		t.Fatalf("expected 3 JSON lines, got %d\n%s", len(lines), full)
+		t.Fatalf("expected 3 AVRO JSON lines, got %d", len(lines))
 	}
-	if !strContains(full, "total=3") {
-		t.Errorf("expected stats total=3, got:\n%s", full)
-	}
-
-	second, _ := run()
+	second := run()
 	if len(lines) != len(second) {
 		t.Fatalf("deterministic runs differ in length: %d vs %d", len(lines), len(second))
 	}
@@ -593,6 +632,66 @@ func TestScenarioAvroDryRunIgnoresRegistry(t *testing.T) {
 	}
 	if l := filterJSONLines(string(out)); len(l) != 2 {
 		t.Errorf("expected 2 JSON lines, got %d\n%s", len(l), out)
+	}
+}
+
+// TestScenarioAvroDryRunDoesNotContactRegistry proves the acceptance case 'no
+// registry HTTP occurs in Dry run' with a live tripwire: a fake registry that
+// fails the test if the binary so much as connects. The run must succeed, emit
+// AVRO JSON, and leave the request counter at zero.
+func TestScenarioAvroDryRunDoesNotContactRegistry(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	var mu sync.Mutex
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-format", "avro", "-avro-schema", avsc,
+		"-registry", srv.URL).CombinedOutput()
+	if err != nil {
+		t.Fatalf("avro dry-run must not depend on the registry: %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "dry-run mode disregards") {
+		t.Errorf("expected dry-run registry warning, got:\n%s", out)
+	}
+	if l := filterJSONLines(string(out)); len(l) != 2 {
+		t.Errorf("expected 2 AVRO JSON lines, got %d\n%s", len(l), out)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 0 {
+		t.Errorf("dry-run must never contact the registry, got %d HTTP requests", hits)
+	}
+}
+
+// TestScenarioAvroDryRunRendersKey proves a configured -key renders readably
+// under -format avro dry-run: the key is echoed to stderr per the Dry-run Key
+// convention (CONTEXT.md) and payloads still render as AVRO JSON.
+func TestScenarioAvroDryRunRendersKey(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-seed", "42", "-format", "avro", "-avro-schema", avsc,
+		"-key", "id").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "Key: ") {
+		t.Errorf("expected Key echo for -key id under avro dry-run, got:\n%s", out)
+	}
+	if l := filterJSONLines(string(out)); len(l) != 2 {
+		t.Errorf("expected 2 AVRO JSON lines, got %d\n%s", len(l), out)
 	}
 }
 
