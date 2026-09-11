@@ -402,6 +402,67 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	}
 }
 
+// TestRunKeyGeneratorProducesKey proves the KeyGenerator seam: the Key value
+// is generated via the configured generator (the AVRO key-avsc path) and
+// encoded into the record, and the null-key info message is suppressed because
+// a key is after all configured.
+func TestRunKeyGeneratorProducesKey(t *testing.T) {
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
+	keyGen := &fakeGenerator{payload: "generated-key"}
+	sink := &fakeSink{}
+	var warn bytes.Buffer
+	p := New(Config{
+		Generator:    gen,
+		Schema:       schemaFor(""),
+		Count:        2,
+		KeyGenerator: keyGen,
+		Encoder:      JsonEncoder{},
+		Warn:         &warn,
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Acked != 2 {
+		t.Errorf("expected 2 acked, got %d", stats.Acked)
+	}
+	for _, o := range sink.recorded {
+		if string(o.Key) != "generated-key" {
+			t.Errorf("key bytes = %q, want the KeyGenerator value encoded", o.Key)
+		}
+	}
+	if strings.Contains(warn.String(), "no key configured") {
+		t.Errorf("KeyGenerator configured: must not warn about a null key, got %q", warn.String())
+	}
+}
+
+// TestRunKeyGeneratorErrorAborts proves an unhonorable KeyGenerator aborts the
+// run before any payload is counted (same rule as an unhonorable binding).
+func TestRunKeyGeneratorErrorAborts(t *testing.T) {
+	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
+	keyGen := &fakeGenerator{err: errors.New("key generation failed")}
+	sink := &fakeSink{}
+	p := New(Config{
+		Generator:    gen,
+		Schema:       schemaFor(""),
+		Count:        1,
+		KeyGenerator: keyGen,
+		Encoder:      JsonEncoder{},
+	}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected the KeyGenerator error to abort the run")
+	}
+	if stats.Total != 0 || stats.Acked != 0 {
+		t.Errorf("expected zero stats on abort, got %+v", stats)
+	}
+	if sink.count() != 0 {
+		t.Errorf("expected no sink calls, got %d", sink.count())
+	}
+}
+
 func TestRunBindingSchemaError(t *testing.T) {
 	gen := generator.New(1, testNow())
 	sink := &fakeSink{}

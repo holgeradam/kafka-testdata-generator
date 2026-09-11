@@ -45,7 +45,13 @@ type Config struct {
 	// Key is generated from this schema instead of being extracted from the
 	// Payload.
 	KeyBinding map[string]any
-	Encoder    Encoder
+	// KeyGenerator, when set, is the source of the Key value for wire formats
+	// whose keys come from a dedicated schema rather than the Payload
+	// (ADR-0007 decision 3: under AVRO the Key is generated from the key avsc).
+	// It replaces the binding and -key extraction paths; its Value argument is
+	// format-dependent and may be ignored.
+	KeyGenerator ValueGenerator
+	Encoder      Encoder
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
 	// edge (main) passes stderr; tests pass a buffer.
@@ -83,8 +89,9 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 
 	hasBinding := p.cfg.KeyBinding != nil
 	hasKeyField := p.cfg.KeyField != ""
+	hasKeyGen := p.cfg.KeyGenerator != nil
 
-	if !hasBinding && !hasKeyField {
+	if !hasBinding && !hasKeyField && !hasKeyGen {
 		p.warnf("no key configured, producing with a null key\n")
 	}
 	if hasBinding && hasKeyField {
@@ -105,7 +112,15 @@ loop:
 
 		var key any
 		var err error
-		if hasBinding && !hasKeyField {
+		if hasKeyGen {
+			// Format-owned key source (AVRO key avsc): generate the Key from it
+			// first so an unhonorable key schema aborts the run before any
+			// payload is counted.
+			key, err = p.cfg.KeyGenerator.Value(p.cfg.KeyBinding)
+			if err != nil {
+				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
+			}
+		} else if hasBinding && !hasKeyField {
 			// Binding present, no -key: generate key from binding schema first so
 			// an unhonorable binding aborts the run before any payload is counted.
 			key, err = p.cfg.Generator.Value(p.cfg.KeyBinding)

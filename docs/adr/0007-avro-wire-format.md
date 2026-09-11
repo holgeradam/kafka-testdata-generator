@@ -34,6 +34,12 @@ generation and encoding; the `-avro-key-schema` file is parsed and validated up 
 encoding lands in the later Key vertical (5), so the Key keeps the plain-scalar or null contract
 until then.
 
+Amended (2026-09-11, AVRO vertical 5): the Key vertical lands. Under `-format avro` the Key is
+generated from the key avsc (via the Pipeline's **KeyGenerator** seam), registered under
+`<channel>-key`, and framed with its own schema ID exactly like the Payload. `-key` field
+extraction does not apply to AVRO: it is a flag error on its own, and mutually exclusive with
+`-avro-key-schema` when combined. With no key avsc, records are payload-only (null key).
+
 ### 4. Conformance is per Wire format
 
 Conformance (ADR-0006) is now defined per format: JSON mode honors the Message schema; AVRO mode
@@ -68,7 +74,8 @@ only for encoding; the whole vertical is now pure Go).
 - `-avro-schema <file.avsc>` (value avsc) and `-avro-key-schema <file.avsc>` (key avsc); required
   for AVRO generation.
 - `-registry <url>` required only when `-format avro` and producing - never in Dry run.
-- `-avro-key-schema` and `-key` are mutually exclusive under AVRO (flag-validation error).
+- `-avro-key-schema` is the only AVRO key source: `-key` is a flag error under AVRO, and
+  combining them fails the mutual-exclusion check (flag-validation error).
 
 ### 7. Dry run never contacts a registry
 

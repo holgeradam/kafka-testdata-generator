@@ -22,7 +22,7 @@ func main() {
 	broker := flag.String("broker", "localhost:9092", "Kafka broker address")
 	count := flag.Int("count", 10, "Number of payloads to generate (0 = infinite)")
 	rateLimit := flag.Duration("rate", 10*time.Millisecond, "Minimum time between messages")
-	keyField := flag.String("key", "", "Field name to extract as Kafka message key")
+	keyField := flag.String("key", "", "Field name to extract as Kafka message key (-format json only)")
 	dryRun := flag.Bool("dry-run", false, "Generate payloads without producing to Kafka")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "Random seed for reproducibility")
 	nowFlag := newNowFlag()
@@ -61,8 +61,10 @@ func main() {
 	}
 
 	// AVRO flag surface (ADR-0007 decision 6): the avro flags are invalid for
-	// json; under avro, -avro-schema is required and -avro-key-schema excludes
-	// -key. Validation happens before any file is loaded.
+	// json; under avro, -avro-schema is required and the key must come from
+	// -avro-key-schema - -key field extraction does not apply to AVRO (issue
+	// #24), so -key alone or together with -avro-key-schema are both errors.
+	// Validation happens before any file is loaded.
 	if formatFlag.format == "avro" {
 		if *avroSchemaPath == "" {
 			fmt.Fprintln(os.Stderr, "Error: -avro-schema is required with -format avro")
@@ -71,6 +73,11 @@ func main() {
 		}
 		if *avroKeySchemaPath != "" && *keyField != "" {
 			fmt.Fprintln(os.Stderr, "Error: -avro-key-schema and -key are mutually exclusive under -format avro")
+			flag.Usage()
+			os.Exit(1)
+		}
+		if *keyField != "" {
+			fmt.Fprintln(os.Stderr, "Error: -key is not valid with -format avro; the AVRO key comes from -avro-key-schema")
 			flag.Usage()
 			os.Exit(1)
 		}
@@ -157,24 +164,26 @@ func main() {
 	}
 	defer sink.Close()
 
-	var avroModel *avro.Schema
+	var (
+		avroModel    *avro.Schema
+		avroKeyModel *avro.Schema
+	)
 	if formatFlag.format == "avro" {
 		// Parse the value avsc (and key avsc when supplied) up front so a
 		// malformed schema surfaces a typed error before any pipeline work
-		// (ADR-0007 decision 4). The value model drives AVRO generation; its
-		// raw avsc is what the AvroEncoder registers with the registry.
+		// (ADR-0007 decision 4). The models drive AVRO generation; their raw
+		// avsc is what the AvroEncoder registers with the registry.
 		avroModel, err = loadAvroSchema(*avroSchemaPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		if *avroKeySchemaPath != "" {
-			if _, err := loadAvroSchema(*avroKeySchemaPath); err != nil {
+			avroKeyModel, err = loadAvroSchema(*avroKeySchemaPath)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 				os.Exit(1)
 			}
-			// Key avsc encoding is a later vertical; parsing still validates it.
-			fmt.Fprintln(os.Stderr, "Warning: -avro-key-schema encoding is not yet implemented; keys follow the plain-scalar or null contract")
 		}
 	}
 
@@ -186,21 +195,30 @@ func main() {
 		valueGenerator = &avroValueGenerator{generator: avro.NewGenerator(*seed, nowFlag.now), model: avroModel}
 	}
 
-	enc, err := newEncoder(ctx, formatFlag.format, *registryURL, *channel, avroModel, *dryRun)
+	// AVRO keys come from the key avsc (ADR-0007 decision 3, issue #24): the
+	// key generator mirrors the value generator, producing each Key from the
+	// key model so the encoder can frame it under the key subject's registry ID.
+	var keyGenerator pipeline.ValueGenerator
+	if formatFlag.format == "avro" && avroKeyModel != nil {
+		keyGenerator = &avroValueGenerator{generator: avro.NewGenerator(*seed, nowFlag.now), model: avroKeyModel}
+	}
+
+	enc, err := newEncoder(ctx, formatFlag.format, *registryURL, *channel, avroModel, avroKeyModel, *dryRun)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	p := pipeline.New(pipeline.Config{
-		Generator:  valueGenerator,
-		Schema:     schema,
-		Count:      *count,
-		RateLimit:  *rateLimit,
-		KeyField:   *keyField,
-		KeyBinding: keyBinding,
-		Encoder:    enc,
-		Warn:       os.Stderr,
+		Generator:    valueGenerator,
+		Schema:       schema,
+		Count:        *count,
+		RateLimit:    *rateLimit,
+		KeyField:     *keyField,
+		KeyBinding:   keyBinding,
+		KeyGenerator: keyGenerator,
+		Encoder:      enc,
+		Warn:         os.Stderr,
 	}, sink)
 
 	stats, err := p.Run(ctx)
@@ -225,12 +243,12 @@ func (g *avroValueGenerator) Value(_ map[string]any) (any, error) {
 
 // newEncoder constructs the Encoder for the given wire format. json marshals
 // generated values directly; avro returns an AvroEncoder that registers the
-// exact value avsc under <topic>-value and frames payloads with the
-// registry-assigned schema ID. Dry-run avro returns the AvroDisplayEncoder,
-// which renders each value in the Avro JSON encoding - readable text, with
-// logical types in their human-readable form - from the local avsc and never
-// opens a registry connection (ADR-0007 decision 7).
-func newEncoder(ctx context.Context, format, registryURL, topic string, valueModel *avro.Schema, dryRun bool) (pipeline.Encoder, error) {
+// exact value avsc under <topic>-value and the key avsc under <topic>-key and
+// frames records with the registry-assigned schema IDs. Dry-run avro returns
+// the AvroDisplayEncoder, which renders each value in the Avro JSON encoding -
+// readable text, with logical types in their human-readable form - from the
+// local avsc and never opens a registry connection (ADR-0007 decision 7).
+func newEncoder(ctx context.Context, format, registryURL, topic string, valueModel, keyModel *avro.Schema, dryRun bool) (pipeline.Encoder, error) {
 	switch format {
 	case "json":
 		return pipeline.JsonEncoder{}, nil
@@ -243,7 +261,11 @@ func newEncoder(ctx context.Context, format, registryURL, topic string, valueMod
 			// disregarded with the standard dry-run warning in main.
 			return pipeline.NewAvroDisplayEncoder(valueModel), nil
 		}
-		return pipeline.NewAvroEncoder(ctx, registryURL, topic+"-value", string(valueModel.Raw()))
+		var keyAvsc string
+		if keyModel != nil {
+			keyAvsc = string(keyModel.Raw())
+		}
+		return pipeline.NewAvroEncoder(ctx, registryURL, topic, string(valueModel.Raw()), keyAvsc)
 	default:
 		return nil, fmt.Errorf("unknown format %q (supported: json, avro)", format)
 	}

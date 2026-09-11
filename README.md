@@ -102,13 +102,17 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
   framed on the wire, so any Confluent-compatible consumer can deserialize the records.
 - `-registry` is required only when producing (never in `-dry-run`); under `-format json` it is
   rejected.
+- Pass `-avro-key-schema key.avsc` to generate message keys from a key avsc: it registers under
+  `<channel>-key` and each key is framed with its own schema ID, so consumers deserialize it
+  against the key avsc. Without it, records are payload-only (null key).
 - Dry run renders generated avro values in the Avro JSON encoding - the readable spec-defined text
   form, with logical types in their human-readable representation (dates as calendar days,
   timestamps as ISO 8601 instants, decimals as base-10 strings) - straight from the local avsc,
   never contacting a registry; a supplied `-registry` draws the standard dry-run warning and is
   ignored.
-- Spec key bindings are ignored under `-format avro` (warning); use `-key` to extract a field
-  from the avro-native payload as the message key. Key avsc encoding is a later vertical.
+- Spec key bindings are ignored under `-format avro` (warning), and `-key` field extraction does
+  not apply to AVRO (flag error): under `-format avro` the key comes exclusively from
+  `-avro-key-schema`.
 
 ## CLI Options
 
@@ -119,14 +123,14 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-broker` | `localhost:9092` | Kafka broker address |
 | `-count` | `10` | Number of records to generate (0 = infinite) |
 | `-rate` | `10ms` | Minimum time between messages |
-| `-key` | `` | Field name to extract as Kafka message key (overrides binding-derived keys; see Key section) |
+| `-key` | `` | Field name to extract as Kafka message key (`-format json` only; overrides binding-derived keys; see Key section) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | current time | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
 | `-format` | `json` | Output wire format: `json` (default) or `avro` |
 | `-avro-schema` | `` | Path to value avsc file (required with `-format avro`) |
-| `-avro-key-schema` | `` | Path to key avsc file (mutually exclusive with `-key` under `-format avro`) |
+| `-avro-key-schema` | `` | Path to key avsc file (the AVRO key source; mutually exclusive with `-key`) |
 | `-registry` | `` | Confluent Schema Registry base URL (required with `-format avro` when producing) |
 
 ### Acks and Durability
@@ -138,19 +142,22 @@ When producing to Kafka you can choose the acknowledgment level with `-acks`:
 
 This tool generates disposable test data, so `1` is a sensible default; use `all` when the produced records need to survive a broker failover.
 
-### Key source and serialization (JSON mode)
+### Key source and serialization
 
-In JSON mode, the key source is chosen in this order:
+In **JSON mode**, the key source is chosen in this order:
 
 1. **`-key fieldName`** (CLI override): extracts the named top-level field from the generated payload. When both `-key` and a binding-derived key are present, the CLI flag wins (with a warning).
 2. **`message.bindings.kafka.key`** (AsyncAPI binding): generates a key value from the message binding's schema independently of payload fields, using the same generator as the payload.
 3. **Neither**: produces a null key (Kafka convention, random partition), with an info message on stderr.
 
-Key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`), a number as its decimal text, and an object or array as JSON. This matches standard Kafka key conventions where the key is the raw serialized value, not a JSON wrapper.
+JSON key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`), a number as its decimal text, and an object or array as JSON. This matches standard Kafka key conventions where the key is the raw serialized value, not a JSON wrapper.
 
-In AVRO mode the same plain-scalar contract applies, but keys come from `-key` extraction over the
-generated avro-native payload (spec key bindings are ignored with a warning); key avsc encoding
-arrives in a later vertical.
+In **AVRO mode** the key comes exclusively from `-avro-key-schema`: a key value is generated from the
+key avsc per record, registered under `<channel>-key`, and framed like the payload (magic byte +
+key schema ID + Avro binary), so a Confluent consumer decodes it against the key avsc. Field
+extraction does not apply here - `-key` under `-format avro` is a flag error (as is combining it
+with `-avro-key-schema`), and spec key bindings are ignored with a warning. With no `-avro-key-schema`,
+records are payload-only (null key).
 
 ## AsyncAPI Specification
 

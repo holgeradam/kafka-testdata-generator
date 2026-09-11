@@ -673,28 +673,6 @@ func TestScenarioAvroDryRunDoesNotContactRegistry(t *testing.T) {
 	}
 }
 
-// TestScenarioAvroDryRunRendersKey proves a configured -key renders readably
-// under -format avro dry-run: the key is echoed to stderr per the Dry-run Key
-// convention (CONTEXT.md) and payloads still render as AVRO JSON.
-func TestScenarioAvroDryRunRendersKey(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "2", "-seed", "42", "-format", "avro", "-avro-schema", avsc,
-		"-key", "id").CombinedOutput()
-	if err != nil {
-		t.Fatalf("command failed: %v\noutput: %s", err, out)
-	}
-	if !strContains(string(out), "Key: ") {
-		t.Errorf("expected Key echo for -key id under avro dry-run, got:\n%s", out)
-	}
-	if l := filterJSONLines(string(out)); len(l) != 2 {
-		t.Errorf("expected 2 AVRO JSON lines, got %d\n%s", len(l), out)
-	}
-}
-
 // TestScenarioAvroProduceContactsBrokerNotRegistry verifies the produce path
 // wires -registry into the AvroEncoder without short-circuiting: with an
 // unreachable broker the run fails at the broker ping, never on registry flag
@@ -804,6 +782,54 @@ func TestScenarioAvroKeySchemaKeyMutuallyExclusive(t *testing.T) {
 	}
 	if !strContains(string(out), "mutually exclusive") {
 		t.Errorf("expected mutual-exclusion error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroKeyFieldRejected verifies -key does not apply to -format avro
+// (issue #24): the AVRO key comes from the key avsc, so a -key flag alone is a
+// flag-validation error.
+func TestScenarioAvroKeyFieldRejected(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-format", "avro", "-avro-schema", avsc, "-key", "id").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -key under -format avro to be rejected")
+	}
+	if !strContains(string(out), "-key is not valid with -format avro") {
+		t.Errorf("expected key-not-valid-under-avro error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroKeySchemaDryRunGeneratesKey verifies the key avsc drives key
+// generation end to end (issue #24): dry-run avro with -avro-key-schema emits a
+// Key echo per record, payloads still render as AVRO JSON, and the vertical-3
+// stopgap "not yet implemented" warning is gone with the null-key info message.
+func TestScenarioAvroKeySchemaDryRunGeneratesKey(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-seed", "42", "-format", "avro",
+		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc).CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\noutput: %s", err, out)
+	}
+	if !strContains(string(out), "Key: ") {
+		t.Errorf("expected a Key echo for -avro-key-schema under avro dry-run, got:\n%s", out)
+	}
+	if l := filterJSONLines(string(out)); len(l) != 2 {
+		t.Errorf("expected 2 AVRO JSON payload lines, got %d\n%s", len(l), out)
+	}
+	if strContains(string(out), "not yet implemented") {
+		t.Errorf("vertical-3 stopgap warning must be gone, got:\n%s", out)
+	}
+	if strContains(string(out), "no key configured") {
+		t.Errorf("key avsc configured: no null-key warning expected, got:\n%s", out)
 	}
 }
 
