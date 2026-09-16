@@ -2,6 +2,8 @@ package generator
 
 import (
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // TestAllOfProperty drives several allOf schemas through the real Value
@@ -65,7 +67,7 @@ func TestAllOfProperty(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(42, fixedNow())
+			gen := New(synth.New(42, fixedNow()))
 			for i := 0; i < 50; i++ {
 				v, err := gen.Value(fx.schema)
 				if err != nil {
@@ -104,7 +106,7 @@ func TestAllOfConflict(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			gen := New(42, fixedNow())
+			gen := New(synth.New(42, fixedNow()))
 			_, err := gen.Value(c.schema)
 			assertUnsupported(t, err, "allOf", RootPath)
 		})

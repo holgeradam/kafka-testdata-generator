@@ -65,7 +65,11 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 
 Use a fixed seed **and** a fixed clock for fully reproducible results. The seed
 drives the random values, while the clock (`-now`) anchors date-formatted
-fields, so byte-identical output requires both to be pinned:
+fields, so byte-identical output requires both to be pinned. Reproducibility
+holds within one version of the tool: the values a seed produces may change
+between releases.
+
+Dates and timestamps fall within the 365 days before `-now`.
 
 ```bash
 kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -seed 12345 -now 2026-01-02T03:04:05Z -dry-run
@@ -199,18 +203,33 @@ surfaces a typed `UnsupportedPatternError` rather than a non-conforming value:
 
 ### Field Name Heuristics
 
-The generator uses field names to generate realistic data:
+String fields without a `format` or `pattern` get realistic values chosen from
+their field name (JSON wire format; AVRO follows in #42). The name is split into words
+(`customerEmailAddress` -> `customer`, `email`, `address`; `customer_id` ->
+`customer`, `id`) and rules match whole words or their regular plurals, in this
+order:
 
-- `*id` fields → UUID
-- `*email` fields → email address
-- `*name` fields → human names
-- `*phone` fields → phone numbers
-- `*city` fields → city names
-- `*country` fields → country names
-- `*status` fields → status values
-- `*description` fields → descriptions
-- `*url`/`*uri` fields → URLs
-- `*sku` fields → SKU patterns
+| Word | Value |
+|------|-------|
+| `email` | email address |
+| `id`, `uuid`, `guid` | UUID |
+| `firstname`, or `first` + `name` | first name |
+| `lastname`, `surname`, or `last` + `name` | surname |
+| `name`, `fullname` | full name |
+| `phone`, `telephone` | phone number |
+| `city` | city name |
+| `country` | country name |
+| `street` | street address |
+| `status` | status value |
+| `description` | description |
+| `currency` | ISO 4217 currency code |
+| `url`, `uri` | URL |
+| `sku` | SKU |
+
+Other names get random text. Whole-word matching means `width` or `capacity`
+stay random rather than becoming a UUID or a city. Array items and
+`oneOf`/`anyOf` branches use the name of the enclosing field, so an array named
+`emails` holds email addresses.
 
 ## Statistics
 

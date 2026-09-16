@@ -11,12 +11,12 @@ import (
 // recursively - then generates a value from the merged schema. Irreconcilable
 // branches (distinct const values, clashing type) surface a typed
 // UnsupportedSchemaError rather than a silently-overridden constraint.
-func (g *Generator) mergeAllOf(allOf []any, path string, depth int) (any, error) {
+func (g *Generator) mergeAllOf(allOf []any, field, path string, depth int) (any, error) {
 	merged, err := mergeSchemas(allOf, path)
 	if err != nil {
 		return nil, err
 	}
-	return g.value(merged, path, depth)
+	return g.value(merged, field, path, depth)
 }
 
 // mergeSchemas folds the allOf branches into a single schema map. Each branch

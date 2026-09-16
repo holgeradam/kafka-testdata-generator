@@ -2,11 +2,15 @@ package generator
 
 import (
 	"encoding/json"
+	"errors"
+	"regexp"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func TestGenerateObject(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -37,7 +41,7 @@ func TestGenerateObject(t *testing.T) {
 }
 
 func TestGenerateArray(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "array",
 		"items":    map[string]any{"type": "string"},
@@ -63,7 +67,7 @@ func TestGenerateArray(t *testing.T) {
 }
 
 func TestGenerateStringFormats(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 
 	tests := []struct {
 		format string
@@ -90,7 +94,7 @@ func TestGenerateStringFormats(t *testing.T) {
 }
 
 func TestGenerateIntegerBounds(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":    "integer",
 		"minimum": float64(10),
@@ -110,7 +114,7 @@ func TestGenerateIntegerBounds(t *testing.T) {
 }
 
 func TestGenerateEnum(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type": "string",
 		"enum": []any{"a", "b", "c"},
@@ -142,8 +146,8 @@ func TestDeterministic(t *testing.T) {
 		},
 	}
 
-	gen1 := New(12345, fixedNow())
-	gen2 := New(12345, fixedNow())
+	gen1 := New(synth.New(12345, fixedNow()))
+	gen2 := New(synth.New(12345, fixedNow()))
 
 	for i := 0; i < 10; i++ {
 		r1, _ := gen1.Value(schema)
@@ -155,5 +159,61 @@ func TestDeterministic(t *testing.T) {
 		if string(j1) != string(j2) {
 			t.Errorf("iteration %d: not deterministic\n  gen1: %s\n  gen2: %s", i, j1, j2)
 		}
+	}
+}
+
+// TestNestedValuesInheritFieldName proves array items and oneOf/anyOf branches
+// use the enclosing property's name for field-name heuristics (#31 decision 5),
+// never an index fragment such as "0]".
+func TestNestedValuesInheritFieldName(t *testing.T) {
+	emailRe := regexp.MustCompile(`^[a-z]+\.[a-z]+@[a-z]+\.[a-z]+$`)
+	gen := New(synth.New(42, fixedNow()))
+	schema := map[string]any{
+		"type":     "object",
+		"required": []any{"emails", "contactEmail", "backupEmail"},
+		"properties": map[string]any{
+			"emails": map[string]any{
+				"type": "array", "minItems": float64(3), "maxItems": float64(3),
+				"items": map[string]any{"type": "string"},
+			},
+			"contactEmail": map[string]any{"oneOf": []any{map[string]any{"type": "string"}}},
+			"backupEmail":  map[string]any{"anyOf": []any{map[string]any{"type": "string"}}},
+		},
+	}
+	for i := 0; i < 10; i++ {
+		v, err := gen.Value(schema)
+		if err != nil {
+			t.Fatalf("Value error: %v", err)
+		}
+		obj := v.(map[string]any)
+		for _, item := range obj["emails"].([]any) {
+			if !emailRe.MatchString(item.(string)) {
+				t.Errorf("emails item = %q, want email-shaped", item)
+			}
+		}
+		for _, f := range []string{"contactEmail", "backupEmail"} {
+			if !emailRe.MatchString(obj[f].(string)) {
+				t.Errorf("%s = %q, want email-shaped", f, obj[f])
+			}
+		}
+	}
+}
+
+// TestPatternErrorCarriesPath proves the walker attaches the JSON Path to an
+// unsupported pattern reported by the Synthesizer.
+func TestPatternErrorCarriesPath(t *testing.T) {
+	gen := New(synth.New(42, fixedNow()))
+	schema := map[string]any{
+		"type":       "object",
+		"required":   []any{"code"},
+		"properties": map[string]any{"code": map[string]any{"type": "string", "pattern": `a.c`}},
+	}
+	_, err := gen.Value(schema)
+	var pe *UnsupportedPatternError
+	if !errors.As(err, &pe) {
+		t.Fatalf("expected *UnsupportedPatternError, got %T (%v)", err, err)
+	}
+	if pe.Path != "$.code" || pe.Construct != "." || pe.Pattern != "a.c" {
+		t.Errorf("got {Pattern %q, Construct %q, Path %q}, want {a.c, ., $.code}", pe.Pattern, pe.Construct, pe.Path)
 	}
 }

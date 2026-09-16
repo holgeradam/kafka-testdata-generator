@@ -3,6 +3,8 @@ package generator
 import (
 	"testing"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func fixedNow() time.Time {
@@ -40,7 +42,7 @@ func anchored(t *testing.T, v string) time.Time {
 
 func TestNewAnchorsDateToNow(t *testing.T) {
 	now := fixedNow()
-	gen := New(42, now)
+	gen := New(synth.New(42, now))
 
 	result, err := gen.Value(dateSchema())
 	if err != nil {
@@ -61,8 +63,8 @@ func TestNewAnchorsDateToNow(t *testing.T) {
 
 func TestNewSameSeedSameNowDeterministicDates(t *testing.T) {
 	now := fixedNow()
-	gen1 := New(7, now)
-	gen2 := New(7, now)
+	gen1 := New(synth.New(7, now))
+	gen2 := New(synth.New(7, now))
 
 	for i := 0; i < 5; i++ {
 		r1, err := gen1.Value(dateSchema())
@@ -83,8 +85,8 @@ func TestNewSameSeedSameNowDeterministicDates(t *testing.T) {
 }
 
 func TestNewDifferentNowChangesDatesOnly(t *testing.T) {
-	genA := New(42, time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
-	genB := New(42, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))
+	genA := New(synth.New(42, time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)))
+	genB := New(synth.New(42, time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)))
 
 	rA, err := genA.Value(dateSchema())
 	if err != nil {
