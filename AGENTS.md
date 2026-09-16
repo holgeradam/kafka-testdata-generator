@@ -19,3 +19,7 @@ Single-context: `CONTEXT.md` at repo root + `docs/adr/`. Read before exploring; 
 ## Working method
 
 Test-first development: write the test that fails on the bug or feature first, watch it fail (red), then implement the minimum to pass (green), then refactor. Applies to all feature work and bug fixes, not just tickets carrying an explicit TDD note.
+
+## Delivery
+
+Branch, PR, green CI, squash-merge for every change. See `docs/agents/delivery.md`.
