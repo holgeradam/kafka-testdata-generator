@@ -76,5 +76,3 @@ func encodeKeyBytes(key any) ([]byte, error) {
 	}
 	return plainScalarKey(key)
 }
-
-func  badlyFormatted( ) {}
