@@ -4,8 +4,11 @@ import (
 	"errors"
 	"math/big"
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // mustParse parses avsc into the model, failing the test on a parse error.
@@ -45,12 +48,12 @@ func TestGenerateDeterministic(t *testing.T) {
 	root := mustParse(t, avsc).Root
 
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	a := NewGenerator(42, now)
+	a := NewGenerator(synth.New(42, now))
 	va, err := a.Value(root)
 	if err != nil {
 		t.Fatalf("generation failed: %v", err)
 	}
-	vb, err := NewGenerator(42, now).Value(root)
+	vb, err := NewGenerator(synth.New(42, now)).Value(root)
 	if err != nil {
 		t.Fatalf("generation failed: %v", err)
 	}
@@ -58,7 +61,7 @@ func TestGenerateDeterministic(t *testing.T) {
 		t.Errorf("same seed+now must generate identical values:\n  a: %#v\n  b: %#v", va, vb)
 	}
 
-	c := NewGenerator(99, now)
+	c := NewGenerator(synth.New(99, now))
 	vc, err := c.Value(root)
 	if err != nil {
 		t.Fatalf("generation failed: %v", err)
@@ -80,7 +83,7 @@ func TestGeneratePrimitives(t *testing.T) {
 		{"name":"s","type":"string"}
 	]}`
 	root := mustParse(t, avsc).Root
-	g := NewGenerator(7, time.Now())
+	g := NewGenerator(synth.New(7, time.Now()))
 	rec, err := g.Value(root)
 	if err != nil {
 		t.Fatalf("generation failed: %v", err)
@@ -128,7 +131,7 @@ func TestGenerateLogicalTypes(t *testing.T) {
 	]}`
 	root := mustParse(t, avsc).Root
 	now := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
-	g := NewGenerator(7, now)
+	g := NewGenerator(synth.New(7, now))
 	for i := 0; i < 20; i++ {
 		m, err := g.Value(root)
 		if err != nil {
@@ -174,7 +177,7 @@ func TestGenerateRecordsArraysMapsEnumsFixed(t *testing.T) {
 		{"name":"child","type":{"type":"record","name":"Child","fields":[{"name":"x","type":"long"}]}}
 	]}`
 	root := mustParse(t, avsc).Root
-	g := NewGenerator(7, time.Now())
+	g := NewGenerator(synth.New(7, time.Now()))
 	m, err := g.Value(root)
 	if err != nil {
 		t.Fatalf("generation failed: %v", err)
@@ -228,7 +231,7 @@ func TestGenerateUnionValues(t *testing.T) {
 		{"name":"when","type":["null",{"type":"int","logicalType":"date"}]}
 	]}`
 	root := mustParse(t, avsc).Root
-	g := NewGenerator(7, time.Now())
+	g := NewGenerator(synth.New(7, time.Now()))
 	for i := 0; i < 40; i++ {
 		m, err := g.Value(root)
 		if err != nil {
@@ -272,7 +275,7 @@ func TestGenerateUnionValues(t *testing.T) {
 	nulls := 0
 	vals := 0
 	for seed := int64(0); seed < 200; seed++ {
-		m, err := NewGenerator(seed, time.Now()).Value(root)
+		m, err := NewGenerator(synth.New(seed, time.Now())).Value(root)
 		if err != nil {
 			t.Fatalf("generation failed: %v", err)
 		}
@@ -296,7 +299,7 @@ func TestGenerateRecursionDepth(t *testing.T) {
 		{"name":"label","type":"string"},
 		{"name":"left","type":"Tree"}
 	]}`
-	g := NewGenerator(7, time.Now())
+	g := NewGenerator(synth.New(7, time.Now()))
 	_, err := g.Value(mustParse(t, cyclic).Root)
 	assertGenerateError(t, err)
 
@@ -308,12 +311,72 @@ func TestGenerateRecursionDepth(t *testing.T) {
 	]}`
 	node := mustParse(t, linked).Root
 	for seed := int64(0); seed < 20; seed++ {
-		m, err := NewGenerator(seed, time.Now()).Value(node)
+		m, err := NewGenerator(synth.New(seed, time.Now())).Value(node)
 		if err != nil {
 			t.Fatalf("linked-list generation failed at seed %d: %v", seed, err)
 		}
 		if _, ok := m.(map[string]any); !ok {
 			t.Fatalf("root value = %T, want map", m)
+		}
+	}
+}
+
+// TestGenerateNestedValuesInheritFieldName proves union branches, array items
+// and map values use the enclosing field's name for heuristics (#31 decision
+// 5), so a nullable email is still an email.
+func TestGenerateNestedValuesInheritFieldName(t *testing.T) {
+	avsc := `{"type":"record","name":"C","fields":[
+		{"name":"email","type":["null","string"]},
+		{"name":"emails","type":{"type":"array","items":"string"}},
+		{"name":"backupEmails","type":{"type":"map","values":"string"}}
+	]}`
+	root := mustParse(t, avsc).Root
+	emailRe := regexp.MustCompile(`^[a-z]+\.[a-z]+@[a-z]+\.[a-z]+$`)
+	g := NewGenerator(synth.New(7, time.Now()))
+	for i := 0; i < 40; i++ {
+		m, err := g.Value(root)
+		if err != nil {
+			t.Fatalf("generation failed: %v", err)
+		}
+		rec := m.(map[string]any)
+		if u := rec["email"].(map[string]any); u["string"] != nil && !emailRe.MatchString(u["string"].(string)) {
+			t.Errorf("nullable email = %q, want email-shaped", u["string"])
+		}
+		for _, v := range rec["emails"].([]any) {
+			if !emailRe.MatchString(v.(string)) {
+				t.Errorf("emails item = %q, want email-shaped", v)
+			}
+		}
+		for _, v := range rec["backupEmails"].(map[string]any) {
+			if !emailRe.MatchString(v.(string)) {
+				t.Errorf("backupEmails value = %q, want email-shaped", v)
+			}
+		}
+	}
+}
+
+// TestGenerateInstantsWithinWindow proves dates and timestamps fall within the
+// 365 days before now (#31 decision 7); a date may round down to midnight.
+func TestGenerateInstantsWithinWindow(t *testing.T) {
+	avsc := `{"type":"record","name":"W","fields":[
+		{"name":"day","type":{"type":"int","logicalType":"date"}},
+		{"name":"ts","type":{"type":"long","logicalType":"timestamp-millis"}},
+		{"name":"tms","type":{"type":"long","logicalType":"timestamp-micros"}}
+	]}`
+	root := mustParse(t, avsc).Root
+	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
+	g := NewGenerator(synth.New(7, now))
+	for i := 0; i < 200; i++ {
+		m, err := g.Value(root)
+		if err != nil {
+			t.Fatalf("generation failed: %v", err)
+		}
+		rec := m.(map[string]any)
+		for f, slack := range map[string]time.Duration{"day": 24 * time.Hour, "ts": 0, "tms": 0} {
+			v := rec[f].(time.Time)
+			if v.After(now) || now.Sub(v) > 365*24*time.Hour+slack {
+				t.Fatalf("%s = %v, outside the 365 days before %v", f, v, now)
+			}
 		}
 	}
 }

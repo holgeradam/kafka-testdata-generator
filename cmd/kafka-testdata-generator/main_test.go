@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -32,17 +33,19 @@ func TestScenarioBasicDryRun(t *testing.T) {
 	}
 }
 
+// TestScenarioDeterministic pins both -seed and -now: without -now, date fields
+// follow the wall clock and two runs straddling a second boundary differ.
 func TestScenarioDeterministic(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out1, err := cmd1.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 1 failed: %v\noutput: %s", err, out1)
 	}
 
-	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out2, err := cmd2.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 2 failed: %v\noutput: %s", err, out2)
@@ -1248,5 +1251,84 @@ func init() {
 	if _, err := exec.LookPath("go"); err != nil {
 		fmt.Fprintf(os.Stderr, "go not found in PATH\n")
 		os.Exit(1)
+	}
+}
+
+// TestScenarioHeuristicsAgreeAcrossFormats is the #28 acceptance test: a JSON
+// Schema and an avsc declaring the same string fields yield the same values for
+// the same -seed and -now, because both walkers ask the one Synthesizer. Fields
+// are declared in the order both walkers visit them (sorted, all required), so
+// the draw sequences line up exactly.
+func TestScenarioHeuristicsAgreeAcrossFormats(t *testing.T) {
+	bin := buildBinary(t)
+	fields := []string{"city", "country", "currency", "customerName", "description", "email", "orderId", "status", "street", "websiteUrl"}
+
+	spec := "asyncapi: '2.6.0'\ninfo: {title: Same, version: '1.0.0'}\nchannels:\n  orders:\n    publish:\n      message:\n        payload:\n          type: object\n          required: [" + strings.Join(fields, ", ") + "]\n          properties:\n"
+	var avscFields []string
+	for _, f := range fields {
+		spec += "            " + f + ": {type: string}\n"
+		avscFields = append(avscFields, `{"name":"`+f+`","type":"string"}`)
+	}
+	specPath := writeTempSpec(t, spec)
+	avsc := writeTempAvsc(t, "same.avsc", `{"type":"record","name":"Same","fields":[`+strings.Join(avscFields, ",")+`]}`)
+
+	run := func(extra ...string) map[string]any {
+		args := append([]string{"-spec", specPath, "-channel", "orders", "-dry-run", "-count", "1",
+			"-seed", "1", "-now", "2026-09-16T00:00:00Z"}, extra...)
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("command failed: %v\noutput: %s", err, out)
+		}
+		lines := filterJSONLines(string(out))
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 JSON line, got %d\n%s", len(lines), out)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
+			t.Fatalf("unmarshal %q: %v", lines[0], err)
+		}
+		return m
+	}
+	jsonOut := run()
+	avroOut := run("-format", "avro", "-avro-schema", avsc)
+
+	random := regexp.MustCompile(`^[a-z0-9]{8}$`)
+	for _, f := range fields {
+		if jsonOut[f] != avroOut[f] {
+			t.Errorf("%s: JSON %q, AVRO %q; want identical values", f, jsonOut[f], avroOut[f])
+		}
+		if s, _ := avroOut[f].(string); random.MatchString(s) {
+			t.Errorf("%s: AVRO value %q is random text, want a heuristic value", f, s)
+		}
+	}
+}
+
+// TestScenarioAvroKeyAndPayloadShareOneStream proves Payload and Key draw from
+// one Synthesizer per run (#31 decision 4): with a string key avsc and a single
+// string payload field, the two values no longer mirror each other.
+func TestScenarioAvroKeyAndPayloadShareOneStream(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Note","fields":[{"name":"note","type":"string"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+
+	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-seed", "42", "-format", "avro",
+		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+	}
+	key := regexp.MustCompile(`Key: (\S+)`).FindStringSubmatch(stderr.String())
+	if key == nil {
+		t.Fatalf("no Key echo in stderr:\n%s", stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &payload); err != nil {
+		t.Fatalf("unmarshal payload %q: %v", stdout.String(), err)
+	}
+	if payload["note"] == key[1] {
+		t.Errorf("Key %q mirrors the Payload's first draw %q; want one shared stream", key[1], payload["note"])
 	}
 }
