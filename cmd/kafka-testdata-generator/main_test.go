@@ -301,6 +301,42 @@ func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
 	}
 }
 
+// TestScenarioDryRunKeyDoesNotWarn verifies -key is not reported as disregarded
+// in dry run: the Key is echoed (ADR-0003), so the warning must stay silent.
+// Both facts are asserted on the same output so they cannot contradict.
+func TestScenarioDryRunKeyDoesNotWarn(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "2", "-seed", "42", "-key", "orderId").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, out)
+	}
+	if !strContains(string(out), "Key: ") {
+		t.Errorf("expected Key echo in dry run, got: %s", out)
+	}
+	if strContains(string(out), "dry-run mode disregards") {
+		t.Errorf("dry run honours -key, so it must not warn that it is disregarded, got: %s", out)
+	}
+}
+
+// TestScenarioDryRunWarnsOnExplicitBroker verifies the warning fires whenever
+// -broker is passed in dry run, even with a value equal to the default.
+func TestScenarioDryRunWarnsOnExplicitBroker(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-broker", "localhost:9092").CombinedOutput()
+	if err != nil {
+		t.Fatalf("command failed: %v\n%s", err, out)
+	}
+	if !strContains(string(out), "dry-run mode disregards Kafka options") {
+		t.Errorf("expected dry-run Kafka-options warning when -broker set, got: %s", out)
+	}
+}
+
 func TestScenarioSignalHandling(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")

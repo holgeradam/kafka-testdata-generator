@@ -102,7 +102,15 @@ func main() {
 		}
 	}
 
-	if *dryRun && (*broker != "localhost:9092" || *keyField != "" || acksFlag.set || *registryURL != "") {
+	// -key is honoured in dry run (the Key is echoed), so only the options that
+	// reach Kafka or the registry count as disregarded.
+	brokerSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "broker" {
+			brokerSet = true
+		}
+	})
+	if *dryRun && (brokerSet || acksFlag.set || *registryURL != "") {
 		fmt.Fprintln(os.Stderr, "Warning: dry-run mode disregards Kafka options")
 	}
 
