@@ -33,17 +33,19 @@ func TestScenarioBasicDryRun(t *testing.T) {
 	}
 }
 
+// TestScenarioDeterministic pins both -seed and -now: without -now, date fields
+// follow the wall clock and two runs straddling a second boundary differ.
 func TestScenarioDeterministic(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out1, err := cmd1.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 1 failed: %v\noutput: %s", err, out1)
 	}
 
-	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42")
+	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out2, err := cmd2.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 2 failed: %v\noutput: %s", err, out2)
