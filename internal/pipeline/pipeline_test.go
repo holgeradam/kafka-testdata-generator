@@ -392,8 +392,8 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	if stats.Acked != 1 {
 		t.Errorf("expected 1 acked, got %d", stats.Acked)
 	}
-	if !strings.Contains(warn.String(), "no key configured") {
-		t.Errorf("expected null-key info message, got %q", warn.String())
+	if want := "no key configured, generating messages with a null key\n"; warn.String() != want {
+		t.Errorf("null-key info message = %q, want %q", warn.String(), want)
 	}
 	for _, o := range sink.recorded {
 		if len(o.Key) != 0 {

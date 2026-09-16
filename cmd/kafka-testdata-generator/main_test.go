@@ -994,8 +994,11 @@ channels:
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
 	}
-	if !strContains(string(combined), "no key configured") {
-		t.Errorf("expected null-key info message, got:\n%s", combined)
+	if !strContains(string(combined), "no key configured, generating messages with a null key") {
+		t.Errorf("expected mode-neutral null-key info message, got:\n%s", combined)
+	}
+	if strContains(string(combined), "producing") {
+		t.Errorf("dry run produces nothing, so the info message must not say producing, got:\n%s", combined)
 	}
 }
 

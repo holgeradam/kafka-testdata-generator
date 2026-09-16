@@ -92,7 +92,7 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	hasKeyGen := p.cfg.KeyGenerator != nil
 
 	if !hasBinding && !hasKeyField && !hasKeyGen {
-		p.warnf("no key configured, producing with a null key\n")
+		p.warnf("no key configured, generating messages with a null key\n")
 	}
 	if hasBinding && hasKeyField {
 		p.warnf("Warning: -key overrides binding, binding overridden\n")
