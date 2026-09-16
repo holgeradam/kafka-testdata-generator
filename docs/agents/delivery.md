@@ -1,6 +1,6 @@
 # Delivery
 
-Every change reaches `main` through a short-lived branch and a squash-merged PR. `main` is protected: a PR with a green `check` CI job (`.github/workflows/ci.yml`) is required. The repo owner is exempt as an escape hatch, and agents act with the owner's gh credentials, so the protection does not stop an agent: follow this workflow and let `check` gate every merge.
+Every change reaches `main` through a short-lived branch and a squash-merged PR. `main` is protected for everyone, admins included: a PR with a green `check` CI job (`.github/workflows/ci.yml`) is required, and direct pushes are rejected.
 
 1. **Branch** off an up-to-date `main`, one branch per issue (e.g. `fix/36-null-key-message-wording`). The issue carries `ready-for-agent`.
 2. **Commit** test-first (see `AGENTS.md`). Run the same checks CI runs before pushing: `gofmt -l .`, `go mod tidy -diff`, `go vet ./...`, `go test -race ./...`.
