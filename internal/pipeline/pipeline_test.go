@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // fakeGenerator is a controlled ValueGenerator: it returns a fixed Payload
@@ -314,7 +315,7 @@ func TestRunBindingKeyGenerated(t *testing.T) {
 	// The binding path synthesizes a Key from the binding schema via the real
 	// generator, so it stays on *generator.Generator through the ValueGenerator
 	// seam.
-	gen := generator.New(1, testNow())
+	gen := generator.New(synth.New(1, testNow()))
 	sink := &fakeSink{}
 	binding := map[string]any{"type": "string"}
 	p := New(Config{
@@ -464,7 +465,7 @@ func TestRunKeyGeneratorErrorAborts(t *testing.T) {
 }
 
 func TestRunBindingSchemaError(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := generator.New(synth.New(1, testNow()))
 	sink := &fakeSink{}
 	binding := map[string]any{"type": "widget"}
 	p := New(Config{
@@ -492,7 +493,7 @@ func TestRunBindingSchemaError(t *testing.T) {
 // (an unresolvable $ref, per the #11 spec + ADR-0006) aborts the run with a
 // typed error rather than producing non-conforming keys.
 func TestRunBindingUnresolvableRefAborts(t *testing.T) {
-	gen := generator.New(1, testNow())
+	gen := generator.New(synth.New(1, testNow()))
 	gen.SetRefResolver(func(ref string) (map[string]any, error) {
 		return nil, errors.New("no such definition")
 	})

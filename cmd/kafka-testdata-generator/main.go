@@ -14,6 +14,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func main() {
@@ -141,7 +142,7 @@ func main() {
 		keyBinding = nil
 	}
 
-	gen := generator.New(*seed, nowFlag.now)
+	gen := generator.New(synth.New(*seed, nowFlag.now))
 	gen.SetRefResolver(doc.ResolveRef)
 
 	ctx, cancel := context.WithCancel(context.Background())

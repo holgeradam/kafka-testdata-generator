@@ -3,6 +3,8 @@ package generator
 import (
 	"errors"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // assertUnsupported asserts err is an *UnsupportedSchemaError with the given
@@ -26,19 +28,19 @@ func assertUnsupported(t *testing.T, err error, keyword, path string) {
 }
 
 func TestValueUnsupportedType(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	_, err := gen.Value(map[string]any{"type": "widget"})
 	assertUnsupported(t, err, "type", RootPath)
 }
 
 func TestValueNoType(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	_, err := gen.Value(map[string]any{"minimum": 5})
 	assertUnsupported(t, err, "type", RootPath)
 }
 
 func TestValueNestedUnsupportedPath(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"widget"},
@@ -51,7 +53,7 @@ func TestValueNestedUnsupportedPath(t *testing.T) {
 }
 
 func TestValueArrayUnsupportedItemPath(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "array",
 		"items":    map[string]any{"type": "thing"},
@@ -72,7 +74,7 @@ func TestValueArrayUnsupportedItemPath(t *testing.T) {
 }
 
 func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schemas := []map[string]any{
 		{"type": "widget"},
 		{"minimum": 5},
@@ -100,7 +102,7 @@ func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
 }
 
 func TestValueNonMapPropertySchema(t *testing.T) {
-	gen := New(42, fixedNow())
+	gen := New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"a"},
@@ -113,7 +115,7 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 }
 
 func TestValueRefResolutionError(t *testing.T) {
-	gen := New(1, fixedNow())
+	gen := New(synth.New(1, fixedNow()))
 	gen.SetRefResolver(func(ref string) (map[string]any, error) {
 		return nil, errors.New("no such definition")
 	})
@@ -122,7 +124,7 @@ func TestValueRefResolutionError(t *testing.T) {
 }
 
 func TestValueRefMissingResolver(t *testing.T) {
-	gen := New(1, fixedNow())
+	gen := New(synth.New(1, fixedNow()))
 	_, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
 	assertUnsupported(t, err, "$ref", RootPath)
 }

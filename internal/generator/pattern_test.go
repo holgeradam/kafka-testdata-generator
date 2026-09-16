@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // mustValidate is the pattern-schema shim over the single validator wrapper
@@ -46,7 +48,7 @@ func TestPatternSupportProperty(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(42, fixedNow())
+			gen := New(synth.New(42, fixedNow()))
 			schema := map[string]any{
 				"type":    "string",
 				"pattern": fx.pattern,
@@ -86,7 +88,7 @@ func TestPatternUnsupportedError(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(42, fixedNow())
+			gen := New(synth.New(42, fixedNow()))
 			schema := map[string]any{
 				"type":    "string",
 				"pattern": fx.pattern,
@@ -116,8 +118,8 @@ func TestPatternDeterministic(t *testing.T) {
 	pattern := `^[A-Z]{3}-[A-Z]{2}-\d{4}$`
 	schema := map[string]any{"type": "string", "pattern": pattern}
 
-	gen1 := New(99, now)
-	gen2 := New(99, now)
+	gen1 := New(synth.New(99, now))
+	gen2 := New(synth.New(99, now))
 
 	a, err := gen1.Value(schema)
 	if err != nil {

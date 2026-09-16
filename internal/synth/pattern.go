@@ -1,29 +1,41 @@
-package generator
+package synth
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
 
-// synthesizePattern builds a value that conforms to the documented regex
-// subset (ADR-0006 Decision 2): literals, character classes [A-Z] [a-z] [0-9],
-// escapes \d \w \s, quantifiers {n} {n,m} * + ?, groups, alternation, and
-// anchors (ignored for synthesis). Anything outside the subset yields a
-// UnsupportedPatternError naming the construct, never a silently-nonconforming
-// string.
-func (g *Generator) synthesizePattern(pattern, path string) (string, error) {
-	p := &patternParser{pattern: pattern, path: path}
+// PatternError reports a regex construct outside the documented subset
+// (ADR-0006 decision 2). It names the construct but no location: the walker
+// that read the pattern attaches where it came from.
+type PatternError struct {
+	// Pattern is the full pattern that could not be synthesized.
+	Pattern string
+	// Construct is the offending substring outside the documented subset.
+	Construct string
+}
+
+func (e *PatternError) Error() string {
+	return fmt.Sprintf("synth: unsupported pattern construct %q in %q", e.Construct, e.Pattern)
+}
+
+// Pattern returns a string matching re, which must stay within the documented
+// regex subset: literals, character classes [A-Z] [a-z] [0-9], escapes \d \w
+// \s, quantifiers {n} {n,m} * + ?, groups, alternation, and anchors (ignored
+// for synthesis). Anything outside the subset yields a *PatternError naming the
+// construct, never a silently non-conforming string.
+func (s *Synthesizer) Pattern(re string) (string, error) {
+	p := &patternParser{pattern: re}
 	node, err := p.parseAlternation()
 	if err != nil {
 		return "", err
 	}
-	if p.i < len(pattern) {
-		return "", p.errConstruct(pattern[p.i:])
+	if p.i < len(re) {
+		return "", p.errConstruct(re[p.i:])
 	}
 	var sb strings.Builder
-	if err := g.genNode(node, &sb); err != nil {
-		return "", err
-	}
+	s.genNode(node, &sb)
 	return sb.String(), nil
 }
 
@@ -67,13 +79,12 @@ var (
 // patternParser is a recursive-descent parser for the documented regex subset.
 type patternParser struct {
 	pattern string
-	path    string
 	i       int
 }
 
 // errConstruct reports that a construct outside the documented subset was hit.
 func (p *patternParser) errConstruct(construct string) error {
-	return &UnsupportedPatternError{Pattern: p.pattern, Construct: construct, Path: p.path}
+	return &PatternError{Pattern: p.pattern, Construct: construct}
 }
 
 // alternation ::= concat ( '|' concat )*
@@ -282,31 +293,26 @@ func (p *patternParser) skipToCloseBrace() {
 }
 
 // genNode writes a synthesized occurrence of node into sb.
-func (g *Generator) genNode(node reNode, sb *strings.Builder) error {
+func (s *Synthesizer) genNode(node reNode, sb *strings.Builder) {
 	switch n := node.(type) {
 	case reEmpty:
 	case reLit:
 		sb.WriteRune(n.ch)
 	case reClass:
-		sb.WriteRune(n.chars[g.rng.Intn(len(n.chars))])
+		sb.WriteRune(n.chars[s.rng.Intn(len(n.chars))])
 	case reSeq:
 		for _, it := range n.items {
-			if err := g.genNode(it, sb); err != nil {
-				return err
-			}
+			s.genNode(it, sb)
 		}
 	case reAlt:
-		return g.genNode(n.branches[g.rng.Intn(len(n.branches))], sb)
+		s.genNode(n.branches[s.rng.Intn(len(n.branches))], sb)
 	case reQuant:
 		count := n.min
 		if n.max > n.min {
-			count += g.rng.Intn(n.max - n.min + 1)
+			count += s.rng.Intn(n.max - n.min + 1)
 		}
 		for i := 0; i < count; i++ {
-			if err := g.genNode(n.node, sb); err != nil {
-				return err
-			}
+			s.genNode(n.node, sb)
 		}
 	}
-	return nil
 }

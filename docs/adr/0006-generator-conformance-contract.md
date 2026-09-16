@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-08-23)
+Accepted (2026-08-23). Decisions 2 and 4 amended by ADR-0008 (2026-09-16).
 
 ## Context
 

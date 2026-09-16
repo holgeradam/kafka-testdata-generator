@@ -25,7 +25,7 @@ The generator's output promise, defined per Wire format. Every Payload honors ev
 _Avoid_: payload validation, schema checking
 
 **Key**:
-The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is sourced from `bindings.kafka.key` when present, falling back to `-key` field extraction, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode the Key comes from the key avsc (`-avro-key-schema`): the Pipeline generates it via the **KeyGenerator** seam and the AvroEncoder registers it under `<channel>-key` and frames it like the Payload. `-key` field extraction does not apply to AVRO (flag error); with neither a key avsc nor a binding, no Key is produced.
+The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is extracted from the Payload by `-key` when set (overriding `bindings.kafka.key`, with a warning), otherwise generated from `bindings.kafka.key` when present, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode the Key comes from the key avsc (`-avro-key-schema`): the Pipeline generates it via the **KeyGenerator** seam and the AvroEncoder registers it under `<channel>-key` and frames it like the Payload. `-key` field extraction does not apply to AVRO (flag error); with neither a key avsc nor a binding, no Key is produced.
 _Avoid_: partition key
 
 **Dry run**:
@@ -39,6 +39,10 @@ _Avoid_: runner, loop, producer loop
 **ValueGenerator**:
 The seam between the Pipeline and record generation: one method, `Value(schema) (any, error)`, promises a Payload honouring the Message schema or a typed conformance error. Adapters pass the deletion test: `*generator.Generator` in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
 _Avoid_: generator interface, data source
+
+**Synthesizer**:
+The seeded, clock-aware source of every leaf value and random decision in a run, shared by the Payload and the Key. The schema walkers decide the shape a schema demands; the Synthesizer decides the values inside it, including readable values chosen from field names.
+_Avoid_: faker, value source, random generator
 
 **Encoder**:
 The Wire-format seam that turns a generated record (Key + Payload) into bytes. One adapter exists per format: JsonEncoder for JSON mode (its Encode serves both Dry run and produce), and under AVRO two - AvroEncoder for producing, and AvroDisplayEncoder for Dry run. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<channel>-value` and, when a key avsc is supplied, the key avsc under `<channel>-key`, then frames payloads and keys with the registry-assigned schema IDs. AvroDisplayEncoder renders the Avro JSON encoding from the local avsc and never touches a registry. The Pipeline never sees format conventions.
