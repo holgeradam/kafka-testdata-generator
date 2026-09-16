@@ -15,6 +15,7 @@ import (
 	avro2 "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // Compile-time check: AvroEncoder must satisfy the Encoder interface.
@@ -266,7 +267,7 @@ func TestAvroEncoderConformanceProperty(t *testing.T) {
 			}
 
 			for seed := int64(0); seed < 6; seed++ {
-				gen := avro.NewGenerator(seed, now)
+				gen := avro.NewGenerator(synth.New(seed, now))
 				value, err := gen.Value(model.Root)
 				if err != nil {
 					t.Fatalf("seed %d: generation failed: %v", seed, err)
@@ -373,7 +374,7 @@ func TestAvroEncoderKeyConformanceProperty(t *testing.T) {
 			}
 
 			for seed := int64(0); seed < 6; seed++ {
-				keyGen := avro.NewGenerator(seed, now)
+				keyGen := avro.NewGenerator(synth.New(seed, now))
 				key, err := keyGen.Value(model.Root)
 				if err != nil {
 					t.Fatalf("seed %d: key generation failed: %v", seed, err)

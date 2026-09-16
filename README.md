@@ -204,7 +204,7 @@ surfaces a typed `UnsupportedPatternError` rather than a non-conforming value:
 ### Field Name Heuristics
 
 String fields without a `format` or `pattern` get realistic values chosen from
-their field name (JSON wire format; AVRO follows in #42). The name is split into words
+their field name, in both wire formats. The name is split into words
 (`customerEmailAddress` -> `customer`, `email`, `address`; `customer_id` ->
 `customer`, `id`) and rules match whole words or their regular plurals, in this
 order:
@@ -227,9 +227,10 @@ order:
 | `sku` | SKU |
 
 Other names get random text. Whole-word matching means `width` or `capacity`
-stay random rather than becoming a UUID or a city. Array items and
-`oneOf`/`anyOf` branches use the name of the enclosing field, so an array named
-`emails` holds email addresses.
+stay random rather than becoming a UUID or a city. Array items, map values and
+`oneOf`/`anyOf` or Avro union branches use the name of the enclosing field, so an
+array named `emails` holds email addresses and a nullable `email` gets one when
+not null.
 
 ## Statistics
 

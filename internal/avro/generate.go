@@ -3,10 +3,10 @@ package avro
 import (
 	"fmt"
 	"math/big"
-	"math/rand"
 	"reflect"
-	"strings"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // maxRecursionDepth bounds how many nested records/containers the generator
@@ -47,21 +47,17 @@ func (e *GenerateError) Unwrap() error {
 // the native Go value conventions confluent-avro-go's generic marshaller
 // expects - int32 for int, time.Time for date/timestamps, time.Duration for
 // time-*, *big.Rat for decimal, [N]byte for fixed, and single-entry maps for
-// union branches - so an encoded payload is always registry-valid.
+// union branches - so an encoded payload is always registry-valid. It walks the
+// model and owns structure; every value and random decision comes from the
+// Synthesizer (ADR-0008).
 type Generator struct {
-	rng      *rand.Rand
-	baseTime time.Time
+	synth *synth.Synthesizer
 }
 
-// NewGenerator creates a Generator with the given seed and explicit clock. The
-// now value feeds date/timestamp synthesis, so determinism requires both a
-// fixed seed and a fixed now, mirroring the JSON generator (ADR-0006 decision
-// 4); there is no hidden clock.
-func NewGenerator(seed int64, now time.Time) *Generator {
-	return &Generator{
-		rng:      rand.New(rand.NewSource(seed)),
-		baseTime: now,
-	}
+// NewGenerator creates a Generator drawing from the given Synthesizer, which
+// carries the run's seed and clock (ADR-0008).
+func NewGenerator(s *synth.Synthesizer) *Generator {
+	return &Generator{synth: s}
 }
 
 // Value generates a random value honouring the given Avro model type, or a
@@ -70,6 +66,9 @@ func (g *Generator) Value(t Type) (any, error) {
 	return g.value(t, "", 0)
 }
 
+// value generates for t. name is the nearest enclosing field name, inherited by
+// union branches, array items and map values for field-name heuristics (#31
+// decision 5).
 func (g *Generator) value(t Type, name string, depth int) (any, error) {
 	if depth > maxRecursionDepth {
 		switch v := t.(type) {
@@ -97,13 +96,13 @@ func (g *Generator) value(t Type, name string, depth int) (any, error) {
 	case *Record:
 		return g.record(v, depth)
 	case *Union:
-		return g.union(v, depth)
+		return g.union(v, name, depth)
 	case *Array:
-		return g.array(v, depth)
+		return g.array(v, name, depth)
 	case *Map:
-		return g.mapValue(v, depth)
+		return g.mapValue(v, name, depth)
 	case *Enum:
-		return v.Symbols[g.rng.Intn(len(v.Symbols))], nil
+		return v.Symbols[g.synth.Pick(len(v.Symbols))], nil
 	case *Fixed:
 		return g.fixed(v)
 	default:
@@ -145,7 +144,7 @@ func (g *Generator) record(rec *Record, depth int) (map[string]any, error) {
 	return result, nil
 }
 
-func (g *Generator) union(u *Union, depth int) (any, error) {
+func (g *Generator) union(u *Union, name string, depth int) (any, error) {
 	valueBranches := make([]Type, 0, len(u.Branches))
 	for _, b := range u.Branches {
 		if p, ok := b.(*Primitive); ok && p.Kind == KindNull {
@@ -154,12 +153,12 @@ func (g *Generator) union(u *Union, depth int) (any, error) {
 		valueBranches = append(valueBranches, b)
 	}
 
-	if u.NullIndex() >= 0 && g.rng.Intn(10) < 3 {
+	if u.NullIndex() >= 0 && g.synth.Chance(30) {
 		return map[string]any{"null": nil}, nil
 	}
 
-	branch := valueBranches[g.rng.Intn(len(valueBranches))]
-	v, err := g.value(branch, "", depth+1)
+	branch := valueBranches[g.synth.Pick(len(valueBranches))]
+	v, err := g.value(branch, name, depth+1)
 	if err != nil {
 		return nil, err
 	}
@@ -194,11 +193,11 @@ func unionBranchName(t Type) string {
 	}
 }
 
-func (g *Generator) array(arr *Array, depth int) (any, error) {
-	count := 1 + g.rng.Intn(5)
+func (g *Generator) array(arr *Array, name string, depth int) (any, error) {
+	count := int(g.synth.Int(1, 5))
 	result := make([]any, 0, count)
 	for i := 0; i < count; i++ {
-		item, err := g.value(arr.Items, "", depth+1)
+		item, err := g.value(arr.Items, name, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -207,11 +206,11 @@ func (g *Generator) array(arr *Array, depth int) (any, error) {
 	return result, nil
 }
 
-func (g *Generator) mapValue(m *Map, depth int) (any, error) {
-	count := 1 + g.rng.Intn(4)
+func (g *Generator) mapValue(m *Map, name string, depth int) (any, error) {
+	count := int(g.synth.Int(1, 4))
 	result := make(map[string]any, count)
 	for i := 0; i < count; i++ {
-		v, err := g.value(m.Values, "", depth+1)
+		v, err := g.value(m.Values, name, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -227,8 +226,8 @@ func (g *Generator) fixed(f *Fixed) (any, error) {
 		return g.decimalValue(f.Logical)
 	}
 	arr := reflect.New(reflect.ArrayOf(f.Size, reflect.TypeOf(byte(0)))).Elem()
-	for i := 0; i < f.Size; i++ {
-		arr.Index(i).SetUint(uint64(g.rng.Intn(256)))
+	for i, b := range g.synth.Bytes(f.Size) {
+		arr.Index(i).SetUint(uint64(b))
 	}
 	return arr.Interface(), nil
 }
@@ -241,22 +240,19 @@ func (g *Generator) primitive(p *Primitive, name string) (any, error) {
 	case KindNull:
 		return nil, nil
 	case KindBoolean:
-		return g.rng.Intn(2) == 1, nil
+		return g.synth.Chance(50), nil
 	case KindInt:
-		return int32(g.rng.Intn(1000)), nil
+		return int32(g.synth.Int(0, 999)), nil
 	case KindLong:
-		return int64(g.rng.Intn(1000)), nil
+		return g.synth.Int(0, 999), nil
 	case KindFloat:
-		return float32(g.rng.Float64() * 1000), nil
+		return float32(g.synth.Float(0, 1000)), nil
 	case KindDouble:
-		return g.rng.Float64() * 1000, nil
+		return g.synth.Float(0, 1000), nil
 	case KindBytes:
-		n := 4 + g.rng.Intn(5)
-		b := make([]byte, n)
-		g.rng.Read(b)
-		return b, nil
+		return g.synth.Bytes(int(g.synth.Int(4, 8))), nil
 	case KindString:
-		return g.stringByFieldName(name), nil
+		return g.synth.Text(name), nil
 	default:
 		return nil, &GenerateError{Detail: fmt.Sprintf("unsupported primitive kind %q", p.Kind)}
 	}
@@ -266,18 +262,15 @@ func (g *Generator) primitive(p *Primitive, name string) (any, error) {
 func (g *Generator) logical(p *Primitive, name string) (any, error) {
 	switch p.Logical.Kind {
 	case LogicalDate:
-		days := g.baseTime.Unix()/86400 - int64(g.rng.Intn(3650))
-		return time.Unix(days*86400, 0).UTC(), nil
+		return g.synth.Instant().UTC().Truncate(24 * time.Hour), nil
 	case LogicalTimestampMillis:
-		ms := g.baseTime.UnixMilli() - g.rng.Int63n(365*24*3600*1000)
-		return time.UnixMilli(ms).UTC(), nil
+		return g.synth.Instant().UTC().Truncate(time.Millisecond), nil
 	case LogicalTimestampMicros:
-		us := g.baseTime.UnixMicro() - int64(g.rng.Intn(365*24*3600*1000_000))
-		return time.UnixMicro(us).UTC(), nil
+		return g.synth.Instant().UTC().Truncate(time.Microsecond), nil
 	case LogicalTimeMillis:
-		return time.Duration(g.rng.Intn(86400*1000)) * time.Millisecond, nil
+		return time.Duration(g.synth.Int(0, 86400*1000-1)) * time.Millisecond, nil
 	case LogicalTimeMicros:
-		return time.Duration(g.rng.Intn(86400*1000_000)) * time.Microsecond, nil
+		return time.Duration(g.synth.Int(0, 86400*1000_000-1)) * time.Microsecond, nil
 	case LogicalDecimal:
 		return g.decimalValue(p.Logical)
 	default:
@@ -297,9 +290,9 @@ func (g *Generator) decimalValue(lt *LogicalType) (*big.Rat, error) {
 		return nil, &GenerateError{Detail: fmt.Sprintf("decimal precision %d is out of range", lt.Precision)}
 	}
 	b := make([]byte, digits)
-	b[0] = byte('1' + g.rng.Intn(9))
+	b[0] = byte('1' + g.synth.Pick(9))
 	for i := 1; i < digits; i++ {
-		b[i] = byte('0' + g.rng.Intn(10))
+		b[i] = byte('0' + g.synth.Pick(10))
 	}
 	mantissa, ok := new(big.Int).SetString(string(b), 10)
 	if !ok {
@@ -307,50 +300,4 @@ func (g *Generator) decimalValue(lt *LogicalType) (*big.Rat, error) {
 	}
 	scaleFactor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(lt.Scale)), nil)
 	return new(big.Rat).SetFrac(mantissa, scaleFactor), nil
-}
-
-// stringByFieldName produces readable test strings for well-known field names
-// and random strings otherwise, mirroring the JSON generator's heuristics.
-func (g *Generator) stringByFieldName(name string) string {
-	lower := strings.ToLower(name)
-	switch {
-	case strings.Contains(lower, "id"):
-		return g.generateUUID()
-	case strings.Contains(lower, "email"):
-		return fmt.Sprintf("%s@example.com", g.randomLower(8))
-	case strings.Contains(lower, "url") || strings.Contains(lower, "uri"):
-		return fmt.Sprintf("https://example.com/%s", g.randomLower(6))
-	case strings.Contains(lower, "sku"):
-		return fmt.Sprintf("%s-%s-%04d", g.randomUpper(3), g.randomUpper(2), g.rng.Intn(10000))
-	case strings.Contains(lower, "phone"):
-		return fmt.Sprintf("+1-%03d-%03d-%04d", g.rng.Intn(900)+100, g.rng.Intn(900)+100, g.rng.Intn(10000))
-	default:
-		return g.randomLower(8)
-	}
-}
-
-func (g *Generator) generateUUID() string {
-	b := make([]byte, 16)
-	g.rng.Read(b)
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-func (g *Generator) randomLower(length int) string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = chars[g.rng.Intn(len(chars))]
-	}
-	return string(b)
-}
-
-func (g *Generator) randomUpper(length int) string {
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = byte('A' + g.rng.Intn(26))
-	}
-	return string(b)
 }

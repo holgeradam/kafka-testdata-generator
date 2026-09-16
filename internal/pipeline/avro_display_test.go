@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // Compile-time check: AvroDisplayEncoder must satisfy the Encoder interface.
@@ -112,7 +113,7 @@ func TestAvroDisplayEncoderConformanceProperty(t *testing.T) {
 		model := testDisplayModel(t, avsc)
 		enc := NewAvroDisplayEncoder(model)
 		for seed := int64(0); seed < 5; seed++ {
-			value, err := avro.NewGenerator(seed, testNow()).Value(model.Root)
+			value, err := avro.NewGenerator(synth.New(seed, testNow())).Value(model.Root)
 			if err != nil {
 				t.Fatalf("seed %d: generation failed: %v", seed, err)
 			}

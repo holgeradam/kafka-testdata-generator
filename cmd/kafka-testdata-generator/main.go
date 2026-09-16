@@ -142,7 +142,10 @@ func main() {
 		keyBinding = nil
 	}
 
-	gen := generator.New(synth.New(*seed, nowFlag.now))
+	// One Synthesizer per run: the Payload and the Key draw from one shared
+	// stream in both wire formats (ADR-0008 decision 4).
+	synthesizer := synth.New(*seed, nowFlag.now)
+	gen := generator.New(synthesizer)
 	gen.SetRefResolver(doc.ResolveRef)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,8 +203,9 @@ func main() {
 	// (ADR-0007 decision 3); the adapter keeps the Pipeline on the same seam by
 	// ignoring the JSON schema argument.
 	valueGenerator := pipeline.ValueGenerator(gen)
+	avroGen := avro.NewGenerator(synthesizer)
 	if formatFlag.format == "avro" {
-		valueGenerator = &avroValueGenerator{generator: avro.NewGenerator(*seed, nowFlag.now), model: avroModel}
+		valueGenerator = &avroValueGenerator{generator: avroGen, model: avroModel}
 	}
 
 	// AVRO keys come from the key avsc (ADR-0007 decision 3, issue #24): the
@@ -209,7 +213,7 @@ func main() {
 	// key model so the encoder can frame it under the key subject's registry ID.
 	var keyGenerator pipeline.ValueGenerator
 	if formatFlag.format == "avro" && avroKeyModel != nil {
-		keyGenerator = &avroValueGenerator{generator: avro.NewGenerator(*seed, nowFlag.now), model: avroKeyModel}
+		keyGenerator = &avroValueGenerator{generator: avroGen, model: avroKeyModel}
 	}
 
 	enc, err := newEncoder(ctx, formatFlag.format, *registryURL, *channel, avroModel, avroKeyModel, *dryRun)

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func TestRenderPrimitives(t *testing.T) {
@@ -484,7 +486,7 @@ func TestRenderConformanceProperty(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			root := mustParse(t, fx.avsc).Root
 			for seed := int64(0); seed < 6; seed++ {
-				value, err := NewGenerator(seed, now).Value(root)
+				value, err := NewGenerator(synth.New(seed, now)).Value(root)
 				if err != nil {
 					t.Fatalf("seed %d: generation failed: %v", seed, err)
 				}
