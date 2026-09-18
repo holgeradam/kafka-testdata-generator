@@ -1332,3 +1332,50 @@ func TestScenarioAvroKeyAndPayloadShareOneStream(t *testing.T) {
 		t.Errorf("Key %q mirrors the Payload's first draw %q; want one shared stream", key[1], payload["note"])
 	}
 }
+
+// TestScenarioExtendedHeuristicsBothFormats proves the four extension bundles
+// (#43) reach both wire formats through the one Synthesizer: identical values
+// for the same field names, seed and now, and none of them random text.
+func TestScenarioExtendedHeuristicsBothFormats(t *testing.T) {
+	bin := buildBinary(t)
+	fields := []string{"company", "hostname", "iban", "ip", "jobTitle", "language", "postalCode", "state", "timezone", "username"}
+
+	spec := "asyncapi: '2.6.0'\ninfo: {title: Ext, version: '1.0.0'}\nchannels:\n  orders:\n    publish:\n      message:\n        payload:\n          type: object\n          required: [" + strings.Join(fields, ", ") + "]\n          properties:\n"
+	var avscFields []string
+	for _, f := range fields {
+		spec += "            " + f + ": {type: string}\n"
+		avscFields = append(avscFields, `{"name":"`+f+`","type":"string"}`)
+	}
+	specPath := writeTempSpec(t, spec)
+	avsc := writeTempAvsc(t, "ext.avsc", `{"type":"record","name":"Ext","fields":[`+strings.Join(avscFields, ",")+`]}`)
+
+	run := func(extra ...string) map[string]any {
+		args := append([]string{"-spec", specPath, "-channel", "orders", "-dry-run", "-count", "1",
+			"-seed", "5", "-now", "2026-09-18T00:00:00Z"}, extra...)
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("command failed: %v\noutput: %s", err, out)
+		}
+		lines := filterJSONLines(string(out))
+		if len(lines) != 1 {
+			t.Fatalf("expected 1 JSON line, got %d\n%s", len(lines), out)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
+			t.Fatalf("unmarshal %q: %v", lines[0], err)
+		}
+		return m
+	}
+	jsonOut := run()
+	avroOut := run("-format", "avro", "-avro-schema", avsc)
+
+	random := regexp.MustCompile(`^[a-z0-9]{8}$`)
+	for _, f := range fields {
+		if jsonOut[f] != avroOut[f] {
+			t.Errorf("%s: JSON %q, AVRO %q; want identical values", f, jsonOut[f], avroOut[f])
+		}
+		if s, _ := jsonOut[f].(string); random.MatchString(s) {
+			t.Errorf("%s: value %q is random text, want a heuristic value", f, s)
+		}
+	}
+}

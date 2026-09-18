@@ -225,6 +225,23 @@ order:
 | `currency` | ISO 4217 currency code |
 | `url`, `uri` | URL |
 | `sku` | SKU |
+| `ip`, `ipAddress`, `ipv4` | IPv4 from the RFC 5737 documentation ranges |
+| `username`, `login`, `handle`, or `user` + `name` | handle (`alice.roberts42`) |
+| `filename`, or `file` + `name` | file name with extension (`report-4821.pdf`) |
+| `countrycode`, or `country` + `code` | ISO 3166-1 alpha-2 code |
+| `zip`, `postcode`, or `postal` + `code` | 5-digit postal code |
+| `state`, `region`, `province` | region name |
+| `address`, `addressline` | street address with city |
+| `company`, `organization`, `employer` | company name |
+| `title`, `jobtitle` | job title |
+| `hostname`, `host`, `domain` | host under an RFC 2606 example domain |
+| `language`, `locale` | BCP 47 tag (`en-US`) |
+| `timezone`, `tz` | IANA time zone (`Europe/Berlin`) |
+| `iban` | IBAN with valid ISO 13616 check digits |
+
+A name word only means a person when no more specific category claims the
+field: `companyName` is a company, `fileName` a file, `cityName` a city, while
+`customerName` and a bare `name` are people.
 
 Other names get random text. Whole-word matching means `width` or `capacity`
 stay random rather than becoming a UUID or a city. Array items, map values and
