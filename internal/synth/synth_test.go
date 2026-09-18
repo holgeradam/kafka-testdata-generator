@@ -2,6 +2,7 @@ package synth
 
 import (
 	"errors"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strings"
@@ -80,6 +81,11 @@ func TestTextHeuristics(t *testing.T) {
 		m := street.FindStringSubmatch(v)
 		return m != nil && slices.Contains(streets, m[1])
 	}
+	address := regexp.MustCompile(`^\d{1,4} (.+), (.+)$`)
+	isAddress := func(v string) bool {
+		m := address.FindStringSubmatch(v)
+		return m != nil && slices.Contains(streets, m[1]) && slices.Contains(cities, m[2])
+	}
 
 	cases := []struct {
 		category string
@@ -92,14 +98,27 @@ func TestTextHeuristics(t *testing.T) {
 		{"last name", []string{"lastName", "last_name", "lastname", "surname"}, inPool(surnames)},
 		{"full name", []string{"name", "customerName", "fullName"}, fullName},
 		{"phone", []string{"phone", "phoneNumber", "telephone"}, phoneRe.MatchString},
-		{"city", []string{"city", "billingCity", "cities"}, inPool(cities)},
+		{"city", []string{"city", "billingCity", "cities", "cityName"}, inPool(cities)},
 		{"country", []string{"country", "shippingCountry"}, inPool(countries)},
-		{"street", []string{"street", "streetAddress"}, isStreet},
-		{"status", []string{"status", "orderStatus", "statuses"}, inPool(statuses)},
+		{"street", []string{"street", "streetAddress", "streetName"}, isStreet},
+		{"status", []string{"status", "orderStatus", "statuses", "statusName"}, inPool(statuses)},
 		{"description", []string{"description", "itemDescription"}, inPool(descriptions)},
 		{"currency", []string{"currency", "priceCurrency", "currencies"}, inPool(currencies)},
 		{"url", []string{"url", "websiteUrl", "imageURL", "callbackUri"}, urlRe.MatchString},
 		{"sku", []string{"sku", "productSku"}, skuRe.MatchString},
+		{"zip", []string{"zip", "zipCode", "postcode", "postalCode"}, regexp.MustCompile(`^\d{5}$`).MatchString},
+		{"region", []string{"state", "region", "province", "billingState"}, inPool(regions)},
+		{"country code", []string{"countryCode", "country_code"}, regexp.MustCompile(`^[A-Z]{2}$`).MatchString},
+		{"address line", []string{"address", "addressLine", "billing_address"}, isAddress},
+		{"username", []string{"username", "userName", "login", "handle"}, regexp.MustCompile(`^[a-z]+\.[a-z]+\d{1,2}$`).MatchString},
+		{"company", []string{"company", "organization", "employer", "companyName"}, inPool(companies)},
+		{"job title", []string{"title", "jobTitle"}, inPool(jobTitles)},
+		{"ipv4", []string{"ip", "ipAddress", "ipv4", "clientIp"}, isDocIPv4},
+		{"hostname", []string{"hostname", "host", "domain", "targetHost"}, isHostname},
+		{"file name", []string{"fileName", "filename", "attachmentFileName"}, regexp.MustCompile(`^[a-z]+-\d{4}\.(pdf|csv|xlsx|png|json)$`).MatchString},
+		{"language", []string{"language", "locale", "contentLanguage"}, inPool(languages)},
+		{"timezone", []string{"timezone", "tz", "userTimezone"}, isTimezone},
+		{"iban", []string{"iban", "creditorIban"}, isIBAN},
 		{"fallback", []string{"", "width", "capacity", "security", "valid", "provider", "video", "during", "husky", "notes"}, fallRe.MatchString},
 	}
 
@@ -227,4 +246,59 @@ func TestPatternUnsupported(t *testing.T) {
 			t.Errorf("Pattern(%q) = {Pattern %q, Construct %q}, want construct %q", p, pe.Pattern, pe.Construct, construct)
 		}
 	}
+}
+
+// isDocIPv4 reports whether v is an IPv4 address from the documentation ranges
+// reserved by RFC 5737, so generated data can never name a real host.
+func isDocIPv4(v string) bool {
+	ip, err := netip.ParseAddr(v)
+	if err != nil || !ip.Is4() {
+		return false
+	}
+	for _, block := range []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"} {
+		if netip.MustParsePrefix(block).Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isHostname reports whether v is a host under an RFC 2606 example domain.
+func isHostname(v string) bool {
+	host, domain, ok := strings.Cut(v, ".")
+	return ok && host != "" && slices.Contains([]string{"example.com", "example.net", "example.org"}, domain)
+}
+
+// isTimezone reports whether v names a zone the tz database knows.
+func isTimezone(v string) bool {
+	_, err := time.LoadLocation(v)
+	return err == nil
+}
+
+// isIBAN reports whether v is a well-formed IBAN whose ISO 13616 check digits
+// validate: move the first four characters to the end, map letters to numbers
+// (A=10) and require the result mod 97 to be 1.
+func isIBAN(v string) bool {
+	if len(v) < 15 || len(v) > 34 {
+		return false
+	}
+	rearranged := v[4:] + v[:4]
+	rem := 0
+	for _, r := range rearranged {
+		var n int
+		switch {
+		case r >= '0' && r <= '9':
+			n = int(r - '0')
+		case r >= 'A' && r <= 'Z':
+			n = int(r-'A') + 10
+		default:
+			return false
+		}
+		if n > 9 {
+			rem = (rem*100 + n) % 97
+		} else {
+			rem = (rem*10 + n) % 97
+		}
+	}
+	return rem == 1
 }
