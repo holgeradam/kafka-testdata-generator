@@ -1320,9 +1320,9 @@ func TestScenarioKeyPathRejectedAtStartup(t *testing.T) {
 	}
 }
 
-// TestScenarioAvroKeyPathRejected proves -keyPath is not accepted under AVRO
-// yet (planting under AVRO is issue #52).
-func TestScenarioAvroKeyPathRejected(t *testing.T) {
+// TestScenarioAvroKeyPathRequiresKeySchema proves -keyPath under AVRO needs the
+// key avsc: without it there is no Key to plant.
+func TestScenarioAvroKeyPathRequiresKeySchema(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
@@ -1330,9 +1330,87 @@ func TestScenarioAvroKeyPathRejected(t *testing.T) {
 	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
 		"-dry-run", "-format", "avro", "-avro-schema", avsc, "-keyPath", "id").CombinedOutput()
 	if err == nil {
-		t.Fatal("expected -keyPath under -format avro to be rejected")
+		t.Fatal("expected -keyPath without -avro-key-schema to be rejected")
 	}
-	if !strContains(string(out), "-keyPath is not valid with -format avro") {
-		t.Errorf("expected the avro rejection, got: %s", out)
+	if !strContains(string(out), "-keyPath requires -avro-key-schema") {
+		t.Errorf("expected the key-avsc requirement error, got: %s", out)
+	}
+}
+
+// TestScenarioAvroKeyPathPlantsIntoPayload is the acceptance case of #52: the
+// Key generated from the key avsc is planted into the Avro payload, so the
+// echoed Key equals the value the payload renders at that path.
+func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[
+		{"name":"ref","type":{"type":"string","logicalType":"uuid"}},
+		{"name":"customer","type":{"type":"record","name":"Customer","fields":[{"name":"id","type":"string"}]}}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+
+	for _, path := range []string{"ref", "customer.id"} {
+		t.Run(path, func(t *testing.T) {
+			key := keyAvsc
+			if path == "ref" {
+				key = writeTempAvsc(t, "uuidkey.avsc", `{"type":"string","logicalType":"uuid"}`)
+			}
+			cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+				"-dry-run", "-count", "3", "-seed", "9", "-format", "avro",
+				"-avro-schema", valueAvsc, "-avro-key-schema", key, "-keyPath", path)
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+			}
+			keys := regexp.MustCompile(`Key: (.+)`).FindAllStringSubmatch(stderr.String(), -1)
+			lines := filterJSONLines(stdout.String())
+			if len(keys) != 3 || len(lines) != 3 {
+				t.Fatalf("expected 3 keys and 3 payloads, got %d and %d\nstderr: %s", len(keys), len(lines), stderr.String())
+			}
+			for i, line := range lines {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(line), &payload); err != nil {
+					t.Fatalf("record %d: unmarshal: %v", i, err)
+				}
+				if got := keyAt(t, payload, path); got != keys[i][1] {
+					t.Errorf("record %d: Key %q, payload holds %v at %s", i, keys[i][1], got, path)
+				}
+			}
+		})
+	}
+}
+
+// TestScenarioAvroKeyPathRejectedAtStartup proves the avsc checker refuses a
+// path whose value is not in every record, or whose type is not the Key's.
+func TestScenarioAvroKeyPathRejectedAtStartup(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[
+		{"name":"maybe","type":["null","string"]},
+		{"name":"tags","type":{"type":"array","items":"string"}},
+		{"name":"seq","type":"long"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+
+	cases := []struct{ name, path, want string }{
+		{"nullable union", "maybe", "union"},
+		{"array index", "tags[0]", "array"},
+		{"type mismatch", "seq", "key avsc"},
+		{"unknown field", "missing", "no field"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+				"-dry-run", "-count", "2", "-format", "avro",
+				"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc, "-keyPath", c.path).CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected -keyPath %q to be rejected", c.path)
+			}
+			if !strContains(string(out), c.want) {
+				t.Errorf("expected the error to mention %q, got: %s", c.want, out)
+			}
+			if len(filterJSONLines(string(out))) != 0 {
+				t.Errorf("no record may be generated when the path is rejected, got: %s", out)
+			}
+		})
 	}
 }

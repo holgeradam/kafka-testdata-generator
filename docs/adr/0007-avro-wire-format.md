@@ -87,6 +87,14 @@ only for encoding; the whole vertical is now pure Go).
 - `-avro-key-schema` is the only AVRO key source: `-key` is a flag error under AVRO, and
   combining them fails the mutual-exclusion check (flag-validation error).
 
+Amended (2026-09-20, ADR-0009): `-key` no longer exists, and its successor `-keyPath` does not
+compete with the key avsc: the avsc still generates the Key, and the path only says where that
+value is mirrored into the payload. Under `-format avro`, `-keyPath` therefore *requires*
+`-avro-key-schema` instead of excluding it. The avsc checker validates the path first: only
+record fields are guaranteed in Avro, so a step into a union, an array or a map is refused, and
+the type at the path must be the key avsc's type (same primitive kind and logical overlay, or
+the same full name for a named type).
+
 ### 7. Dry run never contacts a registry
 
 Dry run generates from the local avsc and renders records readably, without any registry

@@ -121,7 +121,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
   encoded bytes stay registry-valid because the serializer treats it the same way. A supported
   logical type on the wrong base type (say `date` on a string) is a malformed avsc and fails.
 - Spec key bindings are ignored under `-format avro` (warning): the AVRO key comes exclusively
-  from `-avro-key-schema`, and `-keyPath` planting is not accepted there yet.
+  from `-avro-key-schema`, which `-keyPath` requires there.
 
 ## CLI Options
 
@@ -132,7 +132,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-broker` | `localhost:9092` | Kafka broker address |
 | `-count` | `10` | Number of records to generate (0 = infinite) |
 | `-rate` | `10ms` | Minimum time between messages |
-| `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema; `-format json` only) |
+| `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | current time | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
@@ -181,8 +181,11 @@ than producing records whose key is missing from the payload.
 JSON key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`),
 a number as its decimal text, and an object or array as JSON. This matches standard Kafka key
 conventions where the key is the raw serialized value, not a JSON wrapper. In **AVRO mode** the
-Key comes from the key avsc, is registered under `<channel>-key` and framed like the payload;
-`-keyPath` is not accepted there yet.
+Key comes from the key avsc, is registered under `<channel>-key` and framed like the payload.
+`-keyPath` works there too and requires `-avro-key-schema`; since only record fields are
+guaranteed in Avro, a path stepping into a union, an array or a map is rejected, and the type
+at the path must be the key avsc's type (same primitive kind and logical overlay, or the same
+full name for a record, enum or fixed).
 
 > **Renamed:** `-key` became `-keyPath` and changed meaning. It used to extract a payload field
 > as the key; it now plants the generated Key into the payload and requires a key schema.
