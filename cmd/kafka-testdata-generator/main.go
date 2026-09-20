@@ -72,10 +72,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// AVRO flag surface (ADR-0007 decision 6): the avro flags are invalid for
-	// json; under avro, -avro-schema is required and the Key comes from
-	// -avro-key-schema. Planting it into the payload via -keyPath lands with
-	// the avsc checker (issue #52), so the flag is rejected here for now.
+	// AVRO flag surface (ADR-0007 decision 6, amended by ADR-0009): the avro
+	// flags are invalid for json; under avro, -avro-schema is required and the
+	// Key comes from -avro-key-schema, which -keyPath therefore requires.
 	// Validation happens before any file is loaded.
 	if formatFlag.format == "avro" {
 		if *avroSchemaPath == "" {
@@ -83,8 +82,8 @@ func main() {
 			flag.Usage()
 			os.Exit(1)
 		}
-		if *keyPath != "" {
-			fmt.Fprintln(os.Stderr, "Error: -keyPath is not valid with -format avro yet; the AVRO key comes from -avro-key-schema and is not planted into the payload")
+		if *keyPath != "" && *avroKeySchemaPath == "" {
+			fmt.Fprintln(os.Stderr, "Error: -keyPath requires -avro-key-schema under -format avro, so there is a Key to plant")
 			flag.Usage()
 			os.Exit(1)
 		}
@@ -139,7 +138,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *keyPath != "" && keyBinding == nil {
+	if *keyPath != "" && formatFlag.format != "avro" && keyBinding == nil {
 		fmt.Fprintln(os.Stderr, "Error: -keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant")
 		flag.Usage()
 		os.Exit(1)
@@ -231,6 +230,7 @@ func main() {
 		keyBinding:   keyBinding,
 		resolveRef:   doc.ResolveRef,
 		jsonKeyGen:   gen,
+		avroModel:    avroModel,
 		avroKeyModel: avroKeyModel,
 		avroGen:      avroGen,
 	})
@@ -272,6 +272,7 @@ type keyPlanInputs struct {
 	keyBinding   map[string]any
 	resolveRef   func(string) (map[string]any, error)
 	jsonKeyGen   pipeline.ValueGenerator
+	avroModel    *avro.Schema
 	avroKeyModel *avro.Schema
 	avroGen      *avro.Generator
 }
@@ -285,9 +286,10 @@ func newKeyPlan(in keyPlanInputs) (pipeline.KeyPlan, error) {
 	)
 	switch {
 	case in.format == "avro" && in.avroKeyModel != nil:
-		// Planting under AVRO lands with the avsc checker (issue #52); until
-		// then the key avsc only produces the Key.
 		keyGen = &schemaKeyGenerator{gen: &avroValueGenerator{generator: in.avroGen, model: in.avroKeyModel}}
+		if in.path != "" {
+			checker = avro.NewKeyChecker(in.avroModel, in.avroKeyModel)
+		}
 	case in.format != "avro" && in.keyBinding != nil:
 		keyGen = &schemaKeyGenerator{gen: in.jsonKeyGen, schema: in.keyBinding}
 		if in.path != "" {

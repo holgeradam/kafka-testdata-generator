@@ -15,6 +15,7 @@ import (
 	avro2 "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -409,3 +410,84 @@ func TestAvroEncoderKeyConformanceProperty(t *testing.T) {
 		})
 	}
 }
+
+// TestAvroEncoderFramesPlantedKey is the round-trip acceptance of #52: with a
+// key avsc and a -keyPath, the Confluent-framed Key a consumer decodes is the
+// same value the decoded Payload carries at that path.
+func TestAvroEncoderFramesPlantedKey(t *testing.T) {
+	valueAvsc := `{"type":"record","name":"Order","fields":[` +
+		`{"name":"ref","type":"string"},` +
+		`{"name":"customer","type":{"type":"record","name":"Customer","fields":[{"name":"id","type":"string"}]}}]}`
+	keyAvsc := `{"type":"string"}`
+
+	valueModel, err := avro.Parse([]byte(valueAvsc))
+	if err != nil {
+		t.Fatalf("value model parse failed: %v", err)
+	}
+	keyModel, err := avro.Parse([]byte(keyAvsc))
+	if err != nil {
+		t.Fatalf("key model parse failed: %v", err)
+	}
+
+	srv, _ := fakeRegistry(t, map[string]int{"orders-value": 11, "orders-key": 12})
+	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", valueAvsc, keyAvsc)
+	if err != nil {
+		t.Fatalf("NewAvroEncoder: %v", err)
+	}
+	api := avro2.Config{}.Freeze()
+	cfValue, err := avro2.Parse(valueAvsc)
+	if err != nil {
+		t.Fatalf("confluent parse failed: %v", err)
+	}
+	cfKey, err := avro2.Parse(keyAvsc)
+	if err != nil {
+		t.Fatalf("confluent key parse failed: %v", err)
+	}
+
+	gen := avro.NewGenerator(synth.New(4, testNow()))
+	plan, err := keyplan.New(&avroKeyGenerator{gen: gen, model: keyModel},
+		avro.NewKeyChecker(valueModel, keyModel), "customer.id")
+	if err != nil {
+		t.Fatalf("keyplan.New: %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		payload, err := gen.Value(valueModel.Root)
+		if err != nil {
+			t.Fatalf("record %d: generation failed: %v", i, err)
+		}
+		key, err := plan.Apply(payload)
+		if err != nil {
+			t.Fatalf("record %d: Apply failed: %v", i, err)
+		}
+		keyWire, valueWire, err := enc.Encode(key, payload)
+		if err != nil {
+			t.Fatalf("record %d: Encode failed: %v", i, err)
+		}
+		if keyWire[0] != 0x00 || keyWire[4] != 12 {
+			t.Fatalf("record %d: key wire prefix %v, want magic 0x00 + id 12", i, keyWire[:5])
+		}
+
+		var decodedKey string
+		if err := api.Unmarshal(cfKey, keyWire[5:], &decodedKey); err != nil {
+			t.Fatalf("record %d: a consumer could not decode the key: %v", i, err)
+		}
+		var decodedValue map[string]any
+		if err := api.Unmarshal(cfValue, valueWire[5:], &decodedValue); err != nil {
+			t.Fatalf("record %d: a consumer could not decode the payload: %v", i, err)
+		}
+		planted := decodedValue["customer"].(map[string]any)["id"]
+		if planted != decodedKey {
+			t.Errorf("record %d: decoded key %q, payload holds %v at customer.id", i, decodedKey, planted)
+		}
+	}
+}
+
+// avroKeyGenerator binds the key avsc model to the generator, the way the
+// process edge does.
+type avroKeyGenerator struct {
+	gen   *avro.Generator
+	model *avro.Schema
+}
+
+func (g *avroKeyGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }

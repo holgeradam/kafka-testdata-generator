@@ -37,7 +37,7 @@ The run's rule for the Key: generate it from the Key schema and, when a **Key pa
 _Avoid_: key source, key strategy
 
 **Key path**:
-Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every record and the type there can hold the Key; both are checked before the run starts.
+Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every record and the type there can hold the Key; both are checked before the run starts, against whichever schema language governs the Payload.
 
 **Dry run**:
 Mode where the tool generates records and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its records readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats.
