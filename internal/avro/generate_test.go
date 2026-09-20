@@ -380,3 +380,90 @@ func TestGenerateInstantsWithinWindow(t *testing.T) {
 		}
 	}
 }
+
+// TestGenerateUUIDLogicalType proves the uuid logical type generates a UUID
+// string (#45); the encoder takes a plain string for it.
+func TestGenerateUUIDLogicalType(t *testing.T) {
+	root := mustParse(t, `{"type":"record","name":"U","fields":[{"name":"ref","type":{"type":"string","logicalType":"uuid"}}]}`).Root
+	uuidRe := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	g := NewGenerator(synth.New(7, time.Now()))
+	for i := 0; i < 20; i++ {
+		rec := mustValue(t, g, root).(map[string]any)
+		if s, ok := rec["ref"].(string); !ok || !uuidRe.MatchString(s) {
+			t.Fatalf("uuid logical type = %#v, want a UUID string", rec["ref"])
+		}
+	}
+}
+
+// TestGenerateLocalTimestamps proves the local-timestamp logical types generate
+// instants like their UTC counterparts; the encoder takes time.Time for both.
+func TestGenerateLocalTimestamps(t *testing.T) {
+	root := mustParse(t, `{"type":"record","name":"L","fields":[
+		{"name":"lms","type":{"type":"long","logicalType":"local-timestamp-millis"}},
+		{"name":"lus","type":{"type":"long","logicalType":"local-timestamp-micros"}}
+	]}`).Root
+	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	g := NewGenerator(synth.New(7, now))
+	for i := 0; i < 50; i++ {
+		rec := mustValue(t, g, root).(map[string]any)
+		for _, f := range []string{"lms", "lus"} {
+			v, ok := rec[f].(time.Time)
+			if !ok {
+				t.Fatalf("%s = %#v, want time.Time", f, rec[f])
+			}
+			if v.After(now) || now.Sub(v) > 365*24*time.Hour {
+				t.Fatalf("%s = %v, outside the 365 days before %v", f, v, now)
+			}
+		}
+	}
+}
+
+// TestParseUnknownLogicalTypeFallsBack proves an unknown logical type is
+// ignored and the underlying type governs, as the Avro spec requires, rather
+// than failing Parse (#45).
+func TestParseUnknownLogicalTypeFallsBack(t *testing.T) {
+	root := mustParse(t, `{"type":"record","name":"F","fields":[
+		{"name":"n","type":{"type":"long","logicalType":"timestamp-nanos"}},
+		{"name":"b","type":{"type":"bytes","logicalType":"big-decimal"}},
+		{"name":"c","type":{"type":"string","logicalType":"my-custom"}},
+		{"name":"d","type":{"type":"fixed","name":"D","size":12,"logicalType":"duration"}}
+	]}`).Root
+	rec := mustValue(t, NewGenerator(synth.New(7, time.Now())), root).(map[string]any)
+	if _, ok := rec["n"].(int64); !ok {
+		t.Errorf("timestamp-nanos = %#v, want a plain int64", rec["n"])
+	}
+	if _, ok := rec["b"].([]byte); !ok {
+		t.Errorf("big-decimal = %#v, want plain bytes", rec["b"])
+	}
+	if _, ok := rec["c"].(string); !ok {
+		t.Errorf("custom logical type = %#v, want a plain string", rec["c"])
+	}
+	if got := reflect.TypeOf(rec["d"]); got == nil || got.Kind() != reflect.Array || got.Len() != 12 {
+		t.Errorf("duration = %#v, want a [12]byte fixed", rec["d"])
+	}
+}
+
+// TestParseMistypedKnownLogicalTypeErrors proves a known logical type on the
+// wrong base type still stops Parse: it is a malformed avsc, not an unknown
+// overlay to ignore.
+func TestParseMistypedKnownLogicalTypeErrors(t *testing.T) {
+	for _, avsc := range []string{
+		`{"type":"record","name":"M","fields":[{"name":"d","type":{"type":"string","logicalType":"date"}}]}`,
+		`{"type":"record","name":"M","fields":[{"name":"u","type":{"type":"long","logicalType":"uuid"}}]}`,
+		`{"type":"record","name":"M","fields":[{"name":"t","type":{"type":"string","logicalType":"timestamp-millis"}}]}`,
+	} {
+		if _, err := Parse([]byte(avsc)); err == nil {
+			t.Errorf("expected a ParseError for %s", avsc)
+		}
+	}
+}
+
+// mustValue generates one value from root, failing the test on error.
+func mustValue(t *testing.T, g *Generator, root Type) any {
+	t.Helper()
+	v, err := g.Value(root)
+	if err != nil {
+		t.Fatalf("generation failed: %v", err)
+	}
+	return v
+}

@@ -114,6 +114,12 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
   timestamps as ISO 8601 instants, decimals as base-10 strings) - straight from the local avsc,
   never contacting a registry; a supplied `-registry` draws the standard dry-run warning and is
   ignored.
+- Logical types: `date`, `time-millis`, `time-micros`, `timestamp-millis`, `timestamp-micros`,
+  `local-timestamp-millis`, `local-timestamp-micros`, `decimal` and `uuid` generate values of
+  their semantic kind. Any other logical type, such as `timestamp-nanos`, `big-decimal` or
+  `duration`, is ignored and its base type governs, as the Avro spec requires of readers; the
+  encoded bytes stay registry-valid because the serializer treats it the same way. A supported
+  logical type on the wrong base type (say `date` on a string) is a malformed avsc and fails.
 - Spec key bindings are ignored under `-format avro` (warning), and `-key` field extraction does
   not apply to AVRO (flag error): under `-format avro` the key comes exclusively from
   `-avro-key-schema`.

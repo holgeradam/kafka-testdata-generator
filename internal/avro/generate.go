@@ -267,6 +267,12 @@ func (g *Generator) logical(p *Primitive, name string) (any, error) {
 		return g.synth.Instant().UTC().Truncate(time.Millisecond), nil
 	case LogicalTimestampMicros:
 		return g.synth.Instant().UTC().Truncate(time.Microsecond), nil
+	case LogicalLocalTsMillis:
+		return g.synth.Instant().UTC().Truncate(time.Millisecond), nil
+	case LogicalLocalTsMicros:
+		return g.synth.Instant().UTC().Truncate(time.Microsecond), nil
+	case LogicalUUID:
+		return g.synth.Semantic(synth.UUID), nil
 	case LogicalTimeMillis:
 		return time.Duration(g.synth.Int(0, 86400*1000-1)) * time.Millisecond, nil
 	case LogicalTimeMicros:

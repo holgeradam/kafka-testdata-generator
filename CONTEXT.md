@@ -57,7 +57,7 @@ An explicit Apache Avro schema (JSON) supplied by the user for AVRO mode. It is 
 _Avoid_: avro schema (only when unambiguous), Avro serialization schema
 
 **Avro model**:
-The in-memory form of an avsc produced by `avro.Parse` in `internal/avro`: shared nodes for records, enums, and fixed, plus primitives, unions, arrays, maps, and the in-scope logical types (timestamp-*, date, time-*, decimal). Parsing delegates to the same gogen-avro parser the Confluent Go Avro encoder path uses, so a schema the encoder accepts parses identically into the model; anything the model cannot honour surfaces a `ParseError`. Its root type and raw bytes drive generation in AVRO mode (`avro.Generator`) and registry registration (`AvroEncoder`) the way the Message schema does in JSON mode.
+The in-memory form of an avsc produced by `avro.Parse` in `internal/avro`: shared nodes for records, enums, and fixed, plus primitives, unions, arrays, maps, and the in-scope logical types (timestamp-*, local-timestamp-*, date, time-*, decimal, uuid); a logical type outside that set is ignored and its base type governs. Parsing delegates to the same gogen-avro parser the Confluent Go Avro encoder path uses, so a schema the encoder accepts parses identically into the model; anything the model cannot honour surfaces a `ParseError`. Its root type and raw bytes drive generation in AVRO mode (`avro.Generator`) and registry registration (`AvroEncoder`) the way the Message schema does in JSON mode.
 _Avoid_: parsed schema, avro schema model, generation model
 
 **Output sink**:

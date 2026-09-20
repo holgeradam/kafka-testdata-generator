@@ -40,6 +40,16 @@ generated from the key avsc (via the Pipeline's **KeyGenerator** seam), register
 extraction does not apply to AVRO: it is a flag error on its own, and mutually exclusive with
 `-avro-key-schema` when combined. With no key avsc, records are payload-only (null key).
 
+Amended (2026-09-20, issue #45): the model gains the `uuid` logical type (string
+base) and `local-timestamp-millis`/`-micros` (long base), the three the
+serializer encodes beyond the original set. A logical type the model does not
+know is no longer a parse error: it is ignored and the base type governs, as the
+Avro spec requires of readers. The serializer treats such an overlay the same
+way, so the bytes stay registry-valid: `timestamp-nanos` encodes as a long,
+`big-decimal` as bytes, `duration` as a 12-byte fixed. A logical type the model
+does know, declared on the wrong base type, is still a malformed avsc and stops
+Parse.
+
 ### 4. Conformance is per Wire format
 
 Conformance (ADR-0006) is now defined per format: JSON mode honors the Message schema; AVRO mode

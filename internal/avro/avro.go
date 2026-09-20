@@ -55,17 +55,24 @@ const (
 	LogicalTimeMillis      LogicalTypeKind = "time-millis"
 	LogicalTimeMicros      LogicalTypeKind = "time-micros"
 	LogicalDecimal         LogicalTypeKind = "decimal"
+	LogicalUUID            LogicalTypeKind = "uuid"
+	LogicalLocalTsMillis   LogicalTypeKind = "local-timestamp-millis"
+	LogicalLocalTsMicros   LogicalTypeKind = "local-timestamp-micros"
 )
 
-// logicalBaseOK maps each supported logical kind to the base type Avro
-// requires for it (decimal is validated separately because bytes and fixed are
-// both legal). Unknown kinds are rejected at parse time.
+// logicalBaseOK maps each modelled logical kind to the base type Avro requires
+// for it (decimal is validated separately because bytes and fixed are both
+// legal). A kind outside this map is unknown to the model and falls back to its
+// base type; see parseLogical.
 var logicalBaseOK = map[LogicalTypeKind]TypeKind{
 	LogicalTimestampMillis: KindLong,
 	LogicalTimestampMicros: KindLong,
 	LogicalDate:            KindInt,
 	LogicalTimeMillis:      KindInt,
 	LogicalTimeMicros:      KindLong,
+	LogicalUUID:            KindString,
+	LogicalLocalTsMillis:   KindLong,
+	LogicalLocalTsMicros:   KindLong,
 }
 
 // LogicalType is the semantic overlay an avsc applies to a base type: the
@@ -406,9 +413,12 @@ func enumDefault(e *gogen.EnumDefinition) *string {
 }
 
 // parseLogical validates a declared logicalType against its base kind and
-// returns the overlay, or a typed error when the combination cannot feed the
-// generator (ADR-0007 decision 4: unknown or mis-typed overlays stop the run).
-// A nil attr means no logical type is declared.
+// returns the overlay. A logical type the model does not know is ignored and
+// the base type governs, as the Avro spec requires of readers; the value still
+// encodes, because the serializer treats an unknown overlay as its base type
+// too (timestamp-nanos as a long, duration as a fixed, big-decimal as bytes).
+// A known kind on the wrong base type is a malformed avsc and still stops Parse
+// with a typed error (ADR-0007 decision 4). A nil attr means none is declared.
 func parseLogical(attr any, base TypeKind, precision, scale any) (*LogicalType, error) {
 	name, ok := attr.(string)
 	if !ok || name == "" {
@@ -429,7 +439,7 @@ func parseLogical(attr any, base TypeKind, precision, scale any) (*LogicalType, 
 
 	want, known := logicalBaseOK[kind]
 	if !known {
-		return nil, &ParseError{Detail: fmt.Sprintf("unsupported logicalType %q (supported: timestamp-millis, timestamp-micros, date, time-millis, time-micros, decimal)", name)}
+		return nil, nil
 	}
 	if base != want {
 		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires base type %s, got %s", name, want, base)}
