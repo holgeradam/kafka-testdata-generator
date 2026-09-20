@@ -136,16 +136,35 @@ func TestTextHeuristics(t *testing.T) {
 }
 
 func TestSemantic(t *testing.T) {
+	isDocIPv6 := func(v string) bool {
+		ip, err := netip.ParseAddr(v)
+		// RFC 3849 reserves 2001:db8::/32 for documentation.
+		return err == nil && ip.Is6() && netip.MustParsePrefix("2001:db8::/32").Contains(ip)
+	}
+	cases := []struct {
+		kind Kind
+		name string
+		ok   func(string) bool
+	}{
+		{UUID, "UUID", uuidRe.MatchString},
+		{Email, "Email", emailRe.MatchString},
+		{URL, "URL", urlRe.MatchString},
+		{Hostname, "Hostname", isHostname},
+		{IPv4, "IPv4", isDocIPv4},
+		{IPv6, "IPv6", isDocIPv6},
+		{URIReference, "URIReference", regexp.MustCompile(`^/[a-z]+/\d+$`).MatchString},
+		{URITemplate, "URITemplate", regexp.MustCompile(`^https://[a-z.]+/[a-z]+/\{[a-z]+\}$`).MatchString},
+		{JSONPointer, "JSONPointer", regexp.MustCompile(`^(/[a-z0-9]+)+$`).MatchString},
+		{RelativeJSONPointer, "RelativeJSONPointer", regexp.MustCompile(`^\d(/[a-z0-9]+)+$`).MatchString},
+		{Regex, "Regex", func(v string) bool { _, err := regexp.Compile(v); return err == nil }},
+		{Duration, "Duration", regexp.MustCompile(`^P\d+DT\d+H\d+M$`).MatchString},
+	}
 	s := New(42, fixedNow())
 	for i := 0; i < 50; i++ {
-		if v := s.Semantic(UUID); !uuidRe.MatchString(v) {
-			t.Errorf("Semantic(UUID) = %q", v)
-		}
-		if v := s.Semantic(Email); !emailRe.MatchString(v) {
-			t.Errorf("Semantic(Email) = %q", v)
-		}
-		if v := s.Semantic(URL); !urlRe.MatchString(v) {
-			t.Errorf("Semantic(URL) = %q", v)
+		for _, c := range cases {
+			if v := s.Semantic(c.kind); !c.ok(v) {
+				t.Errorf("Semantic(%s) = %q", c.name, v)
+			}
 		}
 	}
 }
