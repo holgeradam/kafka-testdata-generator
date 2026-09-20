@@ -12,6 +12,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -23,7 +24,8 @@ func main() {
 	broker := flag.String("broker", "localhost:9092", "Kafka broker address")
 	count := flag.Int("count", 10, "Number of payloads to generate (0 = infinite)")
 	rateLimit := flag.Duration("rate", 10*time.Millisecond, "Minimum time between messages")
-	keyField := flag.String("key", "", "Field name to extract as Kafka message key (-format json only)")
+	keyPath := flag.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)")
+	renamedKeyFlag := flag.String("key", "", "deprecated: renamed to -keyPath")
 	dryRun := flag.Bool("dry-run", false, "Generate payloads without producing to Kafka")
 	seed := flag.Int64("seed", time.Now().UnixNano(), "Random seed for reproducibility")
 	nowFlag := newNowFlag()
@@ -33,7 +35,7 @@ func main() {
 	formatFlag := newFormatFlag()
 	flag.Var(formatFlag, "format", "Output wire format: json (default) or avro")
 	avroSchemaPath := flag.String("avro-schema", "", "Path to value avsc file (required with -format avro)")
-	avroKeySchemaPath := flag.String("avro-key-schema", "", "Path to key avsc file (mutually exclusive with -key under -format avro)")
+	avroKeySchemaPath := flag.String("avro-key-schema", "", "Path to key avsc file (the AVRO key schema)")
 	registryURL := flag.String("registry", "", "Confluent Schema Registry base URL (required with -format avro when producing)")
 
 	flag.Usage = func() {
@@ -61,10 +63,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// -key extracted a field from the Payload; -keyPath plants the generated
+	// Key into it (ADR-0009). The meaning changed, so an old invocation stops
+	// with guidance rather than the flag package's bare "not defined".
+	if *renamedKeyFlag != "" {
+		fmt.Fprintln(os.Stderr, "Error: -key was renamed to -keyPath and changed meaning: the Key is generated from the key schema and planted into the payload at that path, never extracted from it. Use -keyPath, together with a key schema (bindings.kafka.key in JSON mode, -avro-key-schema under -format avro).")
+		flag.Usage()
+		os.Exit(1)
+	}
+
 	// AVRO flag surface (ADR-0007 decision 6): the avro flags are invalid for
-	// json; under avro, -avro-schema is required and the key must come from
-	// -avro-key-schema - -key field extraction does not apply to AVRO (issue
-	// #24), so -key alone or together with -avro-key-schema are both errors.
+	// json; under avro, -avro-schema is required and the Key comes from
+	// -avro-key-schema. Planting it into the payload via -keyPath lands with
+	// the avsc checker (issue #52), so the flag is rejected here for now.
 	// Validation happens before any file is loaded.
 	if formatFlag.format == "avro" {
 		if *avroSchemaPath == "" {
@@ -72,13 +83,8 @@ func main() {
 			flag.Usage()
 			os.Exit(1)
 		}
-		if *avroKeySchemaPath != "" && *keyField != "" {
-			fmt.Fprintln(os.Stderr, "Error: -avro-key-schema and -key are mutually exclusive under -format avro")
-			flag.Usage()
-			os.Exit(1)
-		}
-		if *keyField != "" {
-			fmt.Fprintln(os.Stderr, "Error: -key is not valid with -format avro; the AVRO key comes from -avro-key-schema")
+		if *keyPath != "" {
+			fmt.Fprintln(os.Stderr, "Error: -keyPath is not valid with -format avro yet; the AVRO key comes from -avro-key-schema and is not planted into the payload")
 			flag.Usage()
 			os.Exit(1)
 		}
@@ -103,8 +109,8 @@ func main() {
 		}
 	}
 
-	// -key is honoured in dry run (the Key is echoed), so only the options that
-	// reach Kafka or the registry count as disregarded.
+	// -keyPath is honoured in dry run (the Key is echoed), so only the options
+	// that reach Kafka or the registry count as disregarded.
 	brokerSet := false
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "broker" {
@@ -133,10 +139,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *keyPath != "" && keyBinding == nil {
+		fmt.Fprintln(os.Stderr, "Error: -keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant")
+		flag.Usage()
+		os.Exit(1)
+	}
+
 	// Key bindings declare a JSON-schema-shaped key, but under -format avro the
-	// Key is either extracted from the AVRO-native payload (via -key) or stays
-	// null. Generating a JSON-shaped key value would silently violate the avsc
-	// key contract, so bindings are ignored under avro with a warning.
+	// Key comes from the key avsc or stays null. Generating a JSON-shaped key
+	// value would silently violate the avsc key contract, so bindings are
+	// ignored under avro with a warning.
 	if formatFlag.format == "avro" && keyBinding != nil {
 		fmt.Fprintln(os.Stderr, "Warning: key bindings are ignored under -format avro")
 		keyBinding = nil
@@ -208,12 +220,23 @@ func main() {
 		valueGenerator = &avroValueGenerator{generator: avroGen, model: avroModel}
 	}
 
-	// AVRO keys come from the key avsc (ADR-0007 decision 3, issue #24): the
-	// key generator mirrors the value generator, producing each Key from the
-	// key model so the encoder can frame it under the key subject's registry ID.
-	var keyGenerator pipeline.ValueGenerator
-	if formatFlag.format == "avro" && avroKeyModel != nil {
-		keyGenerator = &avroValueGenerator{generator: avroGen, model: avroKeyModel}
+	// The Key plan owns the Key of the run: the key schema generates it, and
+	// -keyPath says where it is planted into the Payload (ADR-0009). Its checks
+	// run here, at the process edge, so an unusable path stops the run before a
+	// single record is generated. No key schema means a null Key.
+	keyPlan, err := newKeyPlan(keyPlanInputs{
+		format:       formatFlag.format,
+		path:         *keyPath,
+		schema:       schema,
+		keyBinding:   keyBinding,
+		resolveRef:   doc.ResolveRef,
+		jsonKeyGen:   gen,
+		avroKeyModel: avroKeyModel,
+		avroGen:      avroGen,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	enc, err := newEncoder(ctx, formatFlag.format, *registryURL, *channel, avroModel, avroKeyModel, *dryRun)
@@ -223,15 +246,13 @@ func main() {
 	}
 
 	p := pipeline.New(pipeline.Config{
-		Generator:    valueGenerator,
-		Schema:       schema,
-		Count:        *count,
-		RateLimit:    *rateLimit,
-		KeyField:     *keyField,
-		KeyBinding:   keyBinding,
-		KeyGenerator: keyGenerator,
-		Encoder:      enc,
-		Warn:         os.Stderr,
+		Generator: valueGenerator,
+		Schema:    schema,
+		Count:     *count,
+		RateLimit: *rateLimit,
+		KeyPlan:   keyPlan,
+		Encoder:   enc,
+		Warn:      os.Stderr,
 	}, sink)
 
 	stats, err := p.Run(ctx)
@@ -241,6 +262,52 @@ func main() {
 	}
 	printStats(stats, *dryRun)
 }
+
+// keyPlanInputs carries what building a Key plan needs from the flags and the
+// loaded schemas, so main reads as one call rather than a second key rulebook.
+type keyPlanInputs struct {
+	format       string
+	path         string
+	schema       map[string]any
+	keyBinding   map[string]any
+	resolveRef   func(string) (map[string]any, error)
+	jsonKeyGen   pipeline.ValueGenerator
+	avroKeyModel *avro.Schema
+	avroGen      *avro.Generator
+}
+
+// newKeyPlan builds the run's Key plan, or nil when no key schema is
+// configured, in which case records carry a null Key.
+func newKeyPlan(in keyPlanInputs) (pipeline.KeyPlan, error) {
+	var (
+		keyGen  keyplan.Generator
+		checker keyplan.Checker
+	)
+	switch {
+	case in.format == "avro" && in.avroKeyModel != nil:
+		// Planting under AVRO lands with the avsc checker (issue #52); until
+		// then the key avsc only produces the Key.
+		keyGen = &schemaKeyGenerator{gen: &avroValueGenerator{generator: in.avroGen, model: in.avroKeyModel}}
+	case in.format != "avro" && in.keyBinding != nil:
+		keyGen = &schemaKeyGenerator{gen: in.jsonKeyGen, schema: in.keyBinding}
+		if in.path != "" {
+			checker = generator.NewKeyChecker(in.schema, in.keyBinding, in.resolveRef)
+		}
+	default:
+		return nil, nil
+	}
+	return keyplan.New(keyGen, checker, in.path)
+}
+
+// schemaKeyGenerator adapts a schema-taking ValueGenerator to the Key plan's
+// no-argument Generator by binding the key schema to it. Under AVRO the schema
+// argument is ignored, since generation follows the key avsc model.
+type schemaKeyGenerator struct {
+	gen    pipeline.ValueGenerator
+	schema map[string]any
+}
+
+func (g *schemaKeyGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
 
 // avroValueGenerator is a pipeline.ValueGenerator adapter: AVRO generation
 // follows the parsed value avsc model, so the JSON schema argument from the

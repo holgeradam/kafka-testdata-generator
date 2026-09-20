@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -213,46 +215,6 @@ func TestRunCountsSendFailures(t *testing.T) {
 	}
 }
 
-func TestRunCountsMissingKey(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	sink := &fakeSink{}
-	// The fake payload lacks the configured key field, so every payload is
-	// missing that key and should be skipped as failed.
-	p := New(Config{Generator: gen, Schema: schemaFor("id"), Count: 3, KeyField: "nope", Encoder: JsonEncoder{}}, sink)
-
-	stats, _ := p.Run(context.Background())
-
-	if stats.Total != 3 || stats.Acked != 0 || stats.Failed != 3 {
-		t.Errorf("expected Total 3, Acked 0, Failed 3, got %+v", stats)
-	}
-	if sink.count() != 0 {
-		t.Errorf("expected no sink calls when key is missing, got %d", sink.count())
-	}
-}
-
-func TestRunWarnsOnMissingKey(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	sink := &fakeSink{}
-	var warn bytes.Buffer
-	p := New(Config{
-		Generator: gen,
-		Schema:    schemaFor("id"),
-		Count:     2,
-		KeyField:  "nope",
-		Encoder:   JsonEncoder{},
-		Warn:      &warn,
-	}, sink)
-
-	stats, _ := p.Run(context.Background())
-
-	if stats.Failed != 2 {
-		t.Errorf("expected 2 failed, got %d", stats.Failed)
-	}
-	if !strings.Contains(warn.String(), `field "nope" not found`) {
-		t.Errorf("expected missing-key warning in Warn writer, got %q", warn.String())
-	}
-}
-
 func TestRunAbortsOnGenerationError(t *testing.T) {
 	sink := &fakeSink{}
 	gen := &fakeGenerator{err: &generator.UnsupportedSchemaError{Keyword: "type", Path: generator.RootPath}}
@@ -279,98 +241,6 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 	}
 	if sink.count() != 0 {
 		t.Errorf("expected no sink calls on generation failure, got %d", sink.count())
-	}
-}
-
-func TestRunAttachesKeyWhenPresent(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "some-key-value"}}
-	sink := &fakeSink{}
-	// Payload carries the configured key field "id".
-	keyField := "id"
-	schema := map[string]any{
-		"type":     "object",
-		"required": []any{"id"},
-		"properties": map[string]any{
-			"id": map[string]any{"type": "string"},
-		},
-	}
-	p := New(Config{Generator: gen, Schema: schema, Count: 2, KeyField: keyField, Encoder: JsonEncoder{}}, sink)
-
-	stats, _ := p.Run(context.Background())
-
-	if stats.Failed != 0 || stats.Acked != 2 {
-		t.Errorf("expected all acked, got %+v", stats)
-	}
-	if sink.count() != 2 {
-		t.Fatalf("expected 2 sink calls, got %d", sink.count())
-	}
-	for _, o := range sink.recorded {
-		if len(o.Key) == 0 {
-			t.Error("expected non-empty key bytes")
-		}
-	}
-}
-
-func TestRunBindingKeyGenerated(t *testing.T) {
-	// The binding path synthesizes a Key from the binding schema via the real
-	// generator, so it stays on *generator.Generator through the ValueGenerator
-	// seam.
-	gen := generator.New(synth.New(1, testNow()))
-	sink := &fakeSink{}
-	binding := map[string]any{"type": "string"}
-	p := New(Config{
-		Generator:  gen,
-		Schema:     schemaFor(""),
-		Count:      2,
-		KeyBinding: binding,
-		Encoder:    JsonEncoder{},
-	}, sink)
-
-	stats, err := p.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if stats.Acked != 2 {
-		t.Errorf("expected 2 acked, got %d", stats.Acked)
-	}
-	for _, o := range sink.recorded {
-		if len(o.Key) == 0 {
-			t.Error("expected non-empty key bytes from binding")
-		}
-	}
-}
-
-func TestRunBindingOverriddenByKeyFlag(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "key-from-payload"}}
-	sink := &fakeSink{}
-	var warn bytes.Buffer
-	binding := map[string]any{"type": "string"}
-	schema := map[string]any{
-		"type":     "object",
-		"required": []any{"id"},
-		"properties": map[string]any{
-			"id": map[string]any{"type": "string"},
-		},
-	}
-	p := New(Config{
-		Generator:  gen,
-		Schema:     schema,
-		Count:      1,
-		KeyBinding: binding,
-		KeyField:   "id",
-		Encoder:    JsonEncoder{},
-		Warn:       &warn,
-	}, sink)
-
-	stats, err := p.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if stats.Acked != 1 {
-		t.Errorf("expected 1 acked, got %d", stats.Acked)
-	}
-	if !strings.Contains(warn.String(), "binding overridden") {
-		t.Errorf("expected binding-override warning, got %q", warn.String())
 	}
 }
 
@@ -403,23 +273,30 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	}
 }
 
-// TestRunKeyGeneratorProducesKey proves the KeyGenerator seam: the Key value
-// is generated via the configured generator (the AVRO key-avsc path) and
-// encoded into the record, and the null-key info message is suppressed because
-// a key is after all configured.
-func TestRunKeyGeneratorProducesKey(t *testing.T) {
+// fakePlan is the Key seam's test adapter: it reports a fixed Key (or error)
+// and records the payloads it was applied to.
+type fakePlan struct {
+	key     any
+	err     error
+	applied []any
+}
+
+func (p *fakePlan) Apply(payload any) (any, error) {
+	p.applied = append(p.applied, payload)
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.key, nil
+}
+
+// TestRunKeyPlanProducesKey proves the Pipeline attaches whatever the Key plan
+// returns, and applies it to the generated Payload.
+func TestRunKeyPlanProducesKey(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	keyGen := &fakeGenerator{payload: "generated-key"}
+	plan := &fakePlan{key: "planned-key"}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
-	p := New(Config{
-		Generator:    gen,
-		Schema:       schemaFor(""),
-		Count:        2,
-		KeyGenerator: keyGen,
-		Encoder:      JsonEncoder{},
-		Warn:         &warn,
-	}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, KeyPlan: plan, Encoder: JsonEncoder{}, Warn: &warn}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -429,32 +306,29 @@ func TestRunKeyGeneratorProducesKey(t *testing.T) {
 		t.Errorf("expected 2 acked, got %d", stats.Acked)
 	}
 	for _, o := range sink.recorded {
-		if string(o.Key) != "generated-key" {
-			t.Errorf("key bytes = %q, want the KeyGenerator value encoded", o.Key)
+		if string(o.Key) != "planned-key" {
+			t.Errorf("key bytes = %q, want the planned Key encoded", o.Key)
 		}
 	}
+	if len(plan.applied) != 2 {
+		t.Errorf("plan applied %d times, want 2", len(plan.applied))
+	}
 	if strings.Contains(warn.String(), "no key configured") {
-		t.Errorf("KeyGenerator configured: must not warn about a null key, got %q", warn.String())
+		t.Errorf("a Key plan is configured: must not warn about a null key, got %q", warn.String())
 	}
 }
 
-// TestRunKeyGeneratorErrorAborts proves an unhonorable KeyGenerator aborts the
-// run before any payload is counted (same rule as an unhonorable binding).
-func TestRunKeyGeneratorErrorAborts(t *testing.T) {
+// TestRunKeyPlanErrorAborts proves a Key the plan cannot produce stops the run
+// before the record is counted: it is true of every record, not just this one.
+func TestRunKeyPlanErrorAborts(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	keyGen := &fakeGenerator{err: errors.New("key generation failed")}
 	sink := &fakeSink{}
-	p := New(Config{
-		Generator:    gen,
-		Schema:       schemaFor(""),
-		Count:        1,
-		KeyGenerator: keyGen,
-		Encoder:      JsonEncoder{},
-	}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3,
+		KeyPlan: &fakePlan{err: errors.New("key schema cannot be honoured")}, Encoder: JsonEncoder{}}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err == nil {
-		t.Fatal("expected the KeyGenerator error to abort the run")
+		t.Fatal("expected the Key plan error to abort the run")
 	}
 	if stats.Total != 0 || stats.Acked != 0 {
 		t.Errorf("expected zero stats on abort, got %+v", stats)
@@ -464,17 +338,60 @@ func TestRunKeyGeneratorErrorAborts(t *testing.T) {
 	}
 }
 
-func TestRunBindingSchemaError(t *testing.T) {
+// TestRunPlantsKeyIntoPayload drives the real keyplan.Plan over a binding
+// schema: the Key the record carries is the value the Payload carries at the
+// path.
+func TestRunPlantsKeyIntoPayload(t *testing.T) {
+	schema := map[string]any{
+		"type":     "object",
+		"required": []any{"customer"},
+		"properties": map[string]any{
+			"customer": map[string]any{
+				"type":       "object",
+				"required":   []any{"id"},
+				"properties": map[string]any{"id": map[string]any{"type": "string"}},
+			},
+		},
+	}
+	binding := map[string]any{"type": "string", "format": "uuid"}
 	gen := generator.New(synth.New(1, testNow()))
+	plan, err := keyplan.New(&bindingKeyGenerator{gen: gen, schema: binding},
+		generator.NewKeyChecker(schema, binding, nil), "customer.id")
+	if err != nil {
+		t.Fatalf("keyplan.New: %v", err)
+	}
 	sink := &fakeSink{}
-	binding := map[string]any{"type": "widget"}
-	p := New(Config{
-		Generator:  gen,
-		Schema:     schemaFor(""),
-		Count:      1,
-		KeyBinding: binding,
-		Encoder:    JsonEncoder{},
-	}, sink)
+	p := New(Config{Generator: gen, Schema: schema, Count: 3, KeyPlan: plan, Encoder: JsonEncoder{}}, sink)
+
+	stats, err := p.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.Acked != 3 {
+		t.Fatalf("expected 3 acked, got %+v", stats)
+	}
+	for i, o := range sink.recorded {
+		var payload map[string]any
+		if err := json.Unmarshal(o.Payload, &payload); err != nil {
+			t.Fatalf("record %d: unmarshal payload: %v", i, err)
+		}
+		planted := payload["customer"].(map[string]any)["id"]
+		if planted != string(o.Key) {
+			t.Errorf("record %d: Key %q, payload holds %v at customer.id", i, o.Key, planted)
+		}
+	}
+}
+
+// TestRunUnhonorableKeySchemaAborts proves a key schema the generator cannot
+// honour surfaces its typed error through the plan and stops the run.
+func TestRunUnhonorableKeySchemaAborts(t *testing.T) {
+	gen := generator.New(synth.New(1, testNow()))
+	plan, err := keyplan.New(&bindingKeyGenerator{gen: gen, schema: map[string]any{"type": "widget"}}, nil, "")
+	if err != nil {
+		t.Fatalf("keyplan.New: %v", err)
+	}
+	sink := &fakeSink{}
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 1, KeyPlan: plan, Encoder: JsonEncoder{}}, sink)
 
 	stats, err := p.Run(context.Background())
 	var ue *generator.UnsupportedSchemaError
@@ -489,33 +406,11 @@ func TestRunBindingSchemaError(t *testing.T) {
 	}
 }
 
-// TestRunBindingUnresolvableRefAborts proves an unhonorable binding schema
-// (an unresolvable $ref, per the #11 spec + ADR-0006) aborts the run with a
-// typed error rather than producing non-conforming keys.
-func TestRunBindingUnresolvableRefAborts(t *testing.T) {
-	gen := generator.New(synth.New(1, testNow()))
-	gen.SetRefResolver(func(ref string) (map[string]any, error) {
-		return nil, errors.New("no such definition")
-	})
-	sink := &fakeSink{}
-	binding := map[string]any{"$ref": "#/components/schemas/Missing"}
-	p := New(Config{
-		Generator:  gen,
-		Schema:     schemaFor(""),
-		Count:      1,
-		KeyBinding: binding,
-		Encoder:    JsonEncoder{},
-	}, sink)
-
-	stats, err := p.Run(context.Background())
-	var ue *generator.UnsupportedSchemaError
-	if !errors.As(err, &ue) {
-		t.Fatalf("expected *generator.UnsupportedSchemaError, got %v", err)
-	}
-	if ue.Keyword != "$ref" {
-		t.Errorf("keyword = %q, want $ref", ue.Keyword)
-	}
-	if stats.Total != 0 || stats.Acked != 0 {
-		t.Errorf("expected zero stats on abort, got %+v", stats)
-	}
+// bindingKeyGenerator binds a key schema to the generator, the way the process
+// edge does.
+type bindingKeyGenerator struct {
+	gen    *generator.Generator
+	schema map[string]any
 }
+
+func (g *bindingKeyGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
