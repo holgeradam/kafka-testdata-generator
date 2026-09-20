@@ -172,7 +172,13 @@ The tool reads AsyncAPI 2.x specifications and extracts message schemas from cha
 - `$ref` references to component messages
 - Nested JSON Schema objects and arrays
 - All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`
-- Format constraints: `uuid`, `email`, `date-time`, `date`, `uri`, `url`
+- All 19 string formats JSON Schema 2020-12 defines: `date-time`, `date`, `time`,
+  `duration`, `email`, `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`,
+  `uri`, `uri-reference`, `iri`, `iri-reference`, `uuid`, `uri-template`,
+  `json-pointer`, `relative-json-pointer`, `regex` (plus `url` as an alias of
+  `uri`). A format outside that set, such as OpenAPI's `password` or `byte`, is
+  an annotation rather than a constraint: it is ignored, and the field falls
+  through to `pattern` and then the field-name heuristics
 - Numeric constraints: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`
 - Array constraints: `minItems`, `maxItems`
 - Object constraints: `required` fields

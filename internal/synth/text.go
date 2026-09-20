@@ -14,7 +14,21 @@ type Kind int
 const (
 	UUID Kind = iota
 	Email
+	// URL is an absolute URI, which also serves the iri format: an ASCII URI
+	// is a valid IRI.
 	URL
+	Hostname
+	IPv4
+	IPv6
+	// URIReference is a relative reference, which also serves iri-reference.
+	URIReference
+	URITemplate
+	JSONPointer
+	RelativeJSONPointer
+	// Regex is a valid regular expression, itself the value.
+	Regex
+	// Duration is an ISO 8601 duration.
+	Duration
 )
 
 // Semantic returns a string of the requested shape.
@@ -31,6 +45,26 @@ func (s *Synthesizer) Semantic(k Kind) string {
 		return fmt.Sprintf("%s.%s@%s", first, last, s.pick(emailDomains))
 	case URL:
 		return fmt.Sprintf("https://%s.example.com/%s/%d", s.pick(urlHosts), s.pick(urlPaths), s.rng.Intn(10000))
+	case Hostname:
+		return fmt.Sprintf("%s.%s", s.pick(hostLabels), s.pick(exampleDomains))
+	case IPv4:
+		// RFC 5737 documentation ranges: generated data never names a real host.
+		return fmt.Sprintf("%s.%d", s.pick(ipv4DocPrefixes), s.rng.Intn(256))
+	case IPv6:
+		// RFC 3849 reserves 2001:db8::/32 for documentation.
+		return fmt.Sprintf("2001:db8:%x:%x::%x", s.rng.Intn(0x10000), s.rng.Intn(0x10000), s.rng.Intn(0x10000)+1)
+	case URIReference:
+		return fmt.Sprintf("/%s/%d", s.pick(urlPaths), s.rng.Intn(10000))
+	case URITemplate:
+		return fmt.Sprintf("https://api.example.com/%s/{%s}", s.pick(urlPaths), s.pick(pointerTokens))
+	case JSONPointer:
+		return fmt.Sprintf("/%s/%d/%s", s.pick(urlPaths), s.rng.Intn(10), s.pick(pointerTokens))
+	case RelativeJSONPointer:
+		return fmt.Sprintf("%d/%s", s.rng.Intn(3), s.pick(pointerTokens))
+	case Regex:
+		return s.pick(regexSamples)
+	case Duration:
+		return fmt.Sprintf("P%dDT%dH%dM", s.rng.Intn(30)+1, s.rng.Intn(24), s.rng.Intn(60))
 	default:
 		panic(fmt.Sprintf("synth: unknown Kind %d", k))
 	}
@@ -55,8 +89,7 @@ func (s *Synthesizer) Text(field string) string {
 	case has("id", "uuid", "guid"):
 		return s.Semantic(UUID)
 	case has("ip", "ipv"):
-		// RFC 5737 documentation ranges: generated data never names a real host.
-		return fmt.Sprintf("%s.%d", s.pick(ipv4DocPrefixes), s.rng.Intn(256))
+		return s.Semantic(IPv4)
 	case has("username") || has("login", "handle") || has("user") && has("name"):
 		return fmt.Sprintf("%s.%s%d", strings.ToLower(s.pick(firstNames)), strings.ToLower(s.pick(surnames)), s.rng.Intn(100))
 	case has("filename") || has("file") && has("name"):
@@ -92,7 +125,7 @@ func (s *Synthesizer) Text(field string) string {
 	case has("title", "jobtitle"):
 		return s.pick(jobTitles)
 	case has("hostname", "host", "domain"):
-		return fmt.Sprintf("%s.%s", s.pick(hostLabels), s.pick(exampleDomains))
+		return s.Semantic(Hostname)
 	case has("language", "locale"):
 		return s.pick(languages)
 	case has("timezone", "tz"):
@@ -284,6 +317,16 @@ var ipv4DocPrefixes = []string{"192.0.2", "198.51.100", "203.0.113"}
 var exampleDomains = []string{"example.com", "example.net", "example.org"}
 
 var hostLabels = []string{"api", "www", "mail", "app", "files"}
+
+// pointerTokens are field names used inside JSON pointers and URI templates.
+var pointerTokens = []string{"id", "sku", "name", "status", "total"}
+
+// regexSamples are valid regular expressions, for the regex format whose value
+// is itself a pattern.
+var regexSamples = []string{
+	`^[A-Z]{3}-[0-9]{4}$`, `^[a-z]+@[a-z]+\.[a-z]{2,}$`, `^\d{5}(-\d{4})?$`,
+	`^(active|pending|closed)$`, `^[0-9a-f]{8}$`,
+}
 
 var fileStems = []string{"report", "invoice", "export", "summary", "backup"}
 

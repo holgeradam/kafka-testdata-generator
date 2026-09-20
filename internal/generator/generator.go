@@ -256,16 +256,39 @@ func (g *Generator) array(schema map[string]any, field, path string, depth int) 
 func (g *Generator) string(schema map[string]any, fieldName, path string) (string, error) {
 	if format, ok := schema["format"].(string); ok {
 		switch format {
+		// Every string format JSON Schema 2020-12 defines is honoured. A format
+		// outside that set is an annotation, not a constraint: it falls through
+		// to pattern and then the field-name heuristics (ADR-0008 amendment).
 		case "date-time":
 			return g.synth.Instant().Format(time.RFC3339), nil
 		case "date":
 			return g.synth.Instant().Format("2006-01-02"), nil
-		case "email":
+		case "time":
+			return g.synth.Instant().Format("15:04:05Z07:00"), nil
+		case "duration":
+			return g.synth.Semantic(synth.Duration), nil
+		case "email", "idn-email":
 			return g.synth.Semantic(synth.Email), nil
+		case "hostname", "idn-hostname":
+			return g.synth.Semantic(synth.Hostname), nil
+		case "ipv4":
+			return g.synth.Semantic(synth.IPv4), nil
+		case "ipv6":
+			return g.synth.Semantic(synth.IPv6), nil
 		case "uuid":
 			return g.synth.Semantic(synth.UUID), nil
-		case "uri", "url":
+		case "uri", "url", "iri":
 			return g.synth.Semantic(synth.URL), nil
+		case "uri-reference", "iri-reference":
+			return g.synth.Semantic(synth.URIReference), nil
+		case "uri-template":
+			return g.synth.Semantic(synth.URITemplate), nil
+		case "json-pointer":
+			return g.synth.Semantic(synth.JSONPointer), nil
+		case "relative-json-pointer":
+			return g.synth.Semantic(synth.RelativeJSONPointer), nil
+		case "regex":
+			return g.synth.Semantic(synth.Regex), nil
 		}
 	}
 
