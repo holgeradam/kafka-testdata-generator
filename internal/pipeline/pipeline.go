@@ -33,25 +33,25 @@ type ValueGenerator interface {
 	Value(schema map[string]any) (any, error)
 }
 
+// KeyPlan is the seam between the Pipeline and the Key of a run: it generates
+// the Key from the key schema and, when -keyPath is set, plants it into the
+// Payload, returning the value both then hold (ADR-0009). A nil KeyPlan means
+// the run produces records with a null Key. *keyplan.Plan satisfies it, and
+// tests substitute a fake, so the Pipeline knows neither schema language nor
+// path syntax.
+type KeyPlan interface {
+	Apply(payload any) (any, error)
+}
+
 // Config carries the fixed inputs of a run.
 type Config struct {
 	Generator ValueGenerator
 	Schema    map[string]any
 	Count     int
 	RateLimit time.Duration
-	KeyField  string
-	// KeyBinding is the resolved message.bindings.kafka.key schema, or nil when
-	// the spec declares no key binding. When non-nil and KeyField is empty, the
-	// Key is generated from this schema instead of being extracted from the
-	// Payload.
-	KeyBinding map[string]any
-	// KeyGenerator, when set, is the source of the Key value for wire formats
-	// whose keys come from a dedicated schema rather than the Payload
-	// (ADR-0007 decision 3: under AVRO the Key is generated from the key avsc).
-	// It replaces the binding and -key extraction paths; its Value argument is
-	// format-dependent and may be ignored.
-	KeyGenerator ValueGenerator
-	Encoder      Encoder
+	// KeyPlan, when set, produces the Key of each record; nil means a null Key.
+	KeyPlan KeyPlan
+	Encoder Encoder
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
 	// edge (main) passes stderr; tests pass a buffer.
@@ -87,15 +87,8 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	var total, acked, failed int64
 	start := time.Now()
 
-	hasBinding := p.cfg.KeyBinding != nil
-	hasKeyField := p.cfg.KeyField != ""
-	hasKeyGen := p.cfg.KeyGenerator != nil
-
-	if !hasBinding && !hasKeyField && !hasKeyGen {
+	if p.cfg.KeyPlan == nil {
 		p.warnf("no key configured, generating messages with a null key\n")
-	}
-	if hasBinding && hasKeyField {
-		p.warnf("Warning: -key overrides binding, binding overridden\n")
 	}
 
 loop:
@@ -110,40 +103,23 @@ loop:
 		default:
 		}
 
-		var key any
-		var err error
-		if hasKeyGen {
-			// Format-owned key source (AVRO key avsc): generate the Key from it
-			// first so an unhonorable key schema aborts the run before any
-			// payload is counted.
-			key, err = p.cfg.KeyGenerator.Value(p.cfg.KeyBinding)
-			if err != nil {
-				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
-			}
-		} else if hasBinding && !hasKeyField {
-			// Binding present, no -key: generate key from binding schema first so
-			// an unhonorable binding aborts the run before any payload is counted.
-			key, err = p.cfg.Generator.Value(p.cfg.KeyBinding)
-			if err != nil {
-				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
-			}
-		}
-
 		payload, err := p.cfg.Generator.Value(p.cfg.Schema)
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}
-		total++
 
-		if hasKeyField {
-			// Binding absent or overridden: extract from payload.
-			key = extractKey(payload, p.cfg.KeyField)
-			if key == nil {
-				p.warnf("Warning: field %q not found in payload, skipping\n", p.cfg.KeyField)
-				failed++
-				continue
+		// The Key is planned after the Payload exists, because planting writes
+		// into it. A key schema that cannot be honoured, or a path the Payload
+		// does not carry, aborts the run before the record is counted: both are
+		// true of every record, not just this one.
+		var key any
+		if p.cfg.KeyPlan != nil {
+			key, err = p.cfg.KeyPlan.Apply(payload)
+			if err != nil {
+				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 			}
 		}
+		total++
 
 		keyBytes, data, err := p.cfg.Encoder.Encode(key, payload)
 		if err != nil {
@@ -164,106 +140,6 @@ loop:
 	}
 
 	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil
-}
-
-// extractKey pulls the value of keyField from the generated payload. keyField is
-// a dotted JSON path (object traversals and array indexing, e.g. customer.id or
-// items[0].sku); a plain top-level name works unchanged. Returns nil when the
-// path is empty, an intermediate segment is missing, or an index is out of
-// range, so the caller can count a failure and skip.
-func extractKey(payload any, keyField string) any {
-	segments, ok := parseKeyPath(keyField)
-	if !ok {
-		return nil
-	}
-	return resolveKeyPath(payload, segments)
-}
-
-// keySegment is one step of a JSON key path: a field name, or an array index.
-type keySegment struct {
-	// field is the object field name; used when index is -1.
-	field string
-	// index is the array index; -1 means this step is a field access.
-	index int
-}
-
-// parseKeyPath splits a dotted JSON path (with optional [n] array indexing)
-// into segments. Returns ok=false on an empty path or a malformed fragment
-// (e.g. an unbalanced bracket).
-func parseKeyPath(path string) ([]keySegment, bool) {
-	if path == "" {
-		return nil, false
-	}
-	var (
-		segments []keySegment
-		buf      []byte
-	)
-	flushField := func() {
-		if len(buf) > 0 {
-			segments = append(segments, keySegment{field: string(buf), index: -1})
-			buf = buf[:0]
-		}
-	}
-	var i int
-	for i < len(path) {
-		switch c := path[i]; c {
-		case '.':
-			flushField()
-			i++
-		case '[':
-			flushField()
-			close := i + 1
-			for close < len(path) && path[close] != ']' {
-				close++
-			}
-			if close >= len(path) {
-				return nil, false
-			}
-			idxStr := path[i+1 : close]
-			if idxStr == "" {
-				return nil, false
-			}
-			n := 0
-			for _, d := range idxStr {
-				if d < '0' || d > '9' {
-					return nil, false
-				}
-				n = n*10 + int(d-'0')
-			}
-			segments = append(segments, keySegment{index: n})
-			i = close + 1
-		default:
-			buf = append(buf, c)
-			i++
-		}
-	}
-	flushField()
-	return segments, true
-}
-
-// resolveKeyPath walks the segments through the payload, returning the value at
-// the end of the path or nil when any step fails.
-func resolveKeyPath(current any, segments []keySegment) any {
-	for _, seg := range segments {
-		if seg.index >= 0 {
-			arr, ok := current.([]any)
-			if !ok || seg.index >= len(arr) {
-				return nil
-			}
-			current = arr[seg.index]
-			continue
-		}
-		m, ok := current.(map[string]any)
-		if !ok {
-			return nil
-		}
-		v, ok := m[seg.field]
-		if !ok {
-			return nil
-		}
-		current = v
-	}
-	return current
 }
 
 func (p *Pipeline) warnf(format string, args ...any) {

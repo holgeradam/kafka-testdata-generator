@@ -25,15 +25,26 @@ The generator's output promise, defined per Wire format. Every Payload honors ev
 _Avoid_: payload validation, schema checking
 
 **Key**:
-The Kafka message key, paired with the Payload as one record. Its source and encoding are Wire-format-specific: the Encoder owns Key encoding so the Pipeline never knows format conventions. In JSON mode the Key is extracted from the Payload by `-key` when set (overriding `bindings.kafka.key`, with a warning), otherwise generated from `bindings.kafka.key` when present, or null when neither is set; serialized as plain-scalar bytes: string as UTF-8, number as decimal text, structured value as JSON. In AVRO mode the Key comes from the key avsc (`-avro-key-schema`): the Pipeline generates it via the **KeyGenerator** seam and the AvroEncoder registers it under `<channel>-key` and frames it like the Payload. `-key` field extraction does not apply to AVRO (flag error); with neither a key avsc nor a binding, no Key is produced.
+The Kafka message key, paired with the Payload as one record. It is generated from the **Key schema** and encoded by the Encoder, which owns Key encoding so the Pipeline never knows format conventions. With no Key schema the record carries a null Key. In JSON mode Key bytes are plain-scalar: string as UTF-8, number as decimal text, structured value as JSON; in AVRO mode the Key is Confluent-framed under `<channel>-key`.
 _Avoid_: partition key
+
+**Key schema**:
+The schema that governs Key generation, supplied per Wire format: `message.bindings.kafka.key` in JSON mode, the key avsc (`-avro-key-schema`) under AVRO. It describes the Key alone; nothing in it says which Payload field the Key corresponds to.
+_Avoid_: key binding (JSON-only term), key avsc (AVRO-only term)
+
+**Key plan**:
+The run's rule for the Key: generate it from the Key schema and, when a **Key path** is configured, plant that value into the Payload so both hold it. Built once at the process edge, where it refuses a Key path the run cannot honour, then applied to each generated Payload.
+_Avoid_: key source, key strategy
+
+**Key path**:
+Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every record and the type there can hold the Key; both are checked before the run starts.
 
 **Dry run**:
 Mode where the tool generates records and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its records readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats.
 _Avoid_: console mode, stdout mode
 
 **Pipeline**:
-The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation (and the same seam, configured as a **KeyGenerator**, for wire formats whose Keys come from a dedicated schema - the AVRO key avsc); `*generator.Generator` satisfies it, and tests substitute a fake.
+The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation, and on an optional **Key plan** for the Key; `*generator.Generator` and `*keyplan.Plan` satisfy them, and tests substitute fakes.
 _Avoid_: runner, loop, producer loop
 
 **ValueGenerator**:

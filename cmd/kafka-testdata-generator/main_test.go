@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -304,15 +305,16 @@ func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
 	}
 }
 
-// TestScenarioDryRunKeyDoesNotWarn verifies -key is not reported as disregarded
-// in dry run: the Key is echoed (ADR-0003), so the warning must stay silent.
-// Both facts are asserted on the same output so they cannot contradict.
+// TestScenarioDryRunKeyDoesNotWarn verifies -keyPath is not reported as
+// disregarded in dry run: the Key is echoed (ADR-0003), so the warning must
+// stay silent. Both facts are asserted on the same output so they cannot
+// contradict.
 func TestScenarioDryRunKeyDoesNotWarn(t *testing.T) {
 	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	spec := writeTempSpec(t, keyPathSpec)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "2", "-seed", "42", "-key", "orderId").CombinedOutput()
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "2", "-seed", "42", "-keyPath", "orderId").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
 	}
@@ -805,47 +807,6 @@ func TestScenarioAvroMissingSchema(t *testing.T) {
 	}
 }
 
-// TestScenarioAvroKeySchemaKeyMutuallyExclusive verifies -avro-key-schema and
-// -key cannot both be set under -format avro.
-func TestScenarioAvroKeySchemaKeyMutuallyExclusive(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
-	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-format", "avro",
-		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc, "-key", "id").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -avro-key-schema with -key to be rejected")
-	}
-	if !strContains(string(out), "mutually exclusive") {
-		t.Errorf("expected mutual-exclusion error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroKeyFieldRejected verifies -key does not apply to -format avro
-// (issue #24): the AVRO key comes from the key avsc, so a -key flag alone is a
-// flag-validation error.
-func TestScenarioAvroKeyFieldRejected(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-format", "avro", "-avro-schema", avsc, "-key", "id").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -key under -format avro to be rejected")
-	}
-	if !strContains(string(out), "-key is not valid with -format avro") {
-		t.Errorf("expected key-not-valid-under-avro error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroKeySchemaDryRunGeneratesKey verifies the key avsc drives key
-// generation end to end (issue #24): dry-run avro with -avro-key-schema emits a
-// Key echo per record, payloads still render as AVRO JSON, and the vertical-3
-// stopgap "not yet implemented" warning is gone with the null-key info message.
 func TestScenarioAvroKeySchemaDryRunGeneratesKey(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
@@ -978,39 +939,6 @@ channels:
 	}
 }
 
-func TestScenarioKeyBindingOverriddenByKeyFlag(t *testing.T) {
-	bin := buildBinary(t)
-	spec := writeTempSpec(t, `
-asyncapi: '2.6.0'
-info:
-  title: Bindings
-  version: '1.0.0'
-channels:
-  orders:
-    publish:
-      message:
-        bindings:
-          kafka:
-            key:
-              type: string
-        payload:
-          type: object
-          required:
-            - orderId
-          properties:
-            orderId:
-              type: string
-`)
-	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
-		"-dry-run", "-count", "1", "-seed", "42", "-key", "orderId").CombinedOutput()
-	if err != nil {
-		t.Fatalf("command failed: %v\noutput: %s", err, combined)
-	}
-	if !strContains(string(combined), "binding overridden") {
-		t.Errorf("expected binding override warning, got:\n%s", combined)
-	}
-}
-
 func TestScenarioNullKeyInfoMessage(t *testing.T) {
 	bin := buildBinary(t)
 	spec := writeTempSpec(t, `
@@ -1075,150 +1003,6 @@ channels:
 	// UUID-formatted keys should be echoed from the binding.
 	if !strContains(string(combined), "Key: ") {
 		t.Errorf("expected Key echo from resolved ref binding, got:\n%s", combined)
-	}
-}
-
-// runKeyScenario runs the binary in dry-run against the given spec body with
-// the supplied -key, and returns the combined output. It fails the test if the
-// command errors.
-func runKeyScenario(t *testing.T, specBody, key string) string {
-	t.Helper()
-	bin := buildBinary(t)
-	spec := writeTempSpec(t, specBody)
-	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
-		"-dry-run", "-count", "2", "-seed", "42", "-key", key).CombinedOutput()
-	if err != nil {
-		t.Fatalf("command failed: %v\noutput: %s", err, combined)
-	}
-	return string(combined)
-}
-
-// TestScenarioKeyJSONPathNested proves -key resolves a dotted nested object
-// field end to end: the key is echoed to stderr, not a missing-key skip.
-func TestScenarioKeyJSONPathNested(t *testing.T) {
-	combined := runKeyScenario(t, `
-asyncapi: '2.6.0'
-info:
-  title: Path
-  version: '1.0.0'
-channels:
-  orders:
-    publish:
-      message:
-        payload:
-          type: object
-          required:
-            - customer
-          properties:
-            customer:
-              type: object
-              required:
-                - id
-              properties:
-                id:
-                  type: string
-`, "customer.id")
-	if !strContains(combined, "Key: ") {
-		t.Errorf("expected Key echo from nested JSON path, got:\n%s", combined)
-	}
-	if strContains(combined, "not found in payload") {
-		t.Errorf("nested path should not skip records, got:\n%s", combined)
-	}
-}
-
-// TestScenarioKeyJSONPathArrayIndex proves -key resolves an array index with a
-// field traversal (items[0].sku) end to end without skipping records.
-func TestScenarioKeyJSONPathArrayIndex(t *testing.T) {
-	combined := runKeyScenario(t, `
-asyncapi: '2.6.0'
-info:
-  title: Path
-  version: '1.0.0'
-channels:
-  orders:
-    publish:
-      message:
-        payload:
-          type: object
-          required:
-            - items
-          properties:
-            items:
-              type: array
-              minItems: 1
-              maxItems: 3
-              items:
-                type: object
-                required:
-                  - sku
-                properties:
-                  sku:
-                    type: string
-`, "items[0].sku")
-	if !strContains(combined, "Key: ") {
-		t.Errorf("expected Key echo from array-index JSON path, got:\n%s", combined)
-	}
-	if strContains(combined, "not found in payload") {
-		t.Errorf("array-index path should not skip records, got:\n%s", combined)
-	}
-}
-
-// TestScenarioKeyJSONPathMissingSegment proves a missing JSON path segment
-// yields the documented missing-key skip behaviour (record skipped, no Key echo).
-func TestScenarioKeyJSONPathMissingSegment(t *testing.T) {
-	combined := runKeyScenario(t, `
-asyncapi: '2.6.0'
-info:
-  title: Path
-  version: '1.0.0'
-channels:
-  orders:
-    publish:
-      message:
-        payload:
-          type: object
-          required:
-            - customer
-          properties:
-            customer:
-              type: object
-              properties:
-                id:
-                  type: string
-`, "customer.missing")
-	if !strContains(combined, "not found in payload") {
-		t.Errorf("expected missing-path warning, got:\n%s", combined)
-	}
-	if strContains(combined, "Key: ") {
-		t.Errorf("missing path segment must skip the record (no Key echo), got:\n%s", combined)
-	}
-}
-
-// TestScenarioKeyTopLevelStillWorks guards backwards compatibility: a plain
-// top-level -key name keeps working as before.
-func TestScenarioKeyTopLevelStillWorks(t *testing.T) {
-	combined := runKeyScenario(t, `
-asyncapi: '2.6.0'
-info:
-  title: TopLevel
-  version: '1.0.0'
-channels:
-  orders:
-    publish:
-      message:
-        payload:
-          type: object
-          required:
-            - orderId
-          properties:
-            orderId:
-              type: string
-`, "orderId")
-	if !strContains(combined, "Key: ") {
-		t.Errorf("expected key echo from top-level key, got:\n%s", combined)
-	}
-	if strContains(combined, "not found in payload") {
-		t.Errorf("top-level key must not warn on missing field, got:\n%s", combined)
 	}
 }
 
@@ -1377,5 +1161,178 @@ func TestScenarioExtendedHeuristicsBothFormats(t *testing.T) {
 		if s, _ := jsonOut[f].(string); random.MatchString(s) {
 			t.Errorf("%s: value %q is random text, want a heuristic value", f, s)
 		}
+	}
+}
+
+// keyPathSpec is the fixture for the Key plan scenarios: a kafka key binding
+// (the key schema) plus a payload whose paths are guaranteed, so -keyPath has
+// somewhere to plant into.
+const keyPathSpec = `
+asyncapi: '2.6.0'
+info: {title: Keys, version: '1.0.0'}
+channels:
+  orders:
+    publish:
+      message:
+        bindings:
+          kafka:
+            key:
+              type: string
+        payload:
+          type: object
+          required: [orderId, customer, items, total]
+          properties:
+            orderId: {type: string}
+            nickname: {type: string}
+            total: {type: number}
+            customer:
+              type: object
+              required: [id]
+              properties:
+                id: {type: string}
+            items:
+              type: array
+              minItems: 2
+              items:
+                type: object
+                required: [sku]
+                properties:
+                  sku: {type: string}
+`
+
+// keyAt reads the value the payload carries at a dotted path, for comparing it
+// with the echoed Key.
+func keyAt(t *testing.T, payload map[string]any, path string) any {
+	t.Helper()
+	var current any = payload
+	for _, step := range strings.Split(path, ".") {
+		if i := strings.Index(step, "["); i >= 0 {
+			idx, err := strconv.Atoi(strings.TrimSuffix(step[i+1:], "]"))
+			if err != nil {
+				t.Fatalf("bad path %q", path)
+			}
+			current = current.(map[string]any)[step[:i]].([]any)[idx]
+			continue
+		}
+		current = current.(map[string]any)[step]
+	}
+	return current
+}
+
+// TestScenarioKeyPathPlantsIntoPayload is the acceptance case of #51: the Key
+// generated from the key schema is planted at -keyPath, so every record's Key
+// equals the value the Payload carries there.
+func TestScenarioKeyPathPlantsIntoPayload(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, keyPathSpec)
+
+	for _, path := range []string{"orderId", "customer.id", "items[1].sku"} {
+		t.Run(path, func(t *testing.T) {
+			cmd := exec.Command(bin, "-spec", spec, "-channel", "orders",
+				"-dry-run", "-count", "3", "-seed", "42", "-keyPath", path)
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+			}
+			keys := regexp.MustCompile(`Key: (.+)`).FindAllStringSubmatch(stderr.String(), -1)
+			lines := filterJSONLines(stdout.String())
+			if len(keys) != 3 || len(lines) != 3 {
+				t.Fatalf("expected 3 keys and 3 payloads, got %d and %d\nstderr: %s", len(keys), len(lines), stderr.String())
+			}
+			for i, line := range lines {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(line), &payload); err != nil {
+					t.Fatalf("record %d: unmarshal: %v", i, err)
+				}
+				if got := keyAt(t, payload, path); got != keys[i][1] {
+					t.Errorf("record %d: Key %q, payload holds %v at %s", i, keys[i][1], got, path)
+				}
+			}
+		})
+	}
+}
+
+// TestScenarioKeyPathRequiresKeySchema proves -keyPath without a key schema is
+// a flag error: there would be no Key to plant.
+func TestScenarioKeyPathRequiresKeySchema(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "1", "-keyPath", "orderId").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -keyPath without a key schema to be rejected")
+	}
+	if !strContains(string(out), "-keyPath requires a key schema") {
+		t.Errorf("expected the key-schema requirement error, got: %s", out)
+	}
+}
+
+// TestScenarioRenamedKeyFlagGuides proves an old -key invocation stops with an
+// explanation of the rename and the new meaning, not a bare flag error.
+func TestScenarioRenamedKeyFlagGuides(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, keyPathSpec)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+		"-dry-run", "-count", "1", "-key", "orderId").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -key to be rejected")
+	}
+	for _, want := range []string{"-key was renamed to -keyPath", "planted"} {
+		if !strContains(string(out), want) {
+			t.Errorf("expected the rename guidance to mention %q, got: %s", want, out)
+		}
+	}
+}
+
+// TestScenarioKeyPathRejectedAtStartup proves an unusable path stops the run
+// before any record is generated, naming what is wrong with it.
+func TestScenarioKeyPathRejectedAtStartup(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, keyPathSpec)
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"optional property", "nickname", "not required"},
+		{"unknown property", "missing", "no property"},
+		{"index beyond minItems", "items[2].sku", "minItems"},
+		{"type mismatch", "total", "key schema"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+				"-dry-run", "-count", "2", "-keyPath", c.path).CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected -keyPath %q to be rejected", c.path)
+			}
+			if !strContains(string(out), c.want) {
+				t.Errorf("expected the error to mention %q, got: %s", c.want, out)
+			}
+			if len(filterJSONLines(string(out))) != 0 {
+				t.Errorf("no record may be generated when the path is rejected, got: %s", out)
+			}
+		})
+	}
+}
+
+// TestScenarioAvroKeyPathRejected proves -keyPath is not accepted under AVRO
+// yet (planting under AVRO is issue #52).
+func TestScenarioAvroKeyPathRejected(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+
+	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-format", "avro", "-avro-schema", avsc, "-keyPath", "id").CombinedOutput()
+	if err == nil {
+		t.Fatal("expected -keyPath under -format avro to be rejected")
+	}
+	if !strContains(string(out), "-keyPath is not valid with -format avro") {
+		t.Errorf("expected the avro rejection, got: %s", out)
 	}
 }
