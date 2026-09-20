@@ -134,8 +134,9 @@ func jsonNumber(f float64) any {
 }
 
 // renderLogical converts a logical-type value to its human-readable Avro JSON
-// text form: dates as calendar days, timestamps as RFC 3339 instants,
-// time-of-day as clock strings, and decimals as base-10 strings.
+// text form: dates as calendar days, timestamps (UTC and local alike) as
+// RFC 3339 instants, time-of-day as clock strings, uuids as their string form,
+// and decimals as base-10 strings.
 func renderLogical(lt *LogicalType, v any) (any, error) {
 	switch lt.Kind {
 	case LogicalDate:
@@ -144,7 +145,13 @@ func renderLogical(lt *LogicalType, v any) (any, error) {
 			return nil, &RenderError{Detail: fmt.Sprintf("date value is %T, want time.Time", v)}
 		}
 		return ts.Format("2006-01-02"), nil
-	case LogicalTimestampMillis, LogicalTimestampMicros:
+	case LogicalUUID:
+		id, ok := v.(string)
+		if !ok {
+			return nil, &RenderError{Detail: fmt.Sprintf("uuid value is %T, want string", v)}
+		}
+		return id, nil
+	case LogicalTimestampMillis, LogicalTimestampMicros, LogicalLocalTsMillis, LogicalLocalTsMicros:
 		ts, ok := v.(time.Time)
 		if !ok {
 			return nil, &RenderError{Detail: fmt.Sprintf("%s value is %T, want time.Time", lt.Kind, v)}

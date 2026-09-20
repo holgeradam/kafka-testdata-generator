@@ -247,6 +247,18 @@ func TestAvroEncoderConformanceProperty(t *testing.T) {
 		{"recursive-linked", `{"type":"record","name":"Node","fields":[
 			{"name":"value","type":"long"},
 			{"name":"next","type":["null","Node"]}]}`},
+		// #45: uuid and the local timestamps are modelled; the rest are unknown
+		// to the model and encode as their base type, which is what the
+		// serializer does with them too.
+		{"uuid-and-unknown-logical-types", `{"type":"record","name":"O","fields":[
+			{"name":"ref","type":{"type":"string","logicalType":"uuid"}},
+			{"name":"lms","type":{"type":"long","logicalType":"local-timestamp-millis"}},
+			{"name":"lus","type":{"type":"long","logicalType":"local-timestamp-micros"}},
+			{"name":"nanos","type":{"type":"long","logicalType":"timestamp-nanos"}},
+			{"name":"big","type":{"type":"bytes","logicalType":"big-decimal"}},
+			{"name":"dur","type":{"type":"fixed","name":"Dur","size":12,"logicalType":"duration"}},
+			{"name":"custom","type":{"type":"string","logicalType":"my-custom"}},
+			{"name":"optUUID","type":["null",{"type":"string","logicalType":"uuid"}]}]}`},
 	}
 
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)

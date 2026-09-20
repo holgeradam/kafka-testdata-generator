@@ -268,16 +268,45 @@ func TestParseDecimalLogicalType(t *testing.T) {
 	})
 }
 
-func TestParseRejectsUnsupportedLogicalType(t *testing.T) {
+// TestParseRejectsMistypedLogicalType covers a logical type the model knows
+// declared on the wrong base type: a malformed avsc, which still stops Parse.
+func TestParseRejectsMistypedLogicalType(t *testing.T) {
 	cases := []string{
 		`{"type": "long", "logicalType": "date"}`,
-		`{"type": "string", "logicalType": "uuid"}`,
-		`{"type": "string", "logicalType": "duration"}`,
+		`{"type": "long", "logicalType": "uuid"}`,
 		`{"type": "int", "logicalType": "timestamp-millis"}`,
+		`{"type": "string", "logicalType": "local-timestamp-millis"}`,
 	}
 	for _, avsc := range cases {
 		_, err := Parse([]byte(avsc))
 		assertParseError(t, err)
+	}
+}
+
+// TestParseIgnoresUnknownLogicalType covers a logical type outside the model:
+// the Avro spec has readers ignore it and use the base type (#45).
+func TestParseIgnoresUnknownLogicalType(t *testing.T) {
+	cases := []struct {
+		avsc string
+		kind TypeKind
+	}{
+		{`{"type": "string", "logicalType": "duration"}`, KindString},
+		{`{"type": "long", "logicalType": "timestamp-nanos"}`, KindLong},
+		{`{"type": "bytes", "logicalType": "big-decimal"}`, KindBytes},
+		{`{"type": "int", "logicalType": "my-custom"}`, KindInt},
+	}
+	for _, c := range cases {
+		schema, err := Parse([]byte(c.avsc))
+		if err != nil {
+			t.Fatalf("Parse(%s) failed: %v", c.avsc, err)
+		}
+		p, ok := schema.Root.(*Primitive)
+		if !ok {
+			t.Fatalf("Parse(%s) root = %T, want *Primitive", c.avsc, schema.Root)
+		}
+		if p.Kind != c.kind || p.Logical != nil {
+			t.Errorf("Parse(%s) = {Kind %s, Logical %+v}, want kind %s with no overlay", c.avsc, p.Kind, p.Logical, c.kind)
+		}
 	}
 }
 
