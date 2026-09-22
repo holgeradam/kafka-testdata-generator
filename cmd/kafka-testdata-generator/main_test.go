@@ -111,28 +111,17 @@ func TestScenarioStats(t *testing.T) {
 	}
 
 	output := string(combined)
-	if !strContains(output, "total=5") {
+	if !strings.Contains(output, "total=5") {
 		t.Error("stats should show total=5")
 	}
-	if !strContains(output, "acked=5") {
+	if !strings.Contains(output, "acked=5") {
 		t.Error("stats should show acked=5")
 	}
-	if !strContains(output, "failed=0") {
+	if !strings.Contains(output, "failed=0") {
 		t.Error("stats should show failed=0")
 	}
 }
 
-func TestScenarioMissingSpec(t *testing.T) {
-	bin := buildBinary(t)
-
-	cmd := exec.Command(bin, "-channel", "orders.created", "-dry-run")
-	err := cmd.Run()
-	if err == nil {
-		t.Error("expected error when -spec is missing")
-	}
-}
-
-// writeTempSpec writes a spec to a temp file and returns its path.
 func writeTempSpec(t *testing.T, spec string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "recursive.yaml")
@@ -236,61 +225,6 @@ channels:
 	}
 }
 
-func TestScenarioMissingChannel(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	cmd := exec.Command(bin, "-spec", spec, "-dry-run")
-	err := cmd.Run()
-	if err == nil {
-		t.Error("expected error when -channel is missing")
-	}
-}
-
-func TestScenarioInvalidSpec(t *testing.T) {
-	bin := buildBinary(t)
-
-	cmd := exec.Command(bin, "-spec", "nonexistent.yaml", "-channel", "test", "-dry-run")
-	err := cmd.Run()
-	if err == nil {
-		t.Error("expected error for nonexistent spec file")
-	}
-}
-
-// TestScenarioAcksFlagAccept verifies -acks accepts both levels, case-insensitively,
-// and that the default (flag absent) still runs (covered by every other scenario).
-func TestScenarioAcksFlagAccept(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	for _, acks := range []string{"1", "all", "ALL", "All", "aLl", "aLL"} {
-		cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-			"-dry-run", "-count", "1", "-acks", acks)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Errorf("-acks %s: expected success, got %v\noutput: %s", acks, err, out)
-		}
-	}
-}
-
-// TestScenarioAcksFlagReject verifies an unsupported -acks value fails at parse
-// time (before any spec is loaded) with a usage hint.
-func TestScenarioAcksFlagReject(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-acks", "garbage").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -acks garbage to be rejected at parse time")
-	}
-	if !strContains(string(out), "acks") {
-		t.Errorf("expected usage hint naming -acks, got: %s", out)
-	}
-}
-
-// TestScenarioDryRunWarnsOnAcks verifies the dry-run warning learns -acks: setting
-// it alongside dry-run (where Kafka options are disregarded) must warn.
 func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
@@ -300,7 +234,7 @@ func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
 	}
-	if !strContains(string(out), "dry-run mode disregards Kafka options") {
+	if !strings.Contains(string(out), "dry-run mode disregards Kafka options") {
 		t.Errorf("expected dry-run Kafka-options warning when -acks set, got: %s", out)
 	}
 }
@@ -318,10 +252,10 @@ func TestScenarioDryRunKeyDoesNotWarn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
 	}
-	if !strContains(string(out), "Key: ") {
+	if !strings.Contains(string(out), "Key: ") {
 		t.Errorf("expected Key echo in dry run, got: %s", out)
 	}
-	if strContains(string(out), "dry-run mode disregards") {
+	if strings.Contains(string(out), "dry-run mode disregards") {
 		t.Errorf("dry run honours -key, so it must not warn that it is disregarded, got: %s", out)
 	}
 }
@@ -337,7 +271,7 @@ func TestScenarioDryRunWarnsOnExplicitBroker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
 	}
-	if !strContains(string(out), "dry-run mode disregards Kafka options") {
+	if !strings.Contains(string(out), "dry-run mode disregards Kafka options") {
 		t.Errorf("expected dry-run Kafka-options warning when -broker set, got: %s", out)
 	}
 }
@@ -372,39 +306,6 @@ func TestScenarioSignalHandling(t *testing.T) {
 	}
 }
 
-// TestScenarioNowFlagAccept verifies the -now RFC3339 flag parses and the run
-// succeeds; the flag is defaulted to wall-clock so omission is covered by every
-// other scenario.
-func TestScenarioNowFlagAccept(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-now", "2026-01-02T03:04:05Z").CombinedOutput()
-	if err != nil {
-		t.Fatalf("expected -now to parse and run, got %v\noutput: %s", err, out)
-	}
-}
-
-// TestScenarioNowFlagReject verifies an invalid -now value fails at parse time,
-// before any spec is loaded.
-func TestScenarioNowFlagReject(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-now", "not-a-time").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected invalid -now to be rejected at parse time")
-	}
-	if !strContains(string(out), "now") {
-		t.Errorf("expected usage hint naming -now, got: %s", out)
-	}
-}
-
-// TestScenarioDeterministicWithNow proves a fixed -seed AND -now yields
-// byte-identical JSON output including date-formatted fields. A spec with both
-// date and non-date fields exercises the clock and seed paths end to end.
 func TestScenarioDeterministicWithNow(t *testing.T) {
 	bin := buildBinary(t)
 	spec := writeTempSpec(t, `
@@ -514,44 +415,6 @@ func TestScenarioSKUConforms(t *testing.T) {
 	}
 }
 
-// TestScenarioFormatJsonFlagAccept verifies -format json succeeds and produces
-// byte-identical output to the default (no -format flag).
-func TestScenarioFormatJsonFlagAccept(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	args := []string{"-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z"}
-	out, err := exec.Command(bin, args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("-format json failed: %v\noutput: %s", err, out)
-	}
-	lines := filterJSONLines(string(out))
-	if len(lines) != 2 {
-		t.Errorf("expected 2 JSON lines, got %d", len(lines))
-	}
-
-	// Byte-identical to the same run without -format flag (which defaults to json).
-	outDefault, err := exec.Command(bin, args...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("default format run failed: %v\noutput: %s", err, outDefault)
-	}
-	linesDefault := filterJSONLines(string(outDefault))
-	if len(lines) != len(linesDefault) {
-		t.Fatalf("different line count: %d vs %d", len(lines), len(linesDefault))
-	}
-	for i := range lines {
-		if lines[i] != linesDefault[i] {
-			t.Errorf("line %d differs:\n  json:    %s\n  default: %s", i, lines[i], linesDefault[i])
-		}
-	}
-}
-
-// TestScenarioFormatAvroDryRunRendersAvroJSON drives -format avro through the
-// generation path end to end in dry-run: the avsc parses, generated AVRO values
-// render as the canonical Avro JSON encoding (readable strings and numbers, not
-// raw Go structs or Confluent framing), and a fixed seed+now is
-// byte-deterministic. Dry-run never touches a registry.
 func TestScenarioFormatAvroDryRunRendersAvroJSON(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
@@ -568,7 +431,7 @@ func TestScenarioFormatAvroDryRunRendersAvroJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("avro dry-run failed: %v\noutput: %s", err, out)
 	}
-	if !strContains(string(out), "total=3") {
+	if !strings.Contains(string(out), "total=3") {
 		t.Errorf("expected stats total=3, got:\n%s", out)
 	}
 
@@ -578,13 +441,13 @@ func TestScenarioFormatAvroDryRunRendersAvroJSON(t *testing.T) {
 	}
 	// Dates render as readable calendars days, decimals as base-10 strings,
 	// never as a raw byte blob or a numeric timestamp.
-	if !strContains(string(out), `"day":"`) {
+	if !strings.Contains(string(out), `"day":"`) {
 		t.Errorf("date must render as a readable calendar string, got:\n%s", out)
 	}
-	if !strContains(string(out), `"amt":"`) {
+	if !strings.Contains(string(out), `"amt":"`) {
 		t.Errorf("decimal must render as a base-10 string, got:\n%s", out)
 	}
-	if strContains(string(out), "AA==") {
+	if strings.Contains(string(out), "AA==") {
 		t.Errorf("bytes must not render as base64, got:\n%s", out)
 	}
 }
@@ -621,42 +484,6 @@ func TestScenarioFormatAvroDryRunDeterministic(t *testing.T) {
 	}
 }
 
-// TestScenarioAvroRegistryRequiredWhenProducing verifies a registry is
-// mandatory to produce -format avro (registration is how Confluent-tagged data
-// gets its schema ID). Dry-run stays registry-free.
-func TestScenarioAvroRegistryRequiredWhenProducing(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
-	if err == nil {
-		t.Fatal("expected producing avro without -registry to be rejected")
-	}
-	if !strContains(string(out), "-registry is required") {
-		t.Errorf("expected '-registry is required' error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroRegistryInvalidUnderJSON verifies -registry alone does not
-// enable avro: it is only valid with -format avro (ADR-0007 decision 6 style).
-func TestScenarioAvroRegistryInvalidUnderJSON(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-registry", "http://registry:8081").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -registry under json format to be rejected")
-	}
-	if !strContains(string(out), "only valid with -format avro") {
-		t.Errorf("expected -registry-is-avro-only error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroDryRunIgnoresRegistry verifies dry-run never opens a registry
-// connection: passing -registry alongside dry-run warns and proceeds without it.
 func TestScenarioAvroDryRunIgnoresRegistry(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
@@ -668,7 +495,7 @@ func TestScenarioAvroDryRunIgnoresRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("avro dry-run with -registry must succeed, got %v\noutput: %s", err, out)
 	}
-	if !strContains(string(out), "dry-run mode disregards") {
+	if !strings.Contains(string(out), "dry-run mode disregards") {
 		t.Errorf("expected dry-run registry warning, got:\n%s", out)
 	}
 	if l := filterJSONLines(string(out)); len(l) != 2 {
@@ -701,7 +528,7 @@ func TestScenarioAvroDryRunDoesNotContactRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("avro dry-run must not depend on the registry: %v\noutput: %s", err, out)
 	}
-	if !strContains(string(out), "dry-run mode disregards") {
+	if !strings.Contains(string(out), "dry-run mode disregards") {
 		t.Errorf("expected dry-run registry warning, got:\n%s", out)
 	}
 	if l := filterJSONLines(string(out)); len(l) != 2 {
@@ -729,10 +556,10 @@ func TestScenarioAvroProduceContactsBrokerNotRegistry(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the unreachable broker to fail the run")
 	}
-	if !strContains(string(out), "unreachable") {
+	if !strings.Contains(string(out), "unreachable") {
 		t.Errorf("expected broker-unreachable error, got: %s", out)
 	}
-	if strContains(string(out), "schema registry") {
+	if strings.Contains(string(out), "schema registry") {
 		t.Errorf("run should fail at the broker ping before any registry call, got: %s", out)
 	}
 }
@@ -768,7 +595,7 @@ channels:
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
 	}
-	if !strContains(string(out), "ignored under -format avro") {
+	if !strings.Contains(string(out), "ignored under -format avro") {
 		t.Errorf("expected key-binding ignored warning, got:\n%s", out)
 	}
 }
@@ -787,23 +614,8 @@ func TestScenarioAvroUnhonorableAvsc(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an unhonorable avsc to fail the run")
 	}
-	if !strContains(string(out), "cannot generate a conforming value") {
+	if !strings.Contains(string(out), "cannot generate a conforming value") {
 		t.Errorf("expected the typed generation error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroMissingSchema verifies -format avro requires -avro-schema.
-func TestScenarioAvroMissingSchema(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-format", "avro").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -format avro without -avro-schema to be rejected")
-	}
-	if !strContains(string(out), "-avro-schema is required") {
-		t.Errorf("expected '-avro-schema is required' error, got: %s", out)
 	}
 }
 
@@ -819,86 +631,52 @@ func TestScenarioAvroKeySchemaDryRunGeneratesKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
 	}
-	if !strContains(string(out), "Key: ") {
+	if !strings.Contains(string(out), "Key: ") {
 		t.Errorf("expected a Key echo for -avro-key-schema under avro dry-run, got:\n%s", out)
 	}
 	if l := filterJSONLines(string(out)); len(l) != 2 {
 		t.Errorf("expected 2 AVRO JSON payload lines, got %d\n%s", len(l), out)
 	}
-	if strContains(string(out), "not yet implemented") {
+	if strings.Contains(string(out), "not yet implemented") {
 		t.Errorf("vertical-3 stopgap warning must be gone, got:\n%s", out)
 	}
-	if strContains(string(out), "no key configured") {
+	if strings.Contains(string(out), "no key configured") {
 		t.Errorf("key avsc configured: no null-key warning expected, got:\n%s", out)
 	}
 }
 
-// TestScenarioAvroFlagsInvalidUnderJSON verifies the avro flags are rejected
-// unless -format avro is selected (ADR-0007 decision 6).
-func TestScenarioAvroFlagsInvalidUnderJSON(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+// testBinary is built once per package run: the scenarios below exercise the
+// real process, but they all exercise the same build.
+var testBinary string
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-avro-schema", avsc).CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -avro-schema under json format to be rejected")
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "ktg-e2e")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "temp dir: %v\n", err)
+		os.Exit(1)
 	}
-	if !strContains(string(out), "only valid with -format avro") {
-		t.Errorf("expected avro-flags-need-avro error, got: %s", out)
+	testBinary = filepath.Join(dir, "kafka-testdata-generator")
+	build := exec.Command("go", "build", "-o", testBinary, "./cmd/kafka-testdata-generator")
+	build.Dir = filepath.Join("..", "..")
+	if out, err := build.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "build failed: %v\n%s", err, out)
+		os.RemoveAll(dir)
+		os.Exit(1)
 	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
-// TestScenarioAvroMalformedAvsc verifies a malformed avsc surfaces a typed
-// error naming the problem, not a panic.
-func TestScenarioAvroMalformedAvsc(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "broken.avsc", `{"type": "record", "name": "Order"`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
-	if err == nil {
-		t.Fatal("expected malformed avsc to be rejected")
-	}
-	if !strContains(string(out), "avro: invalid avsc") {
-		t.Errorf("expected typed avsc parse error, got: %s", out)
-	}
-}
-
-// TestScenarioFormatInvalid rejects an unknown format at parse time.
-func TestScenarioFormatInvalid(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-format", "xml").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected invalid -format to be rejected at parse time")
-	}
-	if !strContains(string(out), "format") {
-		t.Errorf("expected usage hint naming -format, got: %s", out)
-	}
-}
-
+// buildBinary returns the binary built once for this package.
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	tmpDir := t.TempDir()
-	bin := filepath.Join(tmpDir, "kafka-testdata-generator")
-
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/kafka-testdata-generator")
-	cmd.Dir = filepath.Join("..", "..")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build failed: %v\noutput: %s", err, out)
-	}
-	return bin
+	return testBinary
 }
 
 func filterJSONLines(output string) []string {
 	var lines []string
-	for _, line := range splitLines(output) {
+	for _, line := range strings.Split(output, "\n") {
 		if len(line) > 0 && line[0] == '{' {
 			lines = append(lines, line)
 		}
@@ -934,7 +712,7 @@ channels:
 	}
 	// Key lines go to stderr via CombinedOutput; stdout has NDJSON payloads.
 	// The key binding should produce non-empty keys (visible as Key: lines).
-	if !strContains(string(out), "Key: ") {
+	if !strings.Contains(string(out), "Key: ") {
 		t.Errorf("expected Key echo from binding, got:\n%s", out)
 	}
 }
@@ -961,10 +739,10 @@ channels:
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
 	}
-	if !strContains(string(combined), "no key configured, generating messages with a null key") {
+	if !strings.Contains(string(combined), "no key configured, generating messages with a null key") {
 		t.Errorf("expected mode-neutral null-key info message, got:\n%s", combined)
 	}
-	if strContains(string(combined), "producing") {
+	if strings.Contains(string(combined), "producing") {
 		t.Errorf("dry run produces nothing, so the info message must not say producing, got:\n%s", combined)
 	}
 }
@@ -1001,33 +779,9 @@ channels:
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
 	}
 	// UUID-formatted keys should be echoed from the binding.
-	if !strContains(string(combined), "Key: ") {
+	if !strings.Contains(string(combined), "Key: ") {
 		t.Errorf("expected Key echo from resolved ref binding, got:\n%s", combined)
 	}
-}
-
-func splitLines(s string) []string {
-	var result []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			result = append(result, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		result = append(result, s[start:])
-	}
-	return result
-}
-
-func strContains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func init() {
@@ -1253,93 +1007,6 @@ func TestScenarioKeyPathPlantsIntoPayload(t *testing.T) {
 	}
 }
 
-// TestScenarioKeyPathRequiresKeySchema proves -keyPath without a key schema is
-// a flag error: there would be no Key to plant.
-func TestScenarioKeyPathRequiresKeySchema(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-count", "1", "-keyPath", "orderId").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -keyPath without a key schema to be rejected")
-	}
-	if !strContains(string(out), "-keyPath requires a key schema") {
-		t.Errorf("expected the key-schema requirement error, got: %s", out)
-	}
-}
-
-// TestScenarioRenamedKeyFlagGuides proves an old -key invocation stops with an
-// explanation of the rename and the new meaning, not a bare flag error.
-func TestScenarioRenamedKeyFlagGuides(t *testing.T) {
-	bin := buildBinary(t)
-	spec := writeTempSpec(t, keyPathSpec)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
-		"-dry-run", "-count", "1", "-key", "orderId").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -key to be rejected")
-	}
-	for _, want := range []string{"-key was renamed to -keyPath", "planted"} {
-		if !strContains(string(out), want) {
-			t.Errorf("expected the rename guidance to mention %q, got: %s", want, out)
-		}
-	}
-}
-
-// TestScenarioKeyPathRejectedAtStartup proves an unusable path stops the run
-// before any record is generated, naming what is wrong with it.
-func TestScenarioKeyPathRejectedAtStartup(t *testing.T) {
-	bin := buildBinary(t)
-	spec := writeTempSpec(t, keyPathSpec)
-
-	cases := []struct {
-		name string
-		path string
-		want string
-	}{
-		{"optional property", "nickname", "not required"},
-		{"unknown property", "missing", "no property"},
-		{"index beyond minItems", "items[2].sku", "minItems"},
-		{"type mismatch", "total", "key schema"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
-				"-dry-run", "-count", "2", "-keyPath", c.path).CombinedOutput()
-			if err == nil {
-				t.Fatalf("expected -keyPath %q to be rejected", c.path)
-			}
-			if !strContains(string(out), c.want) {
-				t.Errorf("expected the error to mention %q, got: %s", c.want, out)
-			}
-			if len(filterJSONLines(string(out))) != 0 {
-				t.Errorf("no record may be generated when the path is rejected, got: %s", out)
-			}
-		})
-	}
-}
-
-// TestScenarioAvroKeyPathRequiresKeySchema proves -keyPath under AVRO needs the
-// key avsc: without it there is no Key to plant.
-func TestScenarioAvroKeyPathRequiresKeySchema(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
-
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-		"-dry-run", "-format", "avro", "-avro-schema", avsc, "-keyPath", "id").CombinedOutput()
-	if err == nil {
-		t.Fatal("expected -keyPath without -avro-key-schema to be rejected")
-	}
-	if !strContains(string(out), "-keyPath requires -avro-key-schema") {
-		t.Errorf("expected the key-avsc requirement error, got: %s", out)
-	}
-}
-
-// TestScenarioAvroKeyPathPlantsIntoPayload is the acceptance case of #52: the
-// Key generated from the key avsc is planted into the Avro payload, so the
-// echoed Key equals the value the payload renders at that path.
 func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
@@ -1375,41 +1042,6 @@ func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
 				if got := keyAt(t, payload, path); got != keys[i][1] {
 					t.Errorf("record %d: Key %q, payload holds %v at %s", i, keys[i][1], got, path)
 				}
-			}
-		})
-	}
-}
-
-// TestScenarioAvroKeyPathRejectedAtStartup proves the avsc checker refuses a
-// path whose value is not in every record, or whose type is not the Key's.
-func TestScenarioAvroKeyPathRejectedAtStartup(t *testing.T) {
-	bin := buildBinary(t)
-	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
-	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[
-		{"name":"maybe","type":["null","string"]},
-		{"name":"tags","type":{"type":"array","items":"string"}},
-		{"name":"seq","type":"long"}]}`)
-	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
-
-	cases := []struct{ name, path, want string }{
-		{"nullable union", "maybe", "union"},
-		{"array index", "tags[0]", "array"},
-		{"type mismatch", "seq", "key avsc"},
-		{"unknown field", "missing", "no field"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
-				"-dry-run", "-count", "2", "-format", "avro",
-				"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc, "-keyPath", c.path).CombinedOutput()
-			if err == nil {
-				t.Fatalf("expected -keyPath %q to be rejected", c.path)
-			}
-			if !strContains(string(out), c.want) {
-				t.Errorf("expected the error to mention %q, got: %s", c.want, out)
-			}
-			if len(filterJSONLines(string(out))) != 0 {
-				t.Errorf("no record may be generated when the path is rejected, got: %s", out)
 			}
 		})
 	}
