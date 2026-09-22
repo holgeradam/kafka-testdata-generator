@@ -43,6 +43,10 @@ Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted pat
 Mode where the tool generates records and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its records readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats.
 _Avoid_: console mode, stdout mode
 
+**Run plan**:
+The validated description of one run, built from the command line before anything is generated: which spec and channel, the Wire format, Count and pacing, the generator, the **Key plan**, and the diagnostics the run carries. Building it performs no network I/O; the Output sink and the Encoder are constructed from it afterwards, so a rejected run never dials a broker or a registry.
+_Avoid_: config, options, args
+
 **Pipeline**:
 The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation, and on an optional **Key plan** for the Key; `*generator.Generator` and `*keyplan.Plan` satisfy them, and tests substitute fakes.
 _Avoid_: runner, loop, producer loop
