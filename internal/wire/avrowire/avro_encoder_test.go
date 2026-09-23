@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	avro2 "github.com/confluentinc/confluent-avro-go/v2"
+	codec "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
@@ -22,6 +22,20 @@ import (
 
 // Compile-time check: AvroEncoder must satisfy the Encoder interface.
 var _ pipeline.Encoder = (*AvroEncoder)(nil)
+
+// mustModel parses an avsc into the model the encoder takes; an empty avsc
+// stands for "no key avsc" and yields nil.
+func mustModel(t *testing.T, avsc string) *avro.Schema {
+	t.Helper()
+	if avsc == "" {
+		return nil
+	}
+	m, err := avro.Parse([]byte(avsc))
+	if err != nil {
+		t.Fatalf("parse avsc %s: %v", avsc, err)
+	}
+	return m
+}
 
 // registryCall records one schema-registration request: the subject the schema
 // was registered under and the raw request body.
@@ -59,7 +73,7 @@ func TestAvroEncoderRegistersExplicitAvsc(t *testing.T) {
 	avsc := `{"type":"record","name":"Order","namespace":"com.acme","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`
 	srv, calls := fakeRegistry(t, map[string]int{"orders-value": 42})
 
-	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", avsc, "")
+	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", mustModel(t, avsc), mustModel(t, ""))
 	if err != nil {
 		t.Fatalf("NewAvroEncoder: %v", err)
 	}
@@ -104,11 +118,11 @@ func TestAvroEncoderRegistersExplicitAvsc(t *testing.T) {
 func TestAvroEncoderKeyContract(t *testing.T) {
 	valueAvsc := `{"type":"record","name":"O","fields":[{"name":"id","type":"string"}]}`
 	keyAvsc := `{"type":"string"}`
-	api := avro2.Config{}.Freeze()
+	api := codec.Config{}.Freeze()
 	srv, _ := fakeRegistry(t, map[string]int{"t-value": 1, "t-key": 2})
 
 	// No key avsc: the run produces payload-only records (null key).
-	enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", valueAvsc, "")
+	enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, valueAvsc), mustModel(t, ""))
 	if err != nil {
 		t.Fatalf("NewAvroEncoder: %v", err)
 	}
@@ -127,11 +141,11 @@ func TestAvroEncoderKeyContract(t *testing.T) {
 
 	// With a key avsc the key is framed magic byte + key-schema ID + Avro, and
 	// a standard consumer decodes it against the key avsc.
-	keyAvscParsed, err := avro2.Parse(keyAvsc)
+	keyAvscParsed, err := codec.Parse(keyAvsc)
 	if err != nil {
 		t.Fatalf("parse key avsc: %v", err)
 	}
-	keyed, err := NewAvroEncoder(context.Background(), srv.URL, "t", valueAvsc, keyAvsc)
+	keyed, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, valueAvsc), mustModel(t, keyAvsc))
 	if err != nil {
 		t.Fatalf("NewAvroEncoder with key avsc: %v", err)
 	}
@@ -165,7 +179,7 @@ func TestAvroEncoderRegistryUnreachableTypedError(t *testing.T) {
 	url := srv.URL
 	srv.Close() // registry gone
 
-	_, err := NewAvroEncoder(context.Background(), url, "t", `{"type":"string"}`, "")
+	_, err := NewAvroEncoder(context.Background(), url, "t", mustModel(t, `{"type":"string"}`), mustModel(t, ""))
 	if err == nil {
 		t.Fatal("expected an error for an unreachable registry")
 	}
@@ -192,7 +206,7 @@ func TestAvroEncoderRegistryRejectsSchemaTypedError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := NewAvroEncoder(context.Background(), srv.URL, "t", `{"type":"string"}`, "")
+	_, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, `{"type":"string"}`), mustModel(t, ""))
 	if err == nil {
 		t.Fatal("expected an error when the registry rejects the schema")
 	}
@@ -210,7 +224,7 @@ func TestAvroEncoderRegistryRejectsSchemaTypedError(t *testing.T) {
 }
 
 func TestAvroEncoderConformanceProperty(t *testing.T) {
-	api := avro2.Config{}.Freeze()
+	api := codec.Config{}.Freeze()
 
 	// Fixtures cover every construct the generator supports, including the
 	// logical types whose wire conventions are the easy place to go wrong.
@@ -270,12 +284,12 @@ func TestAvroEncoderConformanceProperty(t *testing.T) {
 			if err != nil {
 				t.Fatalf("model parse failed: %v", err)
 			}
-			cfSchema, err := avro2.Parse(fx.avsc)
+			cfSchema, err := codec.Parse(fx.avsc)
 			if err != nil {
 				t.Fatalf("confluent parse failed: %v", err)
 			}
 			srv, _ := fakeRegistry(t, map[string]int{"t-value": 9})
-			enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", fx.avsc, "")
+			enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, fx.avsc), mustModel(t, ""))
 			if err != nil {
 				t.Fatalf("NewAvroEncoder: %v", err)
 			}
@@ -313,7 +327,7 @@ func TestAvroEncoderRegistersKeySubject(t *testing.T) {
 	keyAvsc := `{"type":"record","name":"OrderKey","fields":[{"name":"id","type":"string"},{"name":"seq","type":"long"}]}`
 	srv, calls := fakeRegistry(t, map[string]int{"orders-value": 7, "orders-key": 42})
 
-	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", valueAvsc, keyAvsc)
+	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", mustModel(t, valueAvsc), mustModel(t, keyAvsc))
 	if err != nil {
 		t.Fatalf("NewAvroEncoder: %v", err)
 	}
@@ -353,7 +367,7 @@ func TestAvroEncoderRegistersKeySubject(t *testing.T) {
 // conformance property (issue #24 AC1): every key avsc the generator supports
 // must produce keys a standard Confluent consumer decodes against that avsc.
 func TestAvroEncoderKeyConformanceProperty(t *testing.T) {
-	api := avro2.Config{}.Freeze()
+	api := codec.Config{}.Freeze()
 	valueAvsc := `{"type":"record","name":"V","fields":[{"name":"id","type":"string"}]}`
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 
@@ -377,12 +391,12 @@ func TestAvroEncoderKeyConformanceProperty(t *testing.T) {
 			if err != nil {
 				t.Fatalf("model parse failed: %v", err)
 			}
-			cfKeySchema, err := avro2.Parse(fx.avsc)
+			cfKeySchema, err := codec.Parse(fx.avsc)
 			if err != nil {
 				t.Fatalf("confluent parse failed: %v", err)
 			}
 			srv, _ := fakeRegistry(t, map[string]int{"t-value": 8, "t-key": 42})
-			enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", valueAvsc, fx.avsc)
+			enc, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, valueAvsc), mustModel(t, fx.avsc))
 			if err != nil {
 				t.Fatalf("NewAvroEncoder: %v", err)
 			}
@@ -431,16 +445,16 @@ func TestAvroEncoderFramesPlantedKey(t *testing.T) {
 	}
 
 	srv, _ := fakeRegistry(t, map[string]int{"orders-value": 11, "orders-key": 12})
-	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", valueAvsc, keyAvsc)
+	enc, err := NewAvroEncoder(context.Background(), srv.URL, "orders", mustModel(t, valueAvsc), mustModel(t, keyAvsc))
 	if err != nil {
 		t.Fatalf("NewAvroEncoder: %v", err)
 	}
-	api := avro2.Config{}.Freeze()
-	cfValue, err := avro2.Parse(valueAvsc)
+	api := codec.Config{}.Freeze()
+	cfValue, err := codec.Parse(valueAvsc)
 	if err != nil {
 		t.Fatalf("confluent parse failed: %v", err)
 	}
-	cfKey, err := avro2.Parse(keyAvsc)
+	cfKey, err := codec.Parse(keyAvsc)
 	if err != nil {
 		t.Fatalf("confluent key parse failed: %v", err)
 	}

@@ -1,5 +1,3 @@
-github.com/actgardner/gogen-avro/v10 v10.2.1 h1:z3pOGblRjAJCYpkIJ8CmbMJdksi4rAhaygw0dyXZ930=
-github.com/actgardner/gogen-avro/v10 v10.2.1/go.mod h1:QUhjeHPchheYmMDni/Nx7VB0RsT/ee8YIgGY/xpEQgQ=
 github.com/confluentinc/confluent-avro-go/v2 v2.32.0 h1:PQjdGEaxCGrvdNtXsoMJsfY39WQyfrekEdOsh0e6bT0=
 github.com/confluentinc/confluent-avro-go/v2 v2.32.0/go.mod h1:WfNwYNykGDKOM3WrEqhHDNokB+PBRno5DJqS/cTtAko=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

@@ -3,7 +3,6 @@ module github.com/holgeradam/kafka-testdata-generator
 go 1.26.6
 
 require (
-	github.com/actgardner/gogen-avro/v10 v10.2.1
 	github.com/confluentinc/confluent-avro-go/v2 v2.32.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/twmb/franz-go v1.21.6

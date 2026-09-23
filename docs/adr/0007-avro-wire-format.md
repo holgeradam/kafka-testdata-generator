@@ -78,6 +78,17 @@ values, which ADR decision 3 requires. Generic encoding registers and honors the
 instead, and drops the cgo/librdkafka build entirely (the confluent-kafka-go dependency existed
 only for encoding; the whole vertical is now pure Go).
 
+Amended (2026-09-23, issue #65): the model is built from `confluent-avro-go`'s parse and
+`gogen-avro` is dropped. The vertical 2 rationale - gogen-avro as "the exact schema parser the
+Confluent Go Avro serde delegates to" - stopped holding when vertical 3 moved encoding to
+`confluent-avro-go`, a hamba/avro fork with its own parser. From then on one avsc was parsed by two
+parsers that could disagree: Dry run accepted avsc files that produce could not encode (invalid
+names or field defaults, which the encoder's parse refused, and decimals whose precision or scale
+the codec silently dropped, which failed on the first record). Now each avsc is parsed once, with a
+fresh name cache (the codec's default cache is process-global and leaks named types between
+parses). The model carries that parse for the encoder, and a known logical type the codec does not
+honour stops `Parse` with a `ParseError` instead of reaching the generator.
+
 ### 6. CLI flags and registry requirement
 
 - `-format json|avro` (default `json`); the Avro flags are invalid for `json`.

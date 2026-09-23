@@ -5,9 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/actgardner/gogen-avro/v10/parser"
-	"github.com/actgardner/gogen-avro/v10/resolver"
-	gogen "github.com/actgardner/gogen-avro/v10/schema"
+	codec "github.com/confluentinc/confluent-avro-go/v2"
 )
 
 // assertParseError asserts err is an *ParseError, so every malformed-avsc test
@@ -375,48 +373,56 @@ func TestParseNoPanicOnWeirdInput(t *testing.T) {
 	}
 }
 
-// TestParseMatchesSerializer checks the parse-model's acceptance matches the
-// exact gogen-avro parse path confluent-kafka-go's Avro serde uses, so the
-// avsc the serializer accepts parses identically (issue #21 acceptance 4).
-func TestParseMatchesSerializer(t *testing.T) {
-	fixtures := []string{
-		`{"type": "record", "name": "O", "fields": [{"name": "a", "type": "int"}]}`,
-		`{"type": "record", "name": "O", "fields": [{"name": "a", "type": ["null", "long"]}]}`,
-		`{"type": "array", "items": "string"}`,
-		`{"type": "map", "values": {"type": "record", "name": "M", "fields": []}}`,
-		`{"type": "enum", "name": "E", "symbols": ["A", "B"]}`,
-		`{"type": "fixed", "name": "F", "size": 2}`,
-		`{"type": "long", "logicalType": "timestamp-millis"}`,
-		`{"type": "widget"}`,
-		`{"type": "record"}`,
-		`"nope"`,
-		"not json",
+// TestParseKeepsCodecSchema proves the avsc is parsed once (#65): the model
+// carries the codec's own parsed schema, which the encoder marshals against
+// without parsing the avsc text again.
+func TestParseKeepsCodecSchema(t *testing.T) {
+	s, err := Parse([]byte(`{"type":"record","name":"O","fields":[{"name":"a","type":["null","long"]}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-	for _, avsc := range fixtures {
-		_, ourErr := Parse([]byte(avsc))
-		_, serErr := parseLikeSerializer([]byte(avsc))
-		if (ourErr == nil) != (serErr == nil) {
-			t.Errorf("avsc %q: model parse error = %v, serializer parse error = %v (must agree)",
-				avsc, ourErr, serErr)
-		}
+	if s.Codec() == nil || s.Codec().Type() != codec.Record {
+		t.Fatalf("Codec() = %v, want the parsed record schema", s.Codec())
+	}
+	b, err := codec.Marshal(s.Codec(), map[string]any{"a": map[string]any{"long": int64(7)}})
+	if err != nil {
+		t.Fatalf("marshal against the carried schema: %v", err)
+	}
+	var got map[string]any
+	if err := codec.Unmarshal(s.Codec(), b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["a"] != int64(7) {
+		t.Errorf("round trip = %v, want a=7", got)
 	}
 }
 
-// parseLikeSerializer reproduces the gogen-avro parse sequence confluent's
-// Avro serde runs (TypeForSchema + resolver over roots), used by the parity
-// test above; production code never calls this.
-func parseLikeSerializer(avsc []byte) (gogen.AvroType, error) {
-	ns := parser.NewNamespace(false)
-	root, err := ns.TypeForSchema(avsc)
-	if err != nil {
-		return nil, err
+// TestParseIsolatesNamedTypes proves one avsc's named types never leak into
+// the next parse: a bare reference stays unresolvable however many avsc files
+// defined that name before.
+func TestParseIsolatesNamedTypes(t *testing.T) {
+	if _, err := Parse([]byte(`{"type":"record","name":"Leaky","fields":[]}`)); err != nil {
+		t.Fatalf("Parse: %v", err)
 	}
-	for _, def := range ns.Roots {
-		if err := resolver.ResolveDefinition(def, ns.Definitions); err != nil {
-			return nil, err
-		}
+	_, err := Parse([]byte(`"Leaky"`))
+	assertParseError(t, err)
+}
+
+// TestParseRejectsLogicalTypeTheCodecDrops covers a known logical type
+// declared where the codec cannot honour it: the codec silently falls back to
+// the base type, so a model that kept the overlay would generate values the
+// encoder then rejects. Parse stops instead.
+func TestParseRejectsLogicalTypeTheCodecDrops(t *testing.T) {
+	cases := []string{
+		// A 2-byte fixed holds at most 4 decimal digits.
+		`{"type":"fixed","name":"Small","size":2,"logicalType":"decimal","precision":10}`,
+		`{"type":"bytes","logicalType":"decimal","precision":4,"scale":6}`,
+		`{"type":"bytes","logicalType":"decimal","precision":0}`,
 	}
-	return root, nil
+	for _, avsc := range cases {
+		_, err := Parse([]byte(avsc))
+		assertParseError(t, err)
+	}
 }
 
 // typeKind extracts the model kind of a Type for concise assertions.
