@@ -3,9 +3,14 @@ package jsonwire
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
@@ -14,13 +19,29 @@ var _ wire.Format = Format{}
 
 func options() wire.Options {
 	return wire.Options{
-		Synth: synth.New(1, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
-		Schema: map[string]any{
-			"type":       "object",
-			"required":   []any{"orderId"},
-			"properties": map[string]any{"orderId": map[string]any{"type": "string"}},
-		},
+		Synth:        synth.New(1, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+		MessageTypes: []asyncapi.MessageType{{Name: "Order", Payload: orderSchema()}},
 	}
+}
+
+func orderSchema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"required":   []any{"orderId"},
+		"properties": map[string]any{"orderId": map[string]any{"type": "string"}},
+	}
+}
+
+// kindSchema is a Payload schema whose kind field is the constant name, so a
+// generated Payload shows which Message type it is of.
+func kindSchema(name string, required ...string) map[string]any {
+	props := map[string]any{"kind": map[string]any{"const": name}}
+	req := []any{"kind"}
+	for _, r := range required {
+		props[r] = map[string]any{"type": "string"}
+		req = append(req, r)
+	}
+	return map[string]any{"type": "object", "required": req, "properties": props}
 }
 
 // TestBuildGeneratesFromMessageSchema proves the Payload honours the Message
@@ -52,7 +73,7 @@ func TestBuildKey(t *testing.T) {
 		t.Error("no key binding: want a null Key and no Checker")
 	}
 
-	opts.KeyBinding = map[string]any{"type": "string"}
+	opts.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
 	parts, err = Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -139,5 +160,140 @@ func TestBuildRejectsKeyPathWithoutBinding(t *testing.T) {
 	var we *wire.Error
 	if !errors.As(err, &we) || we.Flag != "keyPath" {
 		t.Fatalf("err = %v, want a *wire.Error on -keyPath", err)
+	}
+}
+
+// mixOptions builds options for a Kafka topic with the given Message types.
+func mixOptions(seed int64, types ...asyncapi.MessageType) wire.Options {
+	return wire.Options{
+		Synth:        synth.New(seed, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+		MessageTypes: types,
+	}
+}
+
+// kinds generates n Payloads and returns their kind fields in order.
+func kinds(t *testing.T, opts wire.Options, n int) []string {
+	t.Helper()
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	out := make([]string, n)
+	for i := range out {
+		v, err := parts.Values.Value()
+		if err != nil {
+			t.Fatalf("Value: %v", err)
+		}
+		out[i] = fmt.Sprint(v.(map[string]any)["kind"])
+	}
+	return out
+}
+
+// TestBuildMixesMessageTypes proves each Payload is of one Message type picked
+// from the seeded stream (#74): every type appears, and the same seed repeats
+// the same sequence.
+func TestBuildMixesMessageTypes(t *testing.T) {
+	types := []asyncapi.MessageType{
+		{Name: "OrderCreated", Payload: kindSchema("created")},
+		{Name: "OrderUpdated", Payload: kindSchema("updated")},
+		{Name: "OrderCancelled", Payload: kindSchema("cancelled")},
+	}
+	first := kinds(t, mixOptions(7, types...), 60)
+	seen := map[string]int{}
+	for _, k := range first {
+		seen[k]++
+	}
+	for _, want := range []string{"created", "updated", "cancelled"} {
+		if seen[want] == 0 {
+			t.Errorf("no %s Payload in 60 records: %v", want, seen)
+		}
+	}
+	if again := kinds(t, mixOptions(7, types...), 60); strings.Join(again, ",") != strings.Join(first, ",") {
+		t.Errorf("same seed gave a different sequence:\n%v\n%v", first, again)
+	}
+}
+
+// TestBuildSingleTypeDrawsNothingExtra proves a Kafka topic with one Message
+// type generates exactly as before the mix: no pick is drawn from the stream.
+func TestBuildSingleTypeDrawsNothingExtra(t *testing.T) {
+	opts := mixOptions(3, asyncapi.MessageType{Name: "Order", Payload: orderSchema()})
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	direct := generator.New(synth.New(3, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)))
+	for i := 0; i < 5; i++ {
+		got, _ := parts.Values.Value()
+		want, _ := direct.Value(orderSchema())
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("record %d: %v, want %v as generated without a mix", i, got, want)
+		}
+	}
+}
+
+// TestBuildRejectsDifferingKeyBindings proves the Message types of a Kafka
+// topic share one Key binding, or none, since a Key identifies one Entity
+// across them (#34 decision 3).
+func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
+	uuidKey := map[string]any{"type": "string", "format": "uuid"}
+	cases := map[string][]asyncapi.MessageType{
+		"different schemas": {
+			{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
+			{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: map[string]any{"type": "integer"}},
+		},
+		"one without": {
+			{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
+			{Name: "OrderUpdated", Payload: kindSchema("updated")},
+		},
+	}
+	for name, types := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := Format{}.Build(mixOptions(1, types...))
+			var we *wire.Error
+			if !errors.As(err, &we) || we.Flag != "topic" {
+				t.Fatalf("err = %v, want a *wire.Error on -topic", err)
+			}
+			for _, n := range []string{"OrderCreated", "OrderUpdated"} {
+				if !strings.Contains(err.Error(), n) {
+					t.Errorf("err = %v, want it to name %s", err, n)
+				}
+			}
+		})
+	}
+
+	same := []asyncapi.MessageType{
+		{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
+		{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: map[string]any{"type": "string", "format": "uuid"}},
+	}
+	parts, err := Format{}.Build(mixOptions(1, same...))
+	if err != nil {
+		t.Fatalf("identical Key bindings: Build = %v, want nil", err)
+	}
+	if parts.KeyGen == nil {
+		t.Error("identical Key bindings must produce a Key generator")
+	}
+}
+
+// TestBuildChecksKeyPathInEveryType proves -keyPath must be guaranteed in
+// every Message type's Payload, and a rejection names the type it fails in.
+func TestBuildChecksKeyPathInEveryType(t *testing.T) {
+	key := map[string]any{"type": "string"}
+	opts := mixOptions(1,
+		asyncapi.MessageType{Name: "OrderCreated", Payload: kindSchema("created", "orderId"), KeyBinding: key},
+		asyncapi.MessageType{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: key},
+	)
+	opts.KeyPath = "orderId"
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	steps, _ := keyplan.ParsePath("orderId")
+	err = parts.Checker.Check(steps)
+	var pe *keyplan.PathError
+	if !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a *keyplan.PathError", err)
+	}
+	if !strings.Contains(err.Error(), "OrderUpdated") || strings.Contains(err.Error(), "OrderCreated") {
+		t.Errorf("err = %v, want it to name OrderUpdated only", err)
 	}
 }

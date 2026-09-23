@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
@@ -228,22 +227,11 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	if err != nil {
 		return &Error{Flag: "topic", Detail: "reading the spec", Err: err}
 	}
-	// Several Message types on one Kafka topic are refused by name until they
-	// can be mixed (#74), so none is chosen silently or at random.
-	if len(types) > 1 {
-		names := make([]string, len(types))
-		for i, mt := range types {
-			names[i] = mt.Name
-		}
-		return &Error{Flag: "topic", Detail: fmt.Sprintf("Kafka topic %q carries %d Message types (%s); mixing them is not supported yet", *f.topic, len(types), strings.Join(names, ", "))}
-	}
-	schema, keyBinding := types[0].Payload, types[0].KeyBinding
 
 	// One Synthesizer per run: the Payload and the Key draw from one shared
 	// stream in both wire formats (ADR-0008 decision 4).
 	opts.Synth = synth.New(*f.seed, f.now.now)
-	opts.Schema = schema
-	opts.KeyBinding = keyBinding
+	opts.MessageTypes = types
 	parts, err := format.Build(opts)
 	if err != nil {
 		return err

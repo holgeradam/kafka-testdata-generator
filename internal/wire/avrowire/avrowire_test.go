@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
@@ -37,8 +38,11 @@ func options(t *testing.T) wire.Options {
 		AvroSchema: writeAvsc(t, orderAvsc),
 		Synth:      synth.New(1, testNow()),
 		// The Message schema and binding must not reach AVRO generation.
-		Schema:     map[string]any{"type": "integer"},
-		KeyBinding: map[string]any{"type": "integer"},
+		MessageTypes: []asyncapi.MessageType{{
+			Name:       "Order",
+			Payload:    map[string]any{"type": "integer"},
+			KeyBinding: map[string]any{"type": "integer"},
+		}},
 	}
 }
 
@@ -212,7 +216,7 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 		t.Errorf("warnings = %q, want the ignored-binding warning", parts.Warnings)
 	}
 
-	opts.KeyBinding = nil
+	opts.MessageTypes[0].KeyBinding = nil
 	parts, err = Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)

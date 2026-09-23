@@ -20,8 +20,12 @@ _Avoid_: event, record
 Kafka's content-agnostic transport unit: key bytes, value bytes and metadata, as the broker stores them. The term for technical contexts where the content does not matter: producing, framing, acknowledgement.
 _Avoid_: message (in a technical context)
 
+**Message type**:
+A kind of message the spec declares for a Kafka topic, e.g. OrderCreated or OrderUpdated: its Message schema and its Key binding. A Kafka topic carries one or more, and each message is of one. In JSON mode each record's Message type is picked from the seeded stream, so a Kafka topic's Message types mix across its records; they must declare the same Key binding, or none, because a Key identifies one Entity across them. Under AVRO the avsc governs instead.
+_Avoid_: event type, message schema, message (alone)
+
 **Message schema**:
-A JSON Schema embedded in the AsyncAPI spec as the payload of the message it declares for the Kafka topic. Defines the structure and constraints of generated test data.
+A JSON Schema embedded in the AsyncAPI spec as the payload of a Message type. Defines the structure and constraints of generated test data.
 _Avoid_: payload schema
 
 **Payload**:
@@ -29,7 +33,7 @@ The data part of a single generated message, conforming to the schema that gover
 _Avoid_: message, record, event (use "Payload" for the data, "message" for Key plus Payload, "Kafka record" for Kafka's transport unit)
 
 **Conformance**:
-The generator's output promise, defined per Wire format. Every Payload honors every constraint of the schema that governs that format - the Message schema (JSON Schema) in JSON mode, the avsc in AVRO mode; anything the governing schema cannot honor stops the run with a typed error rather than emitting non-conforming data. Validation never runs in the generation path.
+The generator's output promise, defined per Wire format. Every Payload honors every constraint of the schema that governs that format - the chosen Message type's Message schema (JSON Schema) in JSON mode, the avsc in AVRO mode; anything the governing schema cannot honor stops the run with a typed error rather than emitting non-conforming data. Validation never runs in the generation path.
 _Avoid_: payload validation, schema checking
 
 **Key**:
@@ -60,7 +64,7 @@ The deep module driving a run: generates each message for the active Wire format
 _Avoid_: runner, loop, producer loop
 
 **ValueGenerator**:
-The seam between the Pipeline and Payload generation: one method, `Value() (any, error)`, promises a Payload honouring the schema that governs the active Wire format (see Conformance), or a typed conformance error. The Wire format binds that schema when it builds the generator: the Message schema in JSON mode, the value avsc in AVRO mode. Adapters pass the deletion test: one per Wire format in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
+The seam between the Pipeline and Payload generation: one method, `Value() (any, error)`, promises a Payload honouring the schema that governs the active Wire format (see Conformance), or a typed conformance error. The Wire format binds that schema when it builds the generator: the Message types' Message schemas in JSON mode, one picked per record, the value avsc in AVRO mode. Adapters pass the deletion test: one per Wire format in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
 _Avoid_: generator interface, data source
 
 **Synthesizer**:
