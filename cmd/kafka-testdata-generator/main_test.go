@@ -22,7 +22,7 @@ func TestScenarioBasicDryRun(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "3")
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "3")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -41,13 +41,13 @@ func TestScenarioDeterministic(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd1 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
+	cmd1 := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out1, err := cmd1.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 1 failed: %v\noutput: %s", err, out1)
 	}
 
-	cmd2 := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
+	cmd2 := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "2", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 	out2, err := cmd2.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command 2 failed: %v\noutput: %s", err, out2)
@@ -73,7 +73,7 @@ func TestScenarioPiping(t *testing.T) {
 
 	// Generate and pipe through jq to extract orderId
 	cmd := exec.Command("sh", "-c",
-		bin+" -spec "+spec+" -channel orders.created -dry-run -count 2 | head -1")
+		bin+" -spec "+spec+" -topic orders.created -dry-run -count 2 | head -1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -89,7 +89,7 @@ func TestScenarioRateLimit(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "3", "-rate", "10ms")
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "3", "-rate", "10ms")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -105,7 +105,7 @@ func TestScenarioStats(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "5")
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "5")
 	combined, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
@@ -179,7 +179,7 @@ channels:
 	for _, seed := range seeds {
 		// Termination at any seed: the command must finish quickly.
 		done := make(chan error, 1)
-		cmd := exec.Command(bin, "-spec", spec, "-channel", "categories",
+		cmd := exec.Command(bin, "-spec", spec, "-topic", "categories",
 			"-dry-run", "-count", "5", "-seed", seed)
 		var out []byte
 		var err error
@@ -206,7 +206,7 @@ channels:
 
 	// Determinism: identical output for a fixed seed.
 	runForSeed := func(seed string) []string {
-		cmd := exec.Command(bin, "-spec", spec, "-channel", "categories",
+		cmd := exec.Command(bin, "-spec", spec, "-topic", "categories",
 			"-dry-run", "-count", "3", "-seed", seed)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -230,7 +230,7 @@ func TestScenarioDryRunWarnsOnAcks(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "1", "-acks", "all").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
@@ -248,7 +248,7 @@ func TestScenarioDryRunKeyDoesNotWarn(t *testing.T) {
 	bin := buildBinary(t)
 	spec := writeTempSpec(t, keyPathSpec)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders",
 		"-dry-run", "-count", "2", "-seed", "42", "-keyPath", "orderId").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
@@ -267,7 +267,7 @@ func TestScenarioDryRunWarnsOnExplicitBroker(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "1", "-broker", "localhost:9092").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out)
@@ -281,7 +281,7 @@ func TestScenarioSignalHandling(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created", "-dry-run", "-count", "100")
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created", "-dry-run", "-count", "100")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start command: %v", err)
 	}
@@ -335,7 +335,7 @@ channels:
 `)
 
 	run := func() []string {
-		cmd := exec.Command(bin, "-spec", spec, "-channel", "mixed",
+		cmd := exec.Command(bin, "-spec", spec, "-topic", "mixed",
 			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z")
 		out, err := cmd.Output()
 		if err != nil {
@@ -356,7 +356,7 @@ channels:
 
 	// A different -now must change date fields but keep seed-driven fields identical.
 	runWithNow := func(now string) []string {
-		cmd := exec.Command(bin, "-spec", spec, "-channel", "mixed",
+		cmd := exec.Command(bin, "-spec", spec, "-topic", "mixed",
 			"-dry-run", "-count", "3", "-seed", "42", "-now", now)
 		out, err := cmd.Output()
 		if err != nil {
@@ -394,7 +394,7 @@ func TestScenarioSKUConforms(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "10").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -426,7 +426,7 @@ func TestScenarioFormatAvroDryRunRendersAvroJSON(t *testing.T) {
 		{"name":"amt","type":{"type":"bytes","logicalType":"decimal","precision":10,"scale":2}}
 	]}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z",
 		"-format", "avro", "-avro-schema", avsc).CombinedOutput()
 	if err != nil {
@@ -461,7 +461,7 @@ func TestScenarioFormatAvroDryRunDeterministic(t *testing.T) {
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"},{"name":"qty","type":"int"}]}`)
 
 	run := func() []string {
-		out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 			"-dry-run", "-count", "3", "-seed", "42", "-now", "2026-01-02T03:04:05Z",
 			"-format", "avro", "-avro-schema", avsc).CombinedOutput()
 		if err != nil {
@@ -490,7 +490,7 @@ func TestScenarioAvroDryRunIgnoresRegistry(t *testing.T) {
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "2", "-format", "avro", "-avro-schema", avsc,
 		"-registry", "http://127.0.0.1:1").CombinedOutput()
 	if err != nil {
@@ -523,7 +523,7 @@ func TestScenarioAvroDryRunDoesNotContactRegistry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "2", "-format", "avro", "-avro-schema", avsc,
 		"-registry", srv.URL).CombinedOutput()
 	if err != nil {
@@ -551,7 +551,7 @@ func TestScenarioAvroProduceContactsBrokerNotRegistry(t *testing.T) {
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-count", "1", "-format", "avro", "-avro-schema", avsc,
 		"-broker", "127.0.0.1:1", "-registry", "http://127.0.0.1:1").CombinedOutput()
 	if err == nil {
@@ -591,7 +591,7 @@ channels:
 `)
 	avsc := writeTempAvsc(t, "order.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders",
 		"-dry-run", "-count", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -610,7 +610,7 @@ func TestScenarioAvroUnhonorableAvsc(t *testing.T) {
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
 	avsc := writeTempAvsc(t, "cycle.avsc", `{"type":"record","name":"Node","fields":[{"name":"next","type":"Node"}]}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "2", "-seed", "1", "-format", "avro", "-avro-schema", avsc).CombinedOutput()
 	if err == nil {
 		t.Fatal("expected an unhonorable avsc to fail the run")
@@ -626,7 +626,7 @@ func TestScenarioAvroKeySchemaDryRunGeneratesKey(t *testing.T) {
 	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
 	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
 
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "2", "-seed", "42", "-format", "avro",
 		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc).CombinedOutput()
 	if err != nil {
@@ -706,7 +706,7 @@ channels:
             id:
               type: string
 `)
-	out, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders",
 		"-dry-run", "-count", "2", "-seed", "42").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, out)
@@ -735,7 +735,7 @@ channels:
             id:
               type: string
 `)
-	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+	combined, err := exec.Command(bin, "-spec", spec, "-topic", "orders",
 		"-dry-run", "-count", "1", "-seed", "42").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
@@ -774,7 +774,7 @@ channels:
             id:
               type: string
 `)
-	combined, err := exec.Command(bin, "-spec", spec, "-channel", "orders",
+	combined, err := exec.Command(bin, "-spec", spec, "-topic", "orders",
 		"-dry-run", "-count", "2", "-seed", "42").CombinedOutput()
 	if err != nil {
 		t.Fatalf("command failed: %v\noutput: %s", err, combined)
@@ -812,7 +812,7 @@ func TestScenarioHeuristicsAgreeAcrossFormats(t *testing.T) {
 	avsc := writeTempAvsc(t, "same.avsc", `{"type":"record","name":"Same","fields":[`+strings.Join(avscFields, ",")+`]}`)
 
 	run := func(extra ...string) map[string]any {
-		args := append([]string{"-spec", specPath, "-channel", "orders", "-dry-run", "-count", "1",
+		args := append([]string{"-spec", specPath, "-topic", "orders", "-dry-run", "-count", "1",
 			"-seed", "1", "-now", "2026-09-16T00:00:00Z"}, extra...)
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err != nil {
@@ -851,7 +851,7 @@ func TestScenarioAvroKeyAndPayloadShareOneStream(t *testing.T) {
 	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Note","fields":[{"name":"note","type":"string"}]}`)
 	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "1", "-seed", "42", "-format", "avro",
 		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc)
 	var stdout, stderr strings.Builder
@@ -889,7 +889,7 @@ func TestScenarioExtendedHeuristicsBothFormats(t *testing.T) {
 	avsc := writeTempAvsc(t, "ext.avsc", `{"type":"record","name":"Ext","fields":[`+strings.Join(avscFields, ",")+`]}`)
 
 	run := func(extra ...string) map[string]any {
-		args := append([]string{"-spec", specPath, "-channel", "orders", "-dry-run", "-count", "1",
+		args := append([]string{"-spec", specPath, "-topic", "orders", "-dry-run", "-count", "1",
 			"-seed", "5", "-now", "2026-09-18T00:00:00Z"}, extra...)
 		out, err := exec.Command(bin, args...).CombinedOutput()
 		if err != nil {
@@ -983,7 +983,7 @@ func TestScenarioKeyPathPlantsIntoPayload(t *testing.T) {
 
 	for _, path := range []string{"orderId", "customer.id", "items[1].sku"} {
 		t.Run(path, func(t *testing.T) {
-			cmd := exec.Command(bin, "-spec", spec, "-channel", "orders",
+			cmd := exec.Command(bin, "-spec", spec, "-topic", "orders",
 				"-dry-run", "-count", "3", "-seed", "42", "-keyPath", path)
 			var stdout, stderr strings.Builder
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -1022,7 +1022,7 @@ func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
 			if path == "ref" {
 				key = writeTempAvsc(t, "uuidkey.avsc", `{"type":"string","logicalType":"uuid"}`)
 			}
-			cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+			cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 				"-dry-run", "-count", "3", "-seed", "9", "-format", "avro",
 				"-avro-schema", valueAvsc, "-avro-key-schema", key, "-keyPath", path)
 			var stdout, stderr strings.Builder
@@ -1075,7 +1075,7 @@ func TestScenarioAvroRecordKeyDryRun(t *testing.T) {
 		{"name":"amount","type":{"type":"bytes","logicalType":"decimal","precision":6,"scale":2}},
 		{"name":"tag","type":{"type":"fixed","name":"Tag","size":2}}]}`)
 
-	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders.created",
 		"-dry-run", "-count", "5", "-seed", "3", "-format", "avro",
 		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc)
 	var stdout, stderr strings.Builder

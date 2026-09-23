@@ -34,7 +34,7 @@ go build -o kafka-testdata-generator ./cmd/kafka-testdata-generator
 Generate 10 test records (default) and produce to Kafka:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created
 ```
 
 ### Dry Run (Console Output)
@@ -42,7 +42,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 Generate records without producing to Kafka:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -dry-run
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -dry-run
 ```
 
 ### Piping Output
@@ -50,7 +50,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 Stream one record per line for piping to other tools:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -dry-run -count 5 | jq '.orderId'
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -dry-run -count 5 | jq '.orderId'
 ```
 
 ### Continuous Mode
@@ -58,7 +58,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 Generate records indefinitely until interrupted (Ctrl+C):
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -count 0
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -count 0
 ```
 
 ### Deterministic Generation
@@ -72,7 +72,7 @@ between releases.
 Dates and timestamps fall within the 365 days before `-now`.
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -seed 12345 -now 2026-01-02T03:04:05Z -dry-run
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -seed 12345 -now 2026-01-02T03:04:05Z -dry-run
 ```
 
 ### Rate Limiting
@@ -80,7 +80,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 Control the rate of record generation:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -rate 100ms
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -rate 100ms
 ```
 
 ### Acknowledgement Level
@@ -88,7 +88,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 Choose the broker acknowledgement level (see "Acks and Durability"):
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -acks all
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -acks all
 ```
 
 ### AVRO Wire Format
@@ -97,17 +97,17 @@ Produce Confluent-framed Avro (magic byte `0x00` + registry schema ID + Avro bin
 Schema Registry-backed topic, using an explicit value avsc:
 
 ```bash
-kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created \
+kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created \
   -format avro -avro-schema order.avsc -registry http://localhost:8081
 ```
 
 - Generation follows the avsc, not the AsyncAPI JSON Schema.
-- The value avsc is registered under `<channel>-value`; the returned schema ID is what gets
+- The value avsc is registered under `<topic>-value`; the returned schema ID is what gets
   framed on the wire, so any Confluent-compatible consumer can deserialize the records.
 - `-registry` is required only when producing (never in `-dry-run`); under `-format json` it is
   rejected.
 - Pass `-avro-key-schema key.avsc` to generate message keys from a key avsc: it registers under
-  `<channel>-key` and each key is framed with its own schema ID, so consumers deserialize it
+  `<topic>-key` and each key is framed with its own schema ID, so consumers deserialize it
   against the key avsc. Without it, records are payload-only (null key).
 - Dry run renders generated avro values in the Avro JSON encoding - the readable spec-defined text
   form, with logical types in their human-readable representation (dates as calendar days,
@@ -129,7 +129,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-spec` | (required) | Path to AsyncAPI spec file |
-| `-channel` | (required) | Kafka topic/channel to produce to |
+| `-topic` | (required) | Kafka topic to produce to |
 | `-broker` | `localhost:9092` | Kafka broker address |
 | `-count` | `10` | Number of records to generate (0 = infinite) |
 | `-rate` | `10ms` | Minimum time between messages |
@@ -162,7 +162,7 @@ carry a null key (Kafka convention, random partition), with an info message on s
 payload field hold the same value:
 
 ```bash
-kafka-testdata-generator -spec order.yaml -channel orders.created -keyPath customer.id -dry-run
+kafka-testdata-generator -spec order.yaml -topic orders.created -keyPath customer.id -dry-run
 ```
 
 The path is a dotted name with optional array indexing (`customer.id`, `items[0].sku`),
@@ -182,7 +182,7 @@ than producing records whose key is missing from the payload.
 JSON key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e.g. `cust-1`),
 a number as its decimal text, and an object or array as JSON. This matches standard Kafka key
 conventions where the key is the raw serialized value, not a JSON wrapper. In **AVRO mode** the
-Key comes from the key avsc, is registered under `<channel>-key` and framed like the payload.
+Key comes from the key avsc, is registered under `<topic>-key` and framed like the payload.
 `-keyPath` works there too and requires `-avro-key-schema`; since only record fields are
 guaranteed in Avro, a path stepping into a union, an array or a map is rejected, and the type
 at the path must be the key avsc's type (same primitive kind and logical overlay, or the same
@@ -192,12 +192,30 @@ full name for a record, enum or fixed).
 > as the key; it now plants the generated Key into the payload and requires a key schema.
 > Passing `-key` stops with that explanation.
 
+> **Renamed:** `-channel` became `-topic`. It names the Kafka topic to produce to, which a spec
+> entry may bind under another key (`bindings.kafka.topic`). Passing `-channel` stops with that
+> explanation.
+
 ## AsyncAPI Specification
 
-The tool reads AsyncAPI 2.x specifications and extracts message schemas from channels. It supports:
+The tool reads AsyncAPI 2.x specifications and extracts the message schemas the spec declares
+for the Kafka topic. AsyncAPI describes a Kafka topic in an entry under its `channels:` key;
+`-topic` finds the entry whose Kafka binding names it, or else the one keyed by its name:
+
+```yaml
+channels:
+  orders-v1:                 # not a Kafka topic name: the binding below names it
+    bindings:
+      kafka:
+        topic: orders        # -topic orders finds this entry
+    publish:
+      message: {...}
+```
+
+Two entries for the same Kafka topic are refused by name for now. It supports:
 
 - `publish` and `subscribe` operations
-- Channel-level message definitions
+- `messages` declared directly on a spec entry
 - `$ref` references to component messages
 - Nested JSON Schema objects and arrays
 - All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`

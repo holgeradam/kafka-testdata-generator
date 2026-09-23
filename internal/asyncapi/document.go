@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -11,10 +12,12 @@ import (
 
 // Document represents a parsed AsyncAPI specification.
 type Document struct {
-	AsyncAPI   string             `yaml:"asyncapi" json:"asyncapi"`
-	Info       Info               `yaml:"info" json:"info"`
-	Channels   map[string]Channel `yaml:"channels" json:"channels"`
-	Components *Components        `yaml:"components,omitempty" json:"components,omitempty"`
+	AsyncAPI string `yaml:"asyncapi" json:"asyncapi"`
+	Info     Info   `yaml:"info" json:"info"`
+	// Channels is AsyncAPI's channels: key, holding the spec's entries for
+	// Kafka topics.
+	Channels   map[string]ChannelItem `yaml:"channels" json:"channels"`
+	Components *Components            `yaml:"components,omitempty" json:"components,omitempty"`
 
 	// raw is the whole spec decoded once into a navigable, JSON-normalized map
 	// that $ref resolution walks directly.
@@ -27,8 +30,12 @@ type Info struct {
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
-type Channel struct {
+// ChannelItem is AsyncAPI's Channel Item Object: the spec's entry for a Kafka
+// topic. Its key under channels: names the Kafka topic unless its Kafka
+// binding declares another (bindings.kafka.topic).
+type ChannelItem struct {
 	Ref         string         `yaml:"$ref,omitempty" json:"$ref,omitempty"`
+	Bindings    map[string]any `yaml:"bindings,omitempty" json:"bindings,omitempty"`
 	Messages    map[string]any `yaml:"messages,omitempty" json:"messages,omitempty"`
 	Publish     *Operation     `yaml:"publish,omitempty" json:"publish,omitempty"`
 	Subscribe   *Operation     `yaml:"subscribe,omitempty" json:"subscribe,omitempty"`
@@ -104,17 +111,17 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 }
 
 // KeyBinding extracts the message-level kafka key binding schema for the given
-// channel. Returns nil when no binding is present. The returned schema has $ref
-// nodes resolved so it can be fed directly to the Generator.
-func (d *Document) KeyBinding(channel string) (map[string]any, error) {
-	ch, ok := d.Channels[channel]
-	if !ok {
-		return nil, fmt.Errorf("channel %q not found in spec", channel)
-	}
-
-	msg, err := d.resolveChannelMessage(ch)
+// Kafka topic. Returns nil when no binding is present. The returned schema has
+// $ref nodes resolved so it can be fed directly to the Generator.
+func (d *Document) KeyBinding(topic string) (map[string]any, error) {
+	item, err := d.entryFor(topic)
 	if err != nil {
 		return nil, err
+	}
+
+	msg, err := d.resolveMessage(item)
+	if err != nil {
+		return nil, fmt.Errorf("Kafka topic %q: %w", topic, err)
 	}
 
 	if msg.Bindings == nil {
@@ -144,23 +151,23 @@ func (d *Document) KeyBinding(channel string) (map[string]any, error) {
 	return out, nil
 }
 
-// PayloadSchema extracts the JSON Schema for the message payload of the given channel.
-// If the channel has publish and subscribe operations, publish is preferred.
-// For oneOf messages, the first variant is returned.
-func (d *Document) PayloadSchema(channel string) (map[string]any, error) {
-	ch, ok := d.Channels[channel]
-	if !ok {
-		return nil, fmt.Errorf("channel %q not found in spec", channel)
-	}
-
-	msg, err := d.resolveChannelMessage(ch)
+// PayloadSchema extracts the JSON Schema for the message payload of the given
+// Kafka topic. If its spec entry has publish and subscribe operations, publish
+// is preferred.
+func (d *Document) PayloadSchema(topic string) (map[string]any, error) {
+	item, err := d.entryFor(topic)
 	if err != nil {
 		return nil, err
 	}
 
+	msg, err := d.resolveMessage(item)
+	if err != nil {
+		return nil, fmt.Errorf("Kafka topic %q: %w", topic, err)
+	}
+
 	schema := msg.Payload
 	if schema == nil {
-		return nil, fmt.Errorf("no payload schema in message for channel %q", channel)
+		return nil, fmt.Errorf("no payload schema in message for Kafka topic %q", topic)
 	}
 
 	resolved, err := d.resolveNode(schema, nil)
@@ -169,7 +176,7 @@ func (d *Document) PayloadSchema(channel string) (map[string]any, error) {
 	}
 	out, ok := resolved.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("payload schema for channel %q must be an object", channel)
+		return nil, fmt.Errorf("payload schema for Kafka topic %q must be an object", topic)
 	}
 
 	// Cyclic refs are preserved as $ref nodes in `out`; the generator walks
@@ -263,9 +270,44 @@ func deepCopy(v any) any {
 	}
 }
 
-func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
+// entryFor returns the spec's entry for a Kafka topic: the one entry whose
+// Kafka binding names it, or whose key names it when it binds no other Kafka
+// topic. Several entries bound to one Kafka topic are refused by name rather
+// than one of them picked, until their Message types can be mixed (#74).
+func (d *Document) entryFor(topic string) (ChannelItem, error) {
+	var names []string
+	for name, item := range d.Channels {
+		if item.kafkaTopic(name) == topic {
+			names = append(names, name)
+		}
+	}
+	switch len(names) {
+	case 0:
+		if item, ok := d.Channels[topic]; ok {
+			return ChannelItem{}, fmt.Errorf("Kafka topic %q not found in spec: the spec entry %s binds Kafka topic %q", topic, topic, item.kafkaTopic(topic))
+		}
+		return ChannelItem{}, fmt.Errorf("Kafka topic %q not found in spec", topic)
+	case 1:
+		return d.Channels[names[0]], nil
+	}
+	sort.Strings(names)
+	return ChannelItem{}, fmt.Errorf("Kafka topic %q is bound by several spec entries (%s); mixing their Message types is not supported yet", topic, strings.Join(names, ", "))
+}
+
+// kafkaTopic is the Kafka topic an entry keyed name stands for: its
+// bindings.kafka.topic when declared, else the key itself.
+func (c ChannelItem) kafkaTopic(name string) string {
+	if kafka, ok := c.Bindings["kafka"].(map[string]any); ok {
+		if topic, ok := kafka["topic"].(string); ok && topic != "" {
+			return topic
+		}
+	}
+	return name
+}
+
+func (d *Document) resolveMessage(item ChannelItem) (*Message, error) {
 	// Try publish first, then subscribe
-	for _, op := range []*Operation{ch.Publish, ch.Subscribe} {
+	for _, op := range []*Operation{item.Publish, item.Subscribe} {
 		if op == nil || op.Message == nil {
 			continue
 		}
@@ -278,9 +320,9 @@ func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
 		}
 	}
 
-	// Try channel-level messages
-	if ch.Messages != nil {
-		for _, v := range ch.Messages {
+	// Try entry-level messages
+	if item.Messages != nil {
+		for _, v := range item.Messages {
 			if m, ok := v.(map[string]any); ok {
 				msg, err := messageFromMap(d, m)
 				if err != nil {
@@ -291,7 +333,7 @@ func (d *Document) resolveChannelMessage(ch Channel) (*Message, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no message found for channel")
+	return nil, fmt.Errorf("no message found in its spec entry")
 }
 
 func (d *Document) normalizeMessages(raw any) ([]*Message, error) {

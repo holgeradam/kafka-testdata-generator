@@ -157,7 +157,7 @@ channels:
 	}
 }
 
-func TestMissingChannel(t *testing.T) {
+func TestMissingKafkaTopic(t *testing.T) {
 	spec := `
 asyncapi: '2.6.0'
 info:
@@ -171,8 +171,8 @@ channels: {}
 	}
 
 	_, err = doc.PayloadSchema("nonexistent")
-	if err == nil {
-		t.Error("expected error for missing channel")
+	if err == nil || !strings.Contains(err.Error(), `Kafka topic "nonexistent" not found in spec`) {
+		t.Errorf("err = %v, want the missing Kafka topic named", err)
 	}
 }
 
@@ -612,7 +612,7 @@ channels:
 	}
 }
 
-func TestKeyBindingMissingChannel(t *testing.T) {
+func TestKeyBindingMissingKafkaTopic(t *testing.T) {
 	spec := `
 asyncapi: '2.6.0'
 info:
@@ -627,6 +627,75 @@ channels: {}
 
 	_, err = doc.KeyBinding("nonexistent")
 	if err == nil {
-		t.Error("expected error for missing channel")
+		t.Error("expected error for missing Kafka topic")
+	}
+}
+
+// TestKafkaTopicFromBinding proves the spec entry for a Kafka topic is found
+// through its bindings.kafka.topic, which may differ from the entry's key, and
+// that an entry binding another Kafka topic is not found by its key (#72).
+func TestKafkaTopicFromBinding(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info: {title: Test, version: '1.0.0'}
+channels:
+  orders-v1:
+    bindings: {kafka: {topic: orders}}
+    publish:
+      message:
+        payload: {type: object, properties: {orderId: {type: string}}}
+  payments:
+    bindings: {kafka: {bindingVersion: '0.4.0'}}
+    publish:
+      message:
+        payload: {type: object, properties: {paymentId: {type: string}}}
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	schema, err := doc.PayloadSchema("orders")
+	if err != nil {
+		t.Fatalf("PayloadSchema(orders): %v", err)
+	}
+	if _, ok := schema["properties"].(map[string]any)["orderId"]; !ok {
+		t.Errorf("schema = %v, want the orders-v1 entry's Payload", schema)
+	}
+	// The entry's key is what a user may type; the error points to the
+	// Kafka topic the entry binds.
+	_, err = doc.PayloadSchema("orders-v1")
+	if err == nil || !strings.Contains(err.Error(), `the spec entry orders-v1 binds Kafka topic "orders"`) {
+		t.Errorf("err = %v, want the bound Kafka topic named", err)
+	}
+	// A kafka binding without a topic leaves the entry's key as the Kafka topic.
+	if _, err := doc.PayloadSchema("payments"); err != nil {
+		t.Errorf("PayloadSchema(payments): %v", err)
+	}
+}
+
+// TestKafkaTopicWithTwoEntries proves two spec entries bound to one Kafka
+// topic are refused by name rather than one picked at random, until their
+// Message types are mixed (#74).
+func TestKafkaTopicWithTwoEntries(t *testing.T) {
+	spec := `
+asyncapi: '2.6.0'
+info: {title: Test, version: '1.0.0'}
+channels:
+  orders-v2:
+    bindings: {kafka: {topic: orders}}
+    publish: {message: {payload: {type: object}}}
+  orders:
+    publish: {message: {payload: {type: object}}}
+`
+	doc, err := Load(writeSpec(t, spec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, get := range []func(string) (map[string]any, error){doc.PayloadSchema, doc.KeyBinding} {
+		_, err := get("orders")
+		if err == nil || !strings.Contains(err.Error(), "orders, orders-v2") {
+			t.Errorf("err = %v, want both spec entries named", err)
+		}
 	}
 }

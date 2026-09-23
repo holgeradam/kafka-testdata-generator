@@ -101,7 +101,7 @@ func TestRunClosesSinkOnPipelineError(t *testing.T) {
 	var stdout, stderr strings.Builder
 
 	code := run(context.Background(), "ktg",
-		[]string{"-spec", writeSpec(t, unhonorableSpec), "-channel", "orders", "-dry-run", "-count", "2"},
+		[]string{"-spec", writeSpec(t, unhonorableSpec), "-topic", "orders", "-dry-run", "-count", "2"},
 		&stdout, &stderr)
 
 	if code != 1 {
@@ -122,7 +122,7 @@ func TestRunClosesSinkOnSuccess(t *testing.T) {
 	var stdout, stderr strings.Builder
 
 	code := run(context.Background(), "ktg",
-		[]string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-dry-run", "-count", "3"},
+		[]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-count", "3"},
 		&stdout, &stderr)
 
 	if code != 0 {
@@ -144,7 +144,7 @@ func TestRunClosesSinkOnSuccess(t *testing.T) {
 func TestRunWritesToGivenWriters(t *testing.T) {
 	var stdout, stderr strings.Builder
 	code := run(context.Background(), "ktg",
-		[]string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-dry-run", "-count", "1", "-seed", "1"},
+		[]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-count", "1", "-seed", "1"},
 		&stdout, &stderr)
 
 	if code != 0 {
@@ -167,10 +167,10 @@ func TestRunUsageOnlyForFlagRules(t *testing.T) {
 		args      []string
 		wantUsage bool
 	}{
-		{"missing flag", []string{"-channel", "orders"}, true},
-		{"renamed flag", []string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-key", "orderId"}, true},
-		{"unknown flag", []string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-bogus"}, true},
-		{"missing spec file", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-channel", "orders"}, false},
+		{"missing flag", []string{"-topic", "orders"}, true},
+		{"renamed flag", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-key", "orderId"}, true},
+		{"unknown flag", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-bogus"}, true},
+		{"missing spec file", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-topic", "orders"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -213,7 +213,7 @@ func TestRunCancelledContextStops(t *testing.T) {
 
 	var stdout, stderr strings.Builder
 	code := run(ctx, "ktg",
-		[]string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-dry-run", "-count", "0"},
+		[]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-count", "0"},
 		&stdout, &stderr)
 
 	if code != 0 {
@@ -235,7 +235,7 @@ func TestRunSinkErrorReported(t *testing.T) {
 
 	var stdout, stderr strings.Builder
 	code := run(context.Background(), "ktg",
-		[]string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-count", "1"},
+		[]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-count", "1"},
 		&stdout, &stderr)
 
 	if code != 1 {

@@ -64,6 +64,20 @@ channels:
             nickname: {type: string}
 `
 
+// twoEntriesSpec binds two spec entries to one Kafka topic, which the plan
+// refuses until their Message types can be mixed (#74).
+const twoEntriesSpec = `
+asyncapi: '2.6.0'
+info: {title: Two, version: '1.0.0'}
+channels:
+  orders-v1:
+    bindings: {kafka: {topic: orders}}
+    publish: {message: {payload: {type: object}}}
+  orders-v2:
+    bindings: {kafka: {topic: orders}}
+    publish: {message: {payload: {type: object}}}
+`
+
 const valueAvsc = `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`
 const keyAvsc = `{"type":"string"}`
 
@@ -82,7 +96,7 @@ func TestPlanAccepts(t *testing.T) {
 	}{
 		{
 			name: "json dry run",
-			args: []string{"-spec", spec, "-channel", "orders", "-dry-run"},
+			args: []string{"-spec", spec, "-topic", "orders", "-dry-run"},
 			check: func(t *testing.T, r *Run) {
 				if !r.DryRun || r.Format != "json" || r.Topic != "orders" {
 					t.Errorf("got %+v, want a json dry run on orders", r)
@@ -100,7 +114,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "key plan from binding",
-			args: []string{"-spec", bound, "-channel", "orders", "-dry-run", "-keyPath", "orderId"},
+			args: []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "orderId"},
 			check: func(t *testing.T, r *Run) {
 				if r.Config.KeyPlan == nil {
 					t.Fatal("a key binding and -keyPath must produce a KeyPlan")
@@ -117,7 +131,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "binding without a path still keys",
-			args: []string{"-spec", bound, "-channel", "orders", "-dry-run"},
+			args: []string{"-spec", bound, "-topic", "orders", "-dry-run"},
 			check: func(t *testing.T, r *Run) {
 				if r.Config.KeyPlan == nil {
 					t.Error("a key binding alone must still produce a KeyPlan")
@@ -126,7 +140,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "avro dry run",
-			args: []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
+			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
 			check: func(t *testing.T, r *Run) {
 				if r.Format != "avro" {
 					t.Errorf("Format = %q, want avro", r.Format)
@@ -138,7 +152,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "avro key avsc",
-			args: []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key},
+			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key},
 			check: func(t *testing.T, r *Run) {
 				if r.Config.KeyPlan == nil {
 					t.Error("a key avsc must produce a KeyPlan")
@@ -147,7 +161,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "acks accepts any case",
-			args: []string{"-spec", spec, "-channel", "orders", "-dry-run", "-acks", "aLL"},
+			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-acks", "aLL"},
 			check: func(t *testing.T, r *Run) {
 				if r.Acks != producer.AcksAll {
 					t.Errorf("Acks = %v, want all", r.Acks)
@@ -156,7 +170,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "explicit json format matches the default",
-			args: []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "json"},
+			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "json"},
 			check: func(t *testing.T, r *Run) {
 				if r.Format != "json" {
 					t.Errorf("Format = %q, want json", r.Format)
@@ -165,7 +179,7 @@ func TestPlanAccepts(t *testing.T) {
 		},
 		{
 			name: "kafka options",
-			args: []string{"-spec", spec, "-channel", "orders", "-broker", "kafka:9092", "-acks", "all", "-count", "3"},
+			args: []string{"-spec", spec, "-topic", "orders", "-broker", "kafka:9092", "-acks", "all", "-count", "3"},
 			check: func(t *testing.T, r *Run) {
 				if r.DryRun {
 					t.Error("DryRun must be false without -dry-run")
@@ -199,9 +213,9 @@ func TestPlanWarnings(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"dry run disregards kafka options", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-broker", "other:9092"}, "dry-run mode disregards Kafka options"},
-		{"dry run disregards acks", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-acks", "all"}, "dry-run mode disregards Kafka options"},
-		{"binding ignored under avro", []string{"-spec", bound, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value}, "key bindings are ignored under -format avro"},
+		{"dry run disregards kafka options", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-broker", "other:9092"}, "dry-run mode disregards Kafka options"},
+		{"dry run disregards acks", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-acks", "all"}, "dry-run mode disregards Kafka options"},
+		{"binding ignored under avro", []string{"-spec", bound, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value}, "key bindings are ignored under -format avro"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -215,7 +229,7 @@ func TestPlanWarnings(t *testing.T) {
 		})
 	}
 
-	r, err := Plan([]string{"-spec", spec, "-channel", "orders", "-dry-run"})
+	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -241,6 +255,7 @@ func TestPlanRejects(t *testing.T) {
 	bound := write(t, "bound.yaml", bindingSpec)
 	value := write(t, "value.avsc", valueAvsc)
 	key := write(t, "key.avsc", keyAvsc)
+	twoEntries := write(t, "two.yaml", twoEntriesSpec)
 	broken := write(t, "broken.avsc", `{"type":"record","name":"X","fields":[{"name":"n","type":"nope"}]}`)
 
 	cases := []struct {
@@ -250,24 +265,26 @@ func TestPlanRejects(t *testing.T) {
 		wantText string
 		wantAs   any
 	}{
-		{"no spec", []string{"-channel", "orders"}, "spec", "-spec is required", nil},
-		{"no channel", []string{"-spec", spec}, "channel", "-channel is required", nil},
-		{"renamed key flag", []string{"-spec", spec, "-channel", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
-		{"avro without value avsc", []string{"-spec", spec, "-channel", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},
-		{"avro key path without key avsc", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires -avro-key-schema", nil},
-		{"avro produce without registry", []string{"-spec", spec, "-channel", "orders", "-format", "avro", "-avro-schema", value}, "registry", "-registry is required", nil},
-		{"avro flags under json", []string{"-spec", spec, "-channel", "orders", "-avro-schema", value}, "avro-schema", "only valid with -format avro", nil},
-		{"registry under json", []string{"-spec", spec, "-channel", "orders", "-registry", "http://localhost:8081"}, "registry", "-registry is only valid with -format avro", nil},
-		{"key path without key schema", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "-keyPath requires a key schema", nil},
-		{"spec file missing", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-channel", "orders"}, "spec", "", nil},
-		{"channel missing from spec", []string{"-spec", spec, "-channel", "nope", "-dry-run"}, "channel", "", nil},
-		{"malformed avsc", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", broken}, "avro-schema", "", new(*avro.ParseError)},
-		{"key path not guaranteed", []string{"-spec", bound, "-channel", "orders", "-dry-run", "-keyPath", "nickname"}, "keyPath", "not required", new(*keyplan.PathError)},
-		{"unknown flag", []string{"-spec", spec, "-channel", "orders", "-nope"}, "", "not defined", nil},
-		{"invalid format", []string{"-spec", spec, "-channel", "orders", "-format", "xml"}, "", "invalid -format", nil},
-		{"invalid acks", []string{"-spec", spec, "-channel", "orders", "-acks", "two"}, "", "invalid -acks", nil},
-		{"invalid now", []string{"-spec", spec, "-channel", "orders", "-now", "yesterday"}, "", "invalid -now", nil},
-		{"avro key path not guaranteed", []string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key, "-keyPath", "missing"}, "keyPath", "no field", new(*keyplan.PathError)},
+		{"no spec", []string{"-topic", "orders"}, "spec", "-spec is required", nil},
+		{"no topic", []string{"-spec", spec}, "topic", "-topic is required", nil},
+		{"renamed channel flag", []string{"-spec", spec, "-channel", "orders"}, "channel", "-channel was renamed to -topic", nil},
+		{"two spec entries for one Kafka topic", []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"}, "topic", "orders-v1, orders-v2", nil},
+		{"renamed key flag", []string{"-spec", spec, "-topic", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
+		{"avro without value avsc", []string{"-spec", spec, "-topic", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},
+		{"avro key path without key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires -avro-key-schema", nil},
+		{"avro produce without registry", []string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value}, "registry", "-registry is required", nil},
+		{"avro flags under json", []string{"-spec", spec, "-topic", "orders", "-avro-schema", value}, "avro-schema", "only valid with -format avro", nil},
+		{"registry under json", []string{"-spec", spec, "-topic", "orders", "-registry", "http://localhost:8081"}, "registry", "-registry is only valid with -format avro", nil},
+		{"key path without key schema", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "-keyPath requires a key schema", nil},
+		{"spec file missing", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-topic", "orders"}, "spec", "", nil},
+		{"Kafka topic missing from spec", []string{"-spec", spec, "-topic", "nope", "-dry-run"}, "topic", "", nil},
+		{"malformed avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", broken}, "avro-schema", "", new(*avro.ParseError)},
+		{"key path not guaranteed", []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "nickname"}, "keyPath", "not required", new(*keyplan.PathError)},
+		{"unknown flag", []string{"-spec", spec, "-topic", "orders", "-nope"}, "", "not defined", nil},
+		{"invalid format", []string{"-spec", spec, "-topic", "orders", "-format", "xml"}, "", "invalid -format", nil},
+		{"invalid acks", []string{"-spec", spec, "-topic", "orders", "-acks", "two"}, "", "invalid -acks", nil},
+		{"invalid now", []string{"-spec", spec, "-topic", "orders", "-now", "yesterday"}, "", "invalid -now", nil},
+		{"avro key path not guaranteed", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key, "-keyPath", "missing"}, "keyPath", "no field", new(*keyplan.PathError)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -296,7 +313,7 @@ func TestPlanRejects(t *testing.T) {
 // generate the same payloads, so the seed reaches the generator.
 func TestPlanIsDeterministic(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
-	args := []string{"-spec", spec, "-channel", "orders", "-dry-run", "-seed", "42", "-now", "2026-09-22T00:00:00Z"}
+	args := []string{"-spec", spec, "-topic", "orders", "-dry-run", "-seed", "42", "-now", "2026-09-22T00:00:00Z"}
 
 	first, err := Plan(args)
 	if err != nil {
@@ -323,7 +340,7 @@ func TestPlanIsDeterministic(t *testing.T) {
 // writers, and only the produce path dials a broker.
 func TestNewSink(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
-	r, err := Plan([]string{"-spec", spec, "-channel", "orders", "-dry-run"})
+	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -347,7 +364,7 @@ func TestNewEncoder(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
 	value := write(t, "value.avsc", valueAvsc)
 
-	json, err := Plan([]string{"-spec", spec, "-channel", "orders", "-dry-run"})
+	json, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -359,7 +376,7 @@ func TestNewEncoder(t *testing.T) {
 		t.Errorf("json encoder = %T, want jsonwire.JsonEncoder", enc)
 	}
 
-	avroDry, err := Plan([]string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
+	avroDry, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -376,7 +393,7 @@ func TestNewEncoder(t *testing.T) {
 		fmt.Fprint(w, `{"id":7}`)
 	}))
 	defer srv.Close()
-	produce, err := Plan([]string{"-spec", spec, "-channel", "orders", "-format", "avro", "-avro-schema", value, "-registry", srv.URL})
+	produce, err := Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", srv.URL})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -388,7 +405,7 @@ func TestNewEncoder(t *testing.T) {
 		t.Errorf("avro produce encoder = %T, want *avrowire.AvroEncoder", enc)
 	}
 
-	dead, err := Plan([]string{"-spec", spec, "-channel", "orders", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
+	dead, err := Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -408,7 +425,7 @@ func TestUsage(t *testing.T) {
 	var buf strings.Builder
 	Usage(&buf, "ktg")
 	out := buf.String()
-	for _, want := range []string{"Usage: ktg", "-keyPath", "-avro-schema", "Examples:"} {
+	for _, want := range []string{"Usage: ktg", "-topic", "-keyPath", "-avro-schema", "Examples:", "ktg -spec order.yaml -topic orders.created"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage is missing %q:\n%s", want, out)
 		}
