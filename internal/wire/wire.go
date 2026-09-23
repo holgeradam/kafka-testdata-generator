@@ -8,10 +8,6 @@ package wire
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"math"
-	"strconv"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
@@ -99,34 +95,3 @@ func (e *Error) Error() string {
 
 // Unwrap exposes the cause for errors.Is/As.
 func (e *Error) Unwrap() error { return e.Err }
-
-// PlainScalarKey renders a Key by the plain-scalar contract (CONTEXT.md Key):
-// a string as UTF-8, a number as decimal text, and a structured value as JSON -
-// never a JSON-wrapped scalar. A nil Key yields nil bytes, so the record
-// carries a null Key. Both encoders that show a Key readably share it.
-func PlainScalarKey(key any) ([]byte, error) {
-	switch v := key.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		return []byte(v), nil
-	case float64:
-		// The JSON generator produces numbers as float64; any other numeric
-		// type falls through to JSON, which renders integers as decimal text.
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, fmt.Errorf("key: cannot encode non-finite number %v", v)
-		}
-		return []byte(strconv.FormatFloat(v, 'f', -1, 64)), nil
-	case bool:
-		return []byte(strconv.FormatBool(v)), nil
-	case []byte:
-		return v, nil
-	default:
-		// Objects, arrays, and any other structured value become JSON.
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("key: %w", err)
-		}
-		return b, nil
-	}
-}

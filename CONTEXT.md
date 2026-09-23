@@ -25,7 +25,7 @@ The generator's output promise, defined per Wire format. Every Payload honors ev
 _Avoid_: payload validation, schema checking
 
 **Key**:
-The Kafka message key, paired with the Payload as one record. It is generated from the **Key schema** and encoded by the Encoder, which owns Key encoding so the Pipeline never knows format conventions. With no Key schema the record carries a null Key. In JSON mode Key bytes are plain-scalar: string as UTF-8, number as decimal text, structured value as JSON; in AVRO mode the Key is Confluent-framed under `<channel>-key`.
+The Kafka message key, paired with the Payload as one record. It is generated from the **Key schema** and encoded by the Encoder, which owns Key encoding so the Pipeline never knows format conventions. With no Key schema the record carries a null Key. In JSON mode Key bytes are plain-scalar: string as UTF-8, number as decimal text, structured value as JSON; in AVRO mode the Key is Confluent-framed under `<channel>-key`, and a Dry run shows it in the Avro JSON encoding of the key avsc, like the Payload.
 _Avoid_: partition key
 
 **Key schema**:
@@ -40,7 +40,7 @@ _Avoid_: key source, key strategy
 Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every record and the type there can hold the Key; both are checked before the run starts, against whichever schema language governs the Payload.
 
 **Dry run**:
-Mode where the tool generates records and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its records readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats.
+Mode where the tool generates records and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its records readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats, in the same encoding the Payload is shown in: plain-scalar in JSON mode, the Avro JSON encoding of the key avsc under AVRO (a string Key therefore appears quoted).
 _Avoid_: console mode, stdout mode
 
 **Run plan**:
