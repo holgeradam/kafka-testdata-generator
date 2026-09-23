@@ -29,7 +29,7 @@ test-kafka:
 		--bootstrap-server localhost:9092 \
 		--create --topic orders.created --partitions 1 --replication-factor 1 \
 		--if-not-exists 2>/dev/null
-	go run ./cmd/kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.created -count 5
+	go run ./cmd/kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created -count 5
 	@echo ""
 	@echo "Press Enter to shut down Kafka..."
 	@read _dummy

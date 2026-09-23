@@ -30,11 +30,11 @@ type Format interface {
 
 // Options is what a run hands its Wire format: the relevant flags, then, from
 // Build on, the Synthesizer shared by Payload and Key and what the AsyncAPI
-// spec declares for the channel.
+// spec declares for the Kafka topic.
 type Options struct {
 	// DryRun is a property of the run; each format decides what it means.
 	DryRun bool
-	// Topic is the channel produced to.
+	// Topic is the Kafka topic produced to.
 	Topic string
 	// KeyPath is -keyPath; empty when the Key is not planted.
 	KeyPath string
@@ -45,7 +45,7 @@ type Options struct {
 
 	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
 	Synth *synth.Synthesizer
-	// Schema is the channel's Message schema, KeyBinding its
+	// Schema is the Kafka topic's Message schema, KeyBinding its
 	// bindings.kafka.key (nil when absent), and ResolveRef resolves the $refs
 	// both may hold.
 	Schema     map[string]any
