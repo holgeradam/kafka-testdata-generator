@@ -858,16 +858,16 @@ func TestScenarioAvroKeyAndPayloadShareOneStream(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
 	}
-	key := regexp.MustCompile(`Key: (\S+)`).FindStringSubmatch(stderr.String())
-	if key == nil {
-		t.Fatalf("no Key echo in stderr:\n%s", stderr.String())
+	keys := avroKeys(t, stderr.String())
+	if len(keys) != 1 {
+		t.Fatalf("expected one Key echo in stderr:\n%s", stderr.String())
 	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &payload); err != nil {
 		t.Fatalf("unmarshal payload %q: %v", stdout.String(), err)
 	}
-	if payload["note"] == key[1] {
-		t.Errorf("Key %q mirrors the Payload's first draw %q; want one shared stream", key[1], payload["note"])
+	if payload["note"] == keys[0] {
+		t.Errorf("Key %q mirrors the Payload's first draw %q; want one shared stream", keys[0], payload["note"])
 	}
 }
 
@@ -1029,7 +1029,7 @@ func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
 			if err := cmd.Run(); err != nil {
 				t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
 			}
-			keys := regexp.MustCompile(`Key: (.+)`).FindAllStringSubmatch(stderr.String(), -1)
+			keys := avroKeys(t, stderr.String())
 			lines := filterJSONLines(stdout.String())
 			if len(keys) != 3 || len(lines) != 3 {
 				t.Fatalf("expected 3 keys and 3 payloads, got %d and %d\nstderr: %s", len(keys), len(lines), stderr.String())
@@ -1039,10 +1039,69 @@ func TestScenarioAvroKeyPathPlantsIntoPayload(t *testing.T) {
 				if err := json.Unmarshal([]byte(line), &payload); err != nil {
 					t.Fatalf("record %d: unmarshal: %v", i, err)
 				}
-				if got := keyAt(t, payload, path); got != keys[i][1] {
-					t.Errorf("record %d: Key %q, payload holds %v at %s", i, keys[i][1], got, path)
+				if got := keyAt(t, payload, path); got != keys[i] {
+					t.Errorf("record %d: Key %v, payload holds %v at %s", i, keys[i], got, path)
 				}
 			}
 		})
+	}
+}
+
+// avroKeys decodes every "Key: " echo of an AVRO Dry run, which prints the
+// Key in the Avro JSON encoding of the key avsc (#64).
+func avroKeys(t *testing.T, stderr string) []any {
+	t.Helper()
+	var keys []any
+	for _, m := range regexp.MustCompile(`(?m)^Key: (.+)$`).FindAllStringSubmatch(stderr, -1) {
+		var k any
+		if err := json.Unmarshal([]byte(m[1]), &k); err != nil {
+			t.Fatalf("Key echo %q is not Avro JSON: %v", m[1], err)
+		}
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestScenarioAvroRecordKeyDryRun is the end-to-end reproduction of #64: a
+// record Key shows in the same Avro JSON encoding as the Payload, not as the
+// generator's Go values (a big.Rat fraction, a union wrapper, a byte array).
+func TestScenarioAvroRecordKeyDryRun(t *testing.T) {
+	bin := buildBinary(t)
+	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"record","name":"OrderKey","fields":[
+		{"name":"region","type":["null","string"]},
+		{"name":"amount","type":{"type":"bytes","logicalType":"decimal","precision":6,"scale":2}},
+		{"name":"tag","type":{"type":"fixed","name":"Tag","size":2}}]}`)
+
+	cmd := exec.Command(bin, "-spec", spec, "-channel", "orders.created",
+		"-dry-run", "-count", "5", "-seed", "3", "-format", "avro",
+		"-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc)
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+	}
+	keys := avroKeys(t, stderr.String())
+	if len(keys) != 5 {
+		t.Fatalf("expected 5 Key echoes, got %d\nstderr: %s", len(keys), stderr.String())
+	}
+	decimal := regexp.MustCompile(`^\d+\.\d{2}$`)
+	for i, k := range keys {
+		key, ok := k.(map[string]any)
+		if !ok {
+			t.Fatalf("record %d: Key %v is not a record", i, k)
+		}
+		if s, _ := key["amount"].(string); !decimal.MatchString(s) {
+			t.Errorf("record %d: amount %v, want base-10 text with scale 2", i, key["amount"])
+		}
+		if r := key["region"]; r != nil {
+			if _, ok := r.(string); !ok {
+				t.Errorf("record %d: region %v, want the union's active branch, unwrapped", i, r)
+			}
+		}
+		if s, _ := key["tag"].(string); len([]rune(s)) != 2 {
+			t.Errorf("record %d: tag %v, want a 2-character Latin-1 string", i, key["tag"])
+		}
 	}
 }

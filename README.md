@@ -113,7 +113,8 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
   form, with logical types in their human-readable representation (dates as calendar days,
   timestamps as ISO 8601 instants, decimals as base-10 strings) - straight from the local avsc,
   never contacting a registry; a supplied `-registry` draws the standard dry-run warning and is
-  ignored.
+  ignored. The Key echo on stderr uses the same encoding against the key avsc, so a string Key
+  appears quoted (`Key: "cust-1"`) and a record Key as an Avro JSON object.
 - Logical types: `date`, `time-millis`, `time-micros`, `timestamp-millis`, `timestamp-micros`,
   `local-timestamp-millis`, `local-timestamp-micros`, `decimal` and `uuid` generate values of
   their semantic kind. Any other logical type, such as `timestamp-nanos`, `big-decimal` or
@@ -134,10 +135,10 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -channel orders.crea
 | `-rate` | `10ms` | Minimum time between messages |
 | `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
-| `-seed` | current time | Random seed for reproducibility |
+| `-seed` | random | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
-| `-format` | `json` | Output wire format: `json` (default) or `avro` |
+| `-format` | `json` | Output wire format: `json` or `avro` |
 | `-avro-schema` | `` | Path to value avsc file (required with `-format avro`) |
 | `-avro-key-schema` | `` | Path to key avsc file (the AVRO key schema) |
 | `-registry` | `` | Confluent Schema Registry base URL (required with `-format avro` when producing) |

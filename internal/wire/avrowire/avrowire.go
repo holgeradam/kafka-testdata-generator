@@ -82,7 +82,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 func encoderFor(opts wire.Options, value, key *avro.Schema) func(context.Context) (pipeline.Encoder, error) {
 	if opts.DryRun {
 		return func(context.Context) (pipeline.Encoder, error) {
-			return NewAvroDisplayEncoder(value), nil
+			return NewAvroDisplayEncoder(value, key), nil
 		}
 	}
 	return func(ctx context.Context) (pipeline.Encoder, error) {

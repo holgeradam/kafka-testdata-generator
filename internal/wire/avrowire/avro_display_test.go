@@ -31,7 +31,7 @@ func TestAvroDisplayEncoderRendersAvroJSON(t *testing.T) {
 		{"name":"id","type":"string"},
 		{"name":"qty","type":"int"}
 	]}`)
-	enc := NewAvroDisplayEncoder(model)
+	enc := NewAvroDisplayEncoder(model, nil)
 
 	payload := map[string]any{"id": "abc", "qty": int32(42)}
 	keyBytes, payloadBytes, err := enc.Encode(nil, payload)
@@ -58,7 +58,7 @@ func TestAvroDisplayEncoderRendersAvroJSON(t *testing.T) {
 // (Avro JSON encoding) rather than the base64 JSON marshalling of a []byte.
 func TestAvroDisplayEncoderBytesLatin1(t *testing.T) {
 	model := testDisplayModel(t, `{"type":"record","name":"O","fields":[{"name":"blob","type":"bytes"}]}`)
-	enc := NewAvroDisplayEncoder(model)
+	enc := NewAvroDisplayEncoder(model, nil)
 
 	_, payloadBytes, err := enc.Encode(nil, map[string]any{"blob": []byte{0x00, 0xFF, 'A'}})
 	if err != nil {
@@ -75,28 +75,74 @@ func TestAvroDisplayEncoderBytesLatin1(t *testing.T) {
 	}
 }
 
-// TestAvroDisplayEncoderKeyContract proves the Dry-run AVRO adapter keeps the
-// plain-scalar key contract shared with JsonEncoder and AvroEncoder (string as
-// UTF-8, long as decimal text, nil as nil bytes).
+// TestAvroDisplayEncoderKeyContract proves the Dry-run AVRO Key is the Avro
+// JSON encoding of the key avsc (#64), scalars included: a string quoted, a
+// long bare. Without a key avsc there is no Key, and a mismatch between the two
+// is a programming error, as it is for the AvroEncoder.
 func TestAvroDisplayEncoderKeyContract(t *testing.T) {
-	model := testDisplayModel(t, `{"type":"record","name":"O","fields":[{"name":"id","type":"string"}]}`)
-	enc := NewAvroDisplayEncoder(model)
+	value := testDisplayModel(t, `{"type":"record","name":"O","fields":[{"name":"id","type":"string"}]}`)
+	payload := map[string]any{"id": "a"}
 
-	keyBytes, _, err := enc.Encode("cust-1", map[string]any{"id": "a"})
-	if err != nil {
-		t.Fatalf("Encode string key: %v", err)
+	cases := []struct {
+		avsc string
+		key  any
+		want string
+	}{
+		{`{"type":"string"}`, "cust-1", `"cust-1"`},
+		{`{"type":"long"}`, int64(42), `42`},
 	}
-	if string(keyBytes) != "cust-1" {
-		t.Errorf("string key = %q, want cust-1", keyBytes)
+	for _, tc := range cases {
+		enc := NewAvroDisplayEncoder(value, testDisplayModel(t, tc.avsc))
+		keyBytes, _, err := enc.Encode(tc.key, payload)
+		if err != nil {
+			t.Fatalf("%s: Encode: %v", tc.avsc, err)
+		}
+		if string(keyBytes) != tc.want {
+			t.Errorf("%s key = %s, want %s", tc.avsc, keyBytes, tc.want)
+		}
 	}
 
-	// Under AVRO an extracted key can be an int64 (a generated long).
-	keyBytes, _, err = enc.Encode(int64(42), map[string]any{"id": "a"})
-	if err != nil {
-		t.Fatalf("Encode int64 key: %v", err)
+	unkeyed := NewAvroDisplayEncoder(value, nil)
+	keyBytes, _, err := unkeyed.Encode(nil, payload)
+	if err != nil || keyBytes != nil {
+		t.Errorf("no key avsc: key = %q, err = %v; want nil, nil", keyBytes, err)
 	}
-	if string(keyBytes) != "42" {
-		t.Errorf("int64 key = %q, want 42", keyBytes)
+	if _, _, err := unkeyed.Encode("stray", payload); err == nil {
+		t.Error("a Key without a key avsc must be rejected")
+	}
+	keyed := NewAvroDisplayEncoder(value, testDisplayModel(t, `{"type":"string"}`))
+	if _, _, err := keyed.Encode(nil, payload); err == nil {
+		t.Error("a key avsc without a Key must be rejected")
+	}
+}
+
+// TestAvroDisplayEncoderRendersRecordKey is the reproduction of #64: a record
+// Key renders in the same Avro JSON encoding as the Payload - decimals as
+// base-10 text, unions by their active branch, fixed as a Latin-1 string -
+// never as the generator's in-memory Go values.
+func TestAvroDisplayEncoderRendersRecordKey(t *testing.T) {
+	value := testDisplayModel(t, `{"type":"record","name":"O","fields":[{"name":"id","type":"string"}]}`)
+	key := testDisplayModel(t, `{"type":"record","name":"OrderKey","fields":[
+		{"name":"region","type":["null","string"]},
+		{"name":"at","type":{"type":"long","logicalType":"timestamp-millis"}},
+		{"name":"amount","type":{"type":"bytes","logicalType":"decimal","precision":6,"scale":2}},
+		{"name":"tag","type":{"type":"fixed","name":"Tag","size":2}}]}`)
+	enc := NewAvroDisplayEncoder(value, key)
+
+	k, err := avro.NewGenerator(synth.New(3, testNow())).Value(key.Root)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keyBytes, _, err := enc.Encode(k, map[string]any{"id": "a"})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want, err := avro.RenderJSON(key.Root, k)
+	if err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	if string(keyBytes) != string(want) {
+		t.Errorf("key = %s, want the key avsc's Avro JSON %s", keyBytes, want)
 	}
 }
 
@@ -112,7 +158,7 @@ func TestAvroDisplayEncoderConformanceProperty(t *testing.T) {
 
 	for _, avsc := range fixtures {
 		model := testDisplayModel(t, avsc)
-		enc := NewAvroDisplayEncoder(model)
+		enc := NewAvroDisplayEncoder(model, nil)
 		for seed := int64(0); seed < 5; seed++ {
 			value, err := avro.NewGenerator(synth.New(seed, testNow())).Value(model.Root)
 			if err != nil {
