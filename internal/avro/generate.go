@@ -2,9 +2,7 @@ package avro
 
 import (
 	"fmt"
-	"math/big"
 	"reflect"
-	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -44,12 +42,10 @@ func (e *GenerateError) Unwrap() error {
 
 // Generator creates deterministic random Avro data values honouring the parsed
 // Avro model (ADR-0007 decision 3: generation follows the avsc). It produces
-// the native Go value conventions confluent-avro-go's generic marshaller
-// expects - int32 for int, time.Time for date/timestamps, time.Duration for
-// time-*, *big.Rat for decimal, [N]byte for fixed, and single-entry maps for
-// union branches - so an encoded payload is always registry-valid. It walks the
-// model and owns structure; every value and random decision comes from the
-// Synthesizer (ADR-0008).
+// the value convention in convention.go - the codec's own native Go values -
+// so an encoded payload is always registry-valid. It walks the model and owns
+// structure; every value and random decision comes from the Synthesizer
+// (ADR-0008).
 type Generator struct {
 	synth *synth.Synthesizer
 }
@@ -168,31 +164,6 @@ func (g *Generator) union(u *Union, name string, depth int) (any, error) {
 	return map[string]any{unionBranchName(branch): v}, nil
 }
 
-// unionBranchName returns the key confluent-avro-go's generic union encoder
-// expects for a branch: the logical-qualified primitive name, the fullname of
-// a named type, or "array"/"map".
-func unionBranchName(t Type) string {
-	switch x := t.(type) {
-	case *Primitive:
-		if x.Logical != nil {
-			return string(x.Kind) + "." + string(x.Logical.Kind)
-		}
-		return string(x.Kind)
-	case *Record:
-		return x.FullName()
-	case *Enum:
-		return x.FullName()
-	case *Fixed:
-		return x.FullName()
-	case *Array:
-		return "array"
-	case *Map:
-		return "map"
-	default:
-		return fmt.Sprintf("%T", t)
-	}
-}
-
 func (g *Generator) array(arr *Array, name string, depth int) (any, error) {
 	count := int(g.synth.Int(1, 5))
 	result := make([]any, 0, count)
@@ -219,11 +190,11 @@ func (g *Generator) mapValue(m *Map, name string, depth int) (any, error) {
 	return result, nil
 }
 
-// fixed returns a [Size]byte array for a plain fixed, or the *big.Rat a fixed
-// decimal encodes as (the marshaller's fixed-decimal convention).
+// fixed returns a [Size]byte array for a plain fixed, or the value the
+// convention names for its logical overlay (a fixed decimal's *big.Rat).
 func (g *Generator) fixed(f *Fixed) (any, error) {
-	if f.Logical != nil && f.Logical.Kind == LogicalDecimal {
-		return g.decimalValue(f.Logical)
+	if f.Logical != nil {
+		return g.logical(f.Logical)
 	}
 	arr := reflect.New(reflect.ArrayOf(f.Size, reflect.TypeOf(byte(0)))).Elem()
 	for i, b := range g.synth.Bytes(f.Size) {
@@ -234,7 +205,7 @@ func (g *Generator) fixed(f *Fixed) (any, error) {
 
 func (g *Generator) primitive(p *Primitive, name string) (any, error) {
 	if p.Logical != nil {
-		return g.logical(p, name)
+		return g.logical(p.Logical)
 	}
 	switch p.Kind {
 	case KindNull:
@@ -258,52 +229,12 @@ func (g *Generator) primitive(p *Primitive, name string) (any, error) {
 	}
 }
 
-// logical synthesizes a conforming value for a logical type overlay.
-func (g *Generator) logical(p *Primitive, name string) (any, error) {
-	switch p.Logical.Kind {
-	case LogicalDate:
-		return g.synth.Instant().UTC().Truncate(24 * time.Hour), nil
-	case LogicalTimestampMillis:
-		return g.synth.Instant().UTC().Truncate(time.Millisecond), nil
-	case LogicalTimestampMicros:
-		return g.synth.Instant().UTC().Truncate(time.Microsecond), nil
-	case LogicalLocalTsMillis:
-		return g.synth.Instant().UTC().Truncate(time.Millisecond), nil
-	case LogicalLocalTsMicros:
-		return g.synth.Instant().UTC().Truncate(time.Microsecond), nil
-	case LogicalUUID:
-		return g.synth.Semantic(synth.UUID), nil
-	case LogicalTimeMillis:
-		return time.Duration(g.synth.Int(0, 86400*1000-1)) * time.Millisecond, nil
-	case LogicalTimeMicros:
-		return time.Duration(g.synth.Int(0, 86400*1000_000-1)) * time.Microsecond, nil
-	case LogicalDecimal:
-		return g.decimalValue(p.Logical)
-	default:
-		return nil, &GenerateError{Detail: fmt.Sprintf("unsupported logical type %q", p.Logical.Kind)}
+// logical synthesizes the value the convention table names for a logical
+// type overlay.
+func (g *Generator) logical(lt *LogicalType) (any, error) {
+	l := lookupLogical(lt.Kind)
+	if l == nil {
+		return nil, &GenerateError{Detail: fmt.Sprintf("unsupported logical type %q", lt.Kind)}
 	}
-}
-
-// decimalValue synthesizes a *big.Rat honouring precision/scale: a mantissa of
-// at most Precision digits scaled by 10^-Scale, so the marshaller's precision
-// check is always satisfied.
-func (g *Generator) decimalValue(lt *LogicalType) (*big.Rat, error) {
-	digits := lt.Precision
-	if digits > 15 {
-		digits = 15
-	}
-	if digits < 1 {
-		return nil, &GenerateError{Detail: fmt.Sprintf("decimal precision %d is out of range", lt.Precision)}
-	}
-	b := make([]byte, digits)
-	b[0] = byte('1' + g.synth.Pick(9))
-	for i := 1; i < digits; i++ {
-		b[i] = byte('0' + g.synth.Pick(10))
-	}
-	mantissa, ok := new(big.Int).SetString(string(b), 10)
-	if !ok {
-		return nil, &GenerateError{Detail: fmt.Sprintf("generating decimal mantissa for precision %d", lt.Precision)}
-	}
-	scaleFactor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(lt.Scale)), nil)
-	return new(big.Rat).SetFrac(mantissa, scaleFactor), nil
+	return l.synth(g.synth, lt)
 }

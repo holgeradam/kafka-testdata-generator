@@ -4,10 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"math/big"
 	"reflect"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf16"
 )
@@ -167,65 +165,14 @@ func jsonNumber(f float64) any {
 	}
 }
 
-// renderLogical converts a logical-type value to its human-readable Avro JSON
-// text form: dates as calendar days, timestamps (UTC and local alike) as
-// RFC 3339 instants, time-of-day as clock strings, uuids as their string form,
-// and decimals as base-10 strings.
+// renderLogical renders a logical-type value in its human-readable Avro JSON
+// text form, as the convention table names it.
 func renderLogical(lt *LogicalType, v any) (any, error) {
-	switch lt.Kind {
-	case LogicalDate:
-		ts, ok := v.(time.Time)
-		if !ok {
-			return nil, &RenderError{Detail: fmt.Sprintf("date value is %T, want time.Time", v)}
-		}
-		return ts.Format("2006-01-02"), nil
-	case LogicalUUID:
-		id, ok := v.(string)
-		if !ok {
-			return nil, &RenderError{Detail: fmt.Sprintf("uuid value is %T, want string", v)}
-		}
-		return id, nil
-	case LogicalTimestampMillis, LogicalTimestampMicros, LogicalLocalTsMillis, LogicalLocalTsMicros:
-		ts, ok := v.(time.Time)
-		if !ok {
-			return nil, &RenderError{Detail: fmt.Sprintf("%s value is %T, want time.Time", lt.Kind, v)}
-		}
-		return ts, nil
-	case LogicalTimeMillis, LogicalTimeMicros:
-		d, ok := v.(time.Duration)
-		if !ok {
-			return nil, &RenderError{Detail: fmt.Sprintf("%s value is %T, want time.Duration", lt.Kind, v)}
-		}
-		return clockString(d, lt.Kind), nil
-	case LogicalDecimal:
-		return decimalString(lt.Scale, v)
-	default:
+	l := lookupLogical(lt.Kind)
+	if l == nil {
 		return nil, &RenderError{Detail: fmt.Sprintf("unsupported logical type %q", lt.Kind)}
 	}
-}
-
-// decimalString renders a decimal value as the spec's base-10 text form, e.g.
-// "123.45" for scale 2. Shared by the bytes/fixed decimal logical types.
-func decimalString(scale int, v any) (any, error) {
-	r, ok := v.(*big.Rat)
-	if !ok {
-		return nil, &RenderError{Detail: fmt.Sprintf("decimal value is %T, want *big.Rat", v)}
-	}
-	return r.FloatString(scale), nil
-}
-
-// clockString renders a time-of-day duration as the Avro spec's readable text
-// form: HH:MM:SS.mmm for time-millis, HH:MM:SS.uuuuuu for time-micros.
-func clockString(d time.Duration, kind LogicalTypeKind) string {
-	hours := int64(d / time.Hour)
-	minutes := int64(d%time.Hour) / int64(time.Minute)
-	seconds := int64(d%time.Minute) / int64(time.Second)
-	if kind == LogicalTimeMillis {
-		ms := int64(d%time.Second) / int64(time.Millisecond)
-		return fmt.Sprintf("%02d:%02d:%02d.%03d", hours, minutes, seconds, ms)
-	}
-	us := int64(d%time.Second) / int64(time.Microsecond)
-	return fmt.Sprintf("%02d:%02d:%02d.%06d", hours, minutes, seconds, us)
+	return l.render(lt, v)
 }
 
 func renderRecord(rec *Record, v any) (any, error) {
@@ -299,8 +246,8 @@ func renderMap(m *Map, v any) (any, error) {
 }
 
 func renderFixed(f *Fixed, v any) (any, error) {
-	if f.Logical != nil && f.Logical.Kind == LogicalDecimal {
-		return decimalString(f.Logical.Scale, v)
+	if f.Logical != nil {
+		return renderLogical(f.Logical, v)
 	}
 	b, err := fixedBytes(v)
 	if err != nil {

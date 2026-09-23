@@ -42,36 +42,6 @@ const (
 // PrimitiveKind is the subset of TypeKind a Primitive node can carry.
 type PrimitiveKind = TypeKind
 
-// LogicalTypeKind enumerates the Avro logical types in the documented scope.
-type LogicalTypeKind string
-
-const (
-	LogicalTimestampMillis LogicalTypeKind = "timestamp-millis"
-	LogicalTimestampMicros LogicalTypeKind = "timestamp-micros"
-	LogicalDate            LogicalTypeKind = "date"
-	LogicalTimeMillis      LogicalTypeKind = "time-millis"
-	LogicalTimeMicros      LogicalTypeKind = "time-micros"
-	LogicalDecimal         LogicalTypeKind = "decimal"
-	LogicalUUID            LogicalTypeKind = "uuid"
-	LogicalLocalTsMillis   LogicalTypeKind = "local-timestamp-millis"
-	LogicalLocalTsMicros   LogicalTypeKind = "local-timestamp-micros"
-)
-
-// logicalBaseOK maps each modelled logical kind to the base type Avro requires
-// for it (decimal is validated separately because bytes and fixed are both
-// legal). A kind outside this map is unknown to the model and falls back to its
-// base type; see parseLogical.
-var logicalBaseOK = map[LogicalTypeKind]TypeKind{
-	LogicalTimestampMillis: KindLong,
-	LogicalTimestampMicros: KindLong,
-	LogicalDate:            KindInt,
-	LogicalTimeMillis:      KindInt,
-	LogicalTimeMicros:      KindLong,
-	LogicalUUID:            KindString,
-	LogicalLocalTsMillis:   KindLong,
-	LogicalLocalTsMicros:   KindLong,
-}
-
 // LogicalType is the semantic overlay an avsc applies to a base type: the
 // temporal kinds reinterpret an int/long, and decimal reinterprets bytes or
 // fixed. Recorded here so the AVRO generator can synthesise conforming values
@@ -372,31 +342,28 @@ func (b *builder) build(s codec.Schema) (Type, error) {
 // avsc: keeping the overlay would generate values the encoder rejects, so Parse
 // stops with a typed error (ADR-0007 decision 4).
 func logicalOf(honoured codec.LogicalSchema, declared any, base TypeKind) (*LogicalType, error) {
+	var name LogicalTypeKind
 	if honoured != nil {
-		if d, ok := honoured.(*codec.DecimalLogicalSchema); ok {
-			return &LogicalType{Kind: LogicalDecimal, Precision: d.Precision(), Scale: d.Scale()}, nil
-		}
-		kind := LogicalTypeKind(honoured.Type())
-		if _, known := logicalBaseOK[kind]; known {
-			return &LogicalType{Kind: kind}, nil
-		}
-		return nil, nil
+		name = LogicalTypeKind(honoured.Type())
+	} else if d, ok := declared.(string); ok {
+		name = LogicalTypeKind(d)
 	}
-
-	name, _ := declared.(string)
-	kind := LogicalTypeKind(name)
+	l := lookupLogical(name)
 	switch {
-	case name == "":
+	case l == nil:
 		return nil, nil
-	case kind == LogicalDecimal && base != KindBytes && base != KindFixed:
-		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires a bytes or fixed base type, got %s", name, base)}
-	case kind == LogicalDecimal:
-		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires a precision above 0 that fits the %s, and a scale from 0 to the precision", name, base)}
+	case !l.allows(base):
+		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires base type %s, got %s", name, l.basesString(), base)}
+	case honoured == nil && l.constraint != nil:
+		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires %s", name, l.constraint(base))}
+	case honoured == nil:
+		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q is not honoured on base type %s", name, base)}
 	}
-	if want, known := logicalBaseOK[kind]; known {
-		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires base type %s, got %s", name, want, base)}
+	lt := &LogicalType{Kind: name}
+	if d, ok := honoured.(*codec.DecimalLogicalSchema); ok {
+		lt.Precision, lt.Scale = d.Precision(), d.Scale()
 	}
-	return nil, nil
+	return lt, nil
 }
 
 func fullName(namespace, name string) string {

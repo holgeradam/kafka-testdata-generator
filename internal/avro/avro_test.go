@@ -209,11 +209,11 @@ func TestParseLogicalTypes(t *testing.T) {
 		base    PrimitiveKind
 		logical LogicalTypeKind
 	}{
-		{"timestamp-millis", `{"type": "long", "logicalType": "timestamp-millis"}`, KindLong, LogicalTimestampMillis},
-		{"timestamp-micros", `{"type": "long", "logicalType": "timestamp-micros"}`, KindLong, LogicalTimestampMicros},
-		{"date", `{"type": "int", "logicalType": "date"}`, KindInt, LogicalDate},
-		{"time-millis", `{"type": "int", "logicalType": "time-millis"}`, KindInt, LogicalTimeMillis},
-		{"time-micros", `{"type": "long", "logicalType": "time-micros"}`, KindLong, LogicalTimeMicros},
+		{"timestamp-millis", `{"type": "long", "logicalType": "timestamp-millis"}`, KindLong, "timestamp-millis"},
+		{"timestamp-micros", `{"type": "long", "logicalType": "timestamp-micros"}`, KindLong, "timestamp-micros"},
+		{"date", `{"type": "int", "logicalType": "date"}`, KindInt, "date"},
+		{"time-millis", `{"type": "int", "logicalType": "time-millis"}`, KindInt, "time-millis"},
+		{"time-micros", `{"type": "long", "logicalType": "time-micros"}`, KindLong, "time-micros"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -243,7 +243,7 @@ func TestParseDecimalLogicalType(t *testing.T) {
 			t.Fatalf("Parse failed: %v", err)
 		}
 		p := s.Root.(*Primitive)
-		if p.Logical.Kind != LogicalDecimal || p.Logical.Precision != 10 || p.Logical.Scale != 2 {
+		if p.Logical.Kind != "decimal" || p.Logical.Precision != 10 || p.Logical.Scale != 2 {
 			t.Errorf("decimal = %+v, want precision 10 scale 2", p.Logical)
 		}
 	})
@@ -255,7 +255,7 @@ func TestParseDecimalLogicalType(t *testing.T) {
 			t.Fatalf("Parse failed: %v", err)
 		}
 		f := s.Root.(*Fixed)
-		if f.Logical == nil || f.Logical.Kind != LogicalDecimal || f.Logical.Scale != 0 {
+		if f.Logical == nil || f.Logical.Kind != "decimal" || f.Logical.Scale != 0 {
 			t.Errorf("fixed decimal = %+v, want kind decimal scale 0", f.Logical)
 		}
 	})
