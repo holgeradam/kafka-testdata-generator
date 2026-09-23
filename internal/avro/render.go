@@ -6,7 +6,10 @@ import (
 	"math"
 	"math/big"
 	"reflect"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf16"
 )
 
 // RenderError reports a generated value the renderer cannot display in the
@@ -36,7 +39,38 @@ func RenderJSON(t Type, v any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(jv)
+	b, err := json.Marshal(jv)
+	if err != nil {
+		return nil, err
+	}
+	return escapeNonPrintable(b), nil
+}
+
+// escapeNonPrintable rewrites every character json.Marshal leaves raw but a
+// terminal cannot show - the C1 controls a Latin-1 byte 0x7F-0x9F becomes,
+// no-break space, soft hyphen - as a \uXXXX escape (#68). The JSON value is
+// unchanged; the display stops hiding it. Such characters can only occur
+// inside strings, where an escape is always legal.
+func escapeNonPrintable(b []byte) []byte {
+	s := string(b)
+	i := strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) })
+	if i < 0 {
+		return b
+	}
+	var out strings.Builder
+	out.WriteString(s[:i])
+	for _, r := range s[i:] {
+		if unicode.IsPrint(r) {
+			out.WriteRune(r)
+			continue
+		}
+		if r1, r2 := utf16.EncodeRune(r); r1 != unicode.ReplacementChar {
+			fmt.Fprintf(&out, "\\u%04x\\u%04x", r1, r2)
+			continue
+		}
+		fmt.Fprintf(&out, "\\u%04x", r)
+	}
+	return []byte(out.String())
 }
 
 // renderDatum converts (model node, generated value) into a JSON-marshalable
@@ -294,7 +328,7 @@ func fixedBytes(v any) ([]byte, error) {
 
 // latin1String converts raw bytes into the Latin-1 string the Avro JSON
 // encoding specifies for bytes and fixed values: each byte is one character
-// (json.Marshal then escapes non-printable ones as \u00XX).
+// (RenderJSON then escapes the non-printable ones as \u00XX).
 func latin1String(b []byte) string {
 	rs := make([]rune, len(b))
 	for i, by := range b {

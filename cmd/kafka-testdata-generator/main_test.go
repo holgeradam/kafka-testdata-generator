@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func TestScenarioBasicDryRun(t *testing.T) {
@@ -1081,6 +1082,13 @@ func TestScenarioAvroRecordKeyDryRun(t *testing.T) {
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+	}
+	// Bytes 0x7F-0x9F are invisible when printed raw; they must be escaped
+	// (#68). With this seed the second Key's fixed holds bytes 150,153.
+	for _, r := range stdout.String() + stderr.String() {
+		if r != '\n' && !unicode.IsPrint(r) {
+			t.Errorf("Dry-run output holds the non-printable character %U", r)
+		}
 	}
 	keys := avroKeys(t, stderr.String())
 	if len(keys) != 5 {

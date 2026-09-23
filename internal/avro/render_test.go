@@ -176,6 +176,30 @@ func TestRenderFixed(t *testing.T) {
 	}
 }
 
+// TestRenderEscapesNonPrintable proves bytes that map to invisible Latin-1
+// characters - C1 controls, no-break space, soft hyphen - render as \u escapes
+// (#68): the same JSON value, but one a terminal shows.
+func TestRenderEscapesNonPrintable(t *testing.T) {
+	model := mustParse(t, `{"type":"record","name":"R","fields":[
+		{"name":"b","type":"bytes"},{"name":"f","type":{"type":"fixed","name":"F","size":2}}]}`)
+	v := map[string]any{"b": []byte{0x7f, 0x96, 0xa0, 0xad, 'A', 0xe9}, "f": [2]byte{0x99, 0x9f}}
+	b, err := RenderJSON(model.Root, v)
+	if err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	want := `{"b":"\u007f\u0096\u00a0\u00adAé","f":"\u0099\u009f"}`
+	if string(b) != want {
+		t.Errorf("rendered %s, want %s", b, want)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["b"] != "\u007f\u0096\u00a0\u00adA\u00e9" || got["f"] != "\u0099\u009f" {
+		t.Errorf("decoded %q, want the same Latin-1 strings", got)
+	}
+}
+
 func TestRenderFixedDecimal(t *testing.T) {
 	model := mustParse(t, `{"type":"fixed","name":"Amt","size":8,"logicalType":"decimal","precision":10,"scale":2}`)
 	r := new(big.Rat).SetFrac(big.NewInt(12345), big.NewInt(100))
