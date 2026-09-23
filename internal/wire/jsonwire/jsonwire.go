@@ -38,7 +38,6 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	}
 
 	gen := generator.New(opts.Synth)
-	gen.SetRefResolver(opts.ResolveRef)
 
 	parts := &wire.Parts{
 		Values: &boundGenerator{gen: gen, schema: opts.Schema},
@@ -49,7 +48,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	if opts.KeyBinding != nil {
 		parts.KeyGen = &boundGenerator{gen: gen, schema: opts.KeyBinding}
 		if opts.KeyPath != "" {
-			parts.Checker = generator.NewKeyChecker(opts.Schema, opts.KeyBinding, opts.ResolveRef)
+			parts.Checker = generator.NewKeyChecker(opts.Schema, opts.KeyBinding)
 		}
 	}
 	return parts, nil

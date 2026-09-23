@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-08-23)
+Accepted (2026-08-23). Decisions 1 and 5 amended (2026-09-23, issue #73).
 
 ## Context
 
@@ -52,3 +52,12 @@ Until the generator learns to walk preserved `$ref`s with a depth budget (tracke
 - Cyclic schemas fail loudly and early instead of crashing (stack overflow) or corrupting output.
 - Recursive data generation arrives in a second, separately reviewable step (depth-budget walker in the generator).
 - The generator loses hidden normalization behaviour; its interface contract moves toward "conforms to the Message schema or a typed error".
+
+## Amendment (2026-09-23, issue #73)
+
+Cyclic `$ref`s still stay `$ref` nodes, but they now point into the returned schema instead of the spec. Each cycle's target travels in the schema's own `$defs`, keyed by the target's JSON Pointer so two targets never collide, and the cyclic node becomes `{"$ref": "#/$defs/<pointer>"}`. Inside a `$defs` entry every `$ref` is rewritten to a local one rather than expanded, so each `$ref` the generator follows inside a cycle still costs one step of its depth budget. Seeded output is byte-identical to the spec-pointing form.
+
+A schema is therefore self-contained: the generator and the JSON key checker resolve `#/$defs/…` locally and treat `$defs` as a definitions container, never as a keyword. The callback into the spec (`Document.ResolveRef`, `generator.SetRefResolver`, `generator.RefResolver`, `wire.Options.ResolveRef`) is gone, which answers #34's question of whether `ResolveRef` stays exported.
+
+Decision 5 is finished rather than reopened. One walk over the decoded spec reads a Kafka topic's Message types, resolving a `$ref` wherever the spec may use one: a spec entry's bindings, an operation's message, a `oneOf` variant, a message's bindings, the kafka binding, the key and the schemas. References are JSON Pointers (RFC 6901): percent-encoding decodes, and `~1`/`~0` unescape. What the walk cannot read is an error naming the Message type; a broken reference is never replaced by another operation's message or reported as "no message". The typed struct decode and its `mapToStruct` round-trip, and `generator.normalizeSchema`, went with the old mechanisms. Decision 1's invariant-guaranteed `map[string]any` return is untouched.
+

@@ -212,11 +212,20 @@ channels:
       message: {...}
 ```
 
-Two entries for the same Kafka topic are refused by name for now. It supports:
+Every message the spec declares for the Kafka topic is one Message type: the `publish` and
+`subscribe` operations' messages, each variant of a `message.oneOf`, and those of every entry
+bound to the Kafka topic. A component message referenced more than once counts once. A run on a
+Kafka topic with several Message types stops and lists them for now; mixing them is planned
+(#74). AsyncAPI 3.0 documents are refused at load (3.0 support is tracked in #76).
 
-- `publish` and `subscribe` operations
-- `messages` declared directly on a spec entry
-- `$ref` references to component messages
+Every spec mistake stops the run with an error naming the message: a broken `$ref`, a missing
+payload, or a Key binding that is declared but not a schema. It supports:
+
+- `publish` and `subscribe` operations, and `message.oneOf`
+- `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
+  binding, the Key schema and the payload schema, as JSON Pointers (`~1`, `~0` and
+  percent-escapes decode)
+- Recursive schemas (a `$ref` cycle), generated within a depth budget
 - Nested JSON Schema objects and arrays
 - All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`
 - All 19 string formats JSON Schema 2020-12 defines: `date-time`, `date`, `time`,

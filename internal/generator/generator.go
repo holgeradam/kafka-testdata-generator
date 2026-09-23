@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -13,14 +14,10 @@ import (
 // owns structure; every value and random decision comes from the Synthesizer
 // (ADR-0008).
 type Generator struct {
-	synth      *synth.Synthesizer
-	resolveRef RefResolver
+	synth *synth.Synthesizer
+	// defs are the $defs of the schema the current Value call generates for.
+	defs map[string]any
 }
-
-// RefResolver resolves a $ref string to its schema node. The schema module
-// provides the implementation; it is injected so the generator can follow
-// preserved cyclic $ref nodes within its depth budget.
-type RefResolver func(ref string) (map[string]any, error)
 
 // maxRecursionDepth bounds how many nested $ref expansions the generator walks
 // for cyclic schemas (ADR-0005). Enough for realistic trees, small enough to
@@ -83,15 +80,14 @@ func New(s *synth.Synthesizer) *Generator {
 	return &Generator{synth: s}
 }
 
-// SetRefResolver wires the schema module's $ref resolution into the generator.
-func (g *Generator) SetRefResolver(r RefResolver) {
-	g.resolveRef = r
-}
-
 // Value generates a random value matching the given JSON Schema, or a typed
 // error when it contains a construct the generator cannot honour (ADR-0006).
 // The error names the offending keyword and its JSON path.
+//
+// Schemas arrive self-contained (#73): a $ref points into the schema's own
+// $defs, where the spec reader put each cycle's target.
 func (g *Generator) Value(schema map[string]any) (any, error) {
+	g.defs, _ = schema["$defs"].(map[string]any)
 	return g.value(schema, "", RootPath, 0)
 }
 
@@ -99,8 +95,6 @@ func (g *Generator) Value(schema map[string]any) (any, error) {
 // name, inherited by array items and oneOf/anyOf/allOf/$ref branches for
 // field-name heuristics (#31 decision 5).
 func (g *Generator) value(schema map[string]any, field, path string, depth int) (any, error) {
-	schema = normalizeSchema(schema)
-
 	if ref, ok := schema["$ref"].(string); ok {
 		return g.refValue(ref, field, path, depth)
 	}
@@ -160,23 +154,35 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 	}
 }
 
-// refValue follows a preserved $ref node. When the depth budget is exhausted
-// the node is treated as absent so the caller can skip the field or empty the
-// array, mirroring how optional-field sampling truncates shape (ADR-0005). A
-// missing resolver or a resolver error surfaces as a typed error, since the
-// schema cannot be honoured at all in either case (ADR-0006 Decision 1).
+// refValue follows a preserved $ref node into the schema's $defs. When the
+// depth budget is exhausted the node is treated as absent so the caller can
+// skip the field or empty the array, mirroring how optional-field sampling
+// truncates shape (ADR-0005). A $ref the schema does not define surfaces as a
+// typed error, since the schema cannot be honoured at all (ADR-0006 Decision 1).
 func (g *Generator) refValue(ref, field, path string, depth int) (any, error) {
-	if g.resolveRef == nil {
-		return nil, &UnsupportedSchemaError{Keyword: "$ref", Path: path, Detail: "no ref resolver wired"}
+	target, err := lookupDef(g.defs, ref)
+	if err != nil {
+		return nil, &UnsupportedSchemaError{Keyword: "$ref", Path: path, Detail: err.Error()}
 	}
 	if depth >= maxRecursionDepth {
 		return nil, errAbsent
 	}
-	target, err := g.resolveRef(ref)
-	if err != nil {
-		return nil, &UnsupportedSchemaError{Keyword: "$ref", Path: path, Detail: fmt.Sprintf("resolving %s: %v", ref, err)}
-	}
 	return g.value(target, field, path, depth+1)
+}
+
+// lookupDef resolves a local $ref of the form #/$defs/<name>, where name is a
+// JSON Pointer token (~1 and ~0 unescape to / and ~).
+func lookupDef(defs map[string]any, ref string) (map[string]any, error) {
+	const prefix = "#/$defs/"
+	if !strings.HasPrefix(ref, prefix) {
+		return nil, fmt.Errorf("$ref %s does not point into the schema's $defs", ref)
+	}
+	name := strings.ReplaceAll(strings.ReplaceAll(ref[len(prefix):], "~1", "/"), "~0", "~")
+	target, ok := defs[name].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("$ref %s: the schema's $defs has no schema %q", ref, name)
+	}
+	return target, nil
 }
 
 func (g *Generator) object(schema map[string]any, path string, depth int) (any, error) {
@@ -355,12 +361,4 @@ func toFloat64(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func normalizeSchema(schema map[string]any) map[string]any {
-	result := make(map[string]any)
-	for k, v := range schema {
-		result[k] = v
-	}
-	return result
 }

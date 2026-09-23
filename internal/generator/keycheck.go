@@ -17,15 +17,17 @@ import (
 // present in some records and absent in others, which would leave the Key and
 // the Payload disagreeing, so it is refused before the run starts.
 type KeyChecker struct {
-	schema     map[string]any
-	keySchema  map[string]any
-	resolveRef RefResolver
+	schema    map[string]any
+	keySchema map[string]any
+	defs      map[string]any
 }
 
-// NewKeyChecker builds the checker from the Message schema, the key schema
-// (the resolved bindings.kafka.key node) and the spec's $ref resolver.
-func NewKeyChecker(schema, keySchema map[string]any, resolve RefResolver) *KeyChecker {
-	return &KeyChecker{schema: schema, keySchema: keySchema, resolveRef: resolve}
+// NewKeyChecker builds the checker from the Message schema and the key schema
+// (the resolved bindings.kafka.key node). Both are self-contained: a $ref in
+// the Message schema points into its own $defs (#73).
+func NewKeyChecker(schema, keySchema map[string]any) *KeyChecker {
+	defs, _ := schema["$defs"].(map[string]any)
+	return &KeyChecker{schema: schema, keySchema: keySchema, defs: defs}
 }
 
 // Check reports whether path is usable, naming the offending step otherwise.
@@ -78,15 +80,12 @@ func (c *KeyChecker) resolve(schema map[string]any, depth int) (map[string]any, 
 		if !ok {
 			return schema, depth, nil
 		}
-		if c.resolveRef == nil {
-			return nil, depth, fmt.Errorf("the schema here is a $ref but no resolver is wired")
+		target, err := lookupDef(c.defs, ref)
+		if err != nil {
+			return nil, depth, err
 		}
 		if depth >= maxRecursionDepth {
 			return nil, depth, fmt.Errorf("the path goes beyond the $ref depth budget of %d, where generation truncates the subtree", maxRecursionDepth)
-		}
-		target, err := c.resolveRef(ref)
-		if err != nil {
-			return nil, depth, fmt.Errorf("resolving %s: %w", ref, err)
 		}
 		schema, depth = target, depth+1
 	}

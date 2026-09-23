@@ -2,30 +2,24 @@ package generator
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
-// selfRefSchema returns a schema map and resolver for a self-referential Node
-// with a required "value" and an optional "child" that points back at Node.
-func selfRefSchema() (map[string]any, func(string) (map[string]any, error)) {
+// selfRefSchema returns a self-contained schema for a self-referential Node
+// with a required "value" and an optional "child" that points back at Node,
+// the shape the spec reader hands over (#73).
+func selfRefSchema() map[string]any {
 	node := map[string]any{
 		"type":     "object",
 		"required": []any{"value"},
 		"properties": map[string]any{
 			"value": map[string]any{"type": "string"},
-			"child": map[string]any{"$ref": "#/defs/Node"},
+			"child": map[string]any{"$ref": "#/$defs/Node"},
 		},
 	}
-	resolver := func(ref string) (map[string]any, error) {
-		if ref == "#/defs/Node" {
-			return node, nil
-		}
-		return nil, fmt.Errorf("unknown ref %s", ref)
-	}
-	return node, resolver
+	return map[string]any{"$ref": "#/$defs/Node", "$defs": map[string]any{"Node": node}}
 }
 
 // linkDepth returns how many "child" hops deep a generated recursive object
@@ -45,12 +39,9 @@ func linkDepth(root any) (deepest map[string]any, depth int) {
 }
 
 func TestValueRecursiveTerminates(t *testing.T) {
-	root := map[string]any{"$ref": "#/defs/Node"}
 	gen := New(synth.New(42, fixedNow()))
-	_, resolver := selfRefSchema()
-	gen.SetRefResolver(resolver)
 
-	result, err := gen.Value(root)
+	result, err := gen.Value(selfRefSchema())
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}
@@ -69,10 +60,8 @@ func TestValueRecursiveTerminates(t *testing.T) {
 
 func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 	gen := New(synth.New(7, fixedNow()))
-	_, resolver := selfRefSchema()
-	gen.SetRefResolver(resolver)
 
-	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
+	result, err := gen.Value(selfRefSchema())
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}
@@ -85,14 +74,10 @@ func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 }
 
 func TestValueRecursiveDeterministic(t *testing.T) {
-	root := map[string]any{"$ref": "#/defs/Node"}
+	root := selfRefSchema()
 
 	gen1 := New(synth.New(99, fixedNow()))
-	_, r1r := selfRefSchema()
-	gen1.SetRefResolver(r1r)
 	gen2 := New(synth.New(99, fixedNow()))
-	_, r2r := selfRefSchema()
-	gen2.SetRefResolver(r2r)
 
 	for i := 0; i < 10; i++ {
 		r1, err := gen1.Value(root)
@@ -123,19 +108,13 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 				"type":     "array",
 				"minItems": float64(1),
 				"maxItems": float64(2),
-				"items":    map[string]any{"$ref": "#/defs/Node"},
+				"items":    map[string]any{"$ref": "#/$defs/Node"},
 			},
 		},
 	}
 	gen := New(synth.New(3, fixedNow()))
-	gen.SetRefResolver(func(ref string) (map[string]any, error) {
-		if ref == "#/defs/Node" {
-			return node, nil
-		}
-		return nil, fmt.Errorf("unknown ref %s", ref)
-	})
 
-	result, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
+	result, err := gen.Value(map[string]any{"$ref": "#/$defs/Node", "$defs": map[string]any{"Node": node}})
 	if err != nil {
 		t.Fatalf("Value error: %v", err)
 	}

@@ -9,13 +9,13 @@ import (
 
 // checkPath is the shim these tests drive: parse a -keyPath, then validate it
 // against a Message schema and a key schema exactly as the process edge does.
-func checkPath(t *testing.T, payload, key map[string]any, path string, resolve RefResolver) error {
+func checkPath(t *testing.T, payload, key map[string]any, path string) error {
 	t.Helper()
 	steps, err := keyplan.ParsePath(path)
 	if err != nil {
 		t.Fatalf("ParsePath(%q): %v", path, err)
 	}
-	return NewKeyChecker(payload, key, resolve).Check(steps)
+	return NewKeyChecker(payload, key).Check(steps)
 }
 
 func stringKey() map[string]any { return map[string]any{"type": "string"} }
@@ -52,7 +52,7 @@ func orderSchema() map[string]any {
 
 func TestKeyCheckerAcceptsGuaranteedPaths(t *testing.T) {
 	for _, path := range []string{"id", "customer.id", "items[0].sku", "items[1].sku"} {
-		if err := checkPath(t, orderSchema(), stringKey(), path, nil); err != nil {
+		if err := checkPath(t, orderSchema(), stringKey(), path); err != nil {
 			t.Errorf("Check(%q) = %v, want nil", path, err)
 		}
 	}
@@ -71,7 +71,7 @@ func TestKeyCheckerRejectsUnguaranteedPaths(t *testing.T) {
 		{"id[0]", "not an array"},
 	}
 	for _, c := range cases {
-		err := checkPath(t, orderSchema(), stringKey(), c.path, nil)
+		err := checkPath(t, orderSchema(), stringKey(), c.path)
 		if err == nil {
 			t.Errorf("Check(%q) = nil, want an error mentioning %q", c.path, c.want)
 			continue
@@ -96,7 +96,7 @@ func TestKeyCheckerRejectsAlternatives(t *testing.T) {
 			}},
 		},
 	}
-	err := checkPath(t, schema, stringKey(), "payment.id", nil)
+	err := checkPath(t, schema, stringKey(), "payment.id")
 	if err == nil || !strings.Contains(err.Error(), "oneOf") {
 		t.Errorf("Check through a oneOf = %v, want an error mentioning oneOf", err)
 	}
@@ -115,42 +115,43 @@ func TestKeyCheckerMergesAllOf(t *testing.T) {
 			}},
 		},
 	}
-	if err := checkPath(t, schema, stringKey(), "order.id", nil); err != nil {
+	if err := checkPath(t, schema, stringKey(), "order.id"); err != nil {
 		t.Errorf("Check through allOf = %v, want nil", err)
 	}
 }
 
-// TestKeyCheckerFollowsRefs proves a $ref step resolves through the injected
-// resolver, and that a path deeper than the generator's budget is rejected
-// rather than silently truncated at run time (ADR-0005).
+// TestKeyCheckerFollowsRefs proves a $ref step resolves inside the schema's
+// own $defs (#73), and that a path deeper than the generator's budget is
+// rejected rather than silently truncated at run time (ADR-0005).
 func TestKeyCheckerFollowsRefs(t *testing.T) {
 	node := map[string]any{
 		"type":     "object",
 		"required": []any{"name", "child"},
 		"properties": map[string]any{
 			"name":  map[string]any{"type": "string"},
-			"child": map[string]any{"$ref": "#/components/schemas/Node"},
+			"child": map[string]any{"$ref": "#/$defs/Node"},
 		},
 	}
-	resolve := func(ref string) (map[string]any, error) { return node, nil }
 	schema := map[string]any{
 		"type":       "object",
 		"required":   []any{"root"},
-		"properties": map[string]any{"root": map[string]any{"$ref": "#/components/schemas/Node"}},
+		"properties": map[string]any{"root": map[string]any{"$ref": "#/$defs/Node"}},
+		"$defs":      map[string]any{"Node": node},
 	}
 
-	if err := checkPath(t, schema, stringKey(), "root.name", resolve); err != nil {
+	if err := checkPath(t, schema, stringKey(), "root.name"); err != nil {
 		t.Errorf("Check through a $ref = %v, want nil", err)
 	}
 
 	deep := "root" + strings.Repeat(".child", maxRecursionDepth+1) + ".name"
-	err := checkPath(t, schema, stringKey(), deep, resolve)
+	err := checkPath(t, schema, stringKey(), deep)
 	if err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Errorf("Check(%q) = %v, want an error mentioning the depth budget", deep, err)
 	}
 
-	if err := checkPath(t, schema, stringKey(), "root.child.name", nil); err == nil {
-		t.Errorf("Check through a $ref with no resolver = nil, want an error")
+	delete(schema, "$defs")
+	if err := checkPath(t, schema, stringKey(), "root.child.name"); err == nil {
+		t.Errorf("Check through a $ref the schema does not define = nil, want an error")
 	}
 }
 
@@ -180,7 +181,7 @@ func TestKeyCheckerTypeCompatibility(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := checkPath(t, schema, c.key, c.path, nil)
+			err := checkPath(t, schema, c.key, c.path)
 			if c.wantErr && err == nil {
 				t.Errorf("Check = nil, want a type error")
 			}

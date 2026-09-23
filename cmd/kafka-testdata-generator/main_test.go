@@ -1113,3 +1113,76 @@ func TestScenarioAvroRecordKeyDryRun(t *testing.T) {
 		}
 	}
 }
+
+// TestScenarioSpecMistakesAreReported is #73 end to end: every spec mistake
+// the reader used to swallow - a broken message $ref hidden by a fallback, a
+// oneOf read as "no payload", a malformed Key binding read as no Key - now
+// stops the run naming what is wrong, and a bindings $ref is followed.
+func TestScenarioSpecMistakesAreReported(t *testing.T) {
+	bin := buildBinary(t)
+	const head = "asyncapi: '2.6.0'\ninfo: {title: T, version: '1'}\n"
+	cases := []struct {
+		name, spec, want string
+	}{
+		{"broken publish ref with a subscribe message", head + `channels:
+  orders:
+    publish: {message: {$ref: '#/components/messages/Typo'}}
+    subscribe: {message: {payload: {type: object}}}
+components: {messages: {Order: {payload: {type: object}}}}
+`, `resolving $ref #/components/messages/Typo: "Typo" not found`},
+		{"broken publish ref alone", head + `channels:
+  orders:
+    publish: {message: {$ref: '#/components/messages/Typo'}}
+components: {messages: {Order: {payload: {type: object}}}}
+`, `resolving $ref #/components/messages/Typo`},
+		{"oneOf messages", head + `channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - {name: OrderCreated, payload: {type: object}}
+          - {name: OrderUpdated, payload: {type: object}}
+`, "2 Message types (OrderCreated, OrderUpdated)"},
+		{"entry-level messages", head + `channels:
+  orders:
+    messages: {created: {payload: {type: object}}}
+`, "AsyncAPI 3.0 syntax"},
+		{"key binding not a schema", head + `channels:
+  orders:
+    publish: {message: {bindings: {kafka: {key: string}}, payload: {type: object}}}
+`, "bindings.kafka.key must be a schema object"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := exec.Command(bin, "-spec", writeTempSpec(t, c.spec), "-topic", "orders",
+				"-dry-run", "-count", "1", "-seed", "1").CombinedOutput()
+			if err == nil {
+				t.Fatalf("expected the run to stop, got:\n%s", out)
+			}
+			if !strings.Contains(string(out), c.want) {
+				t.Errorf("output lacks %q:\n%s", c.want, out)
+			}
+		})
+	}
+
+	t.Run("bindings ref", func(t *testing.T) {
+		spec := head + `channels:
+  orders:
+    publish:
+      message:
+        bindings: {$ref: '#/components/messageBindings/keyed'}
+        payload: {type: object, required: [id], properties: {id: {type: string}}}
+components:
+  messageBindings:
+    keyed: {kafka: {key: {type: string, format: uuid}}}
+`
+		out, err := exec.Command(bin, "-spec", writeTempSpec(t, spec), "-topic", "orders",
+			"-dry-run", "-count", "1", "-seed", "1", "-keyPath", "id").CombinedOutput()
+		if err != nil {
+			t.Fatalf("command failed: %v\n%s", err, out)
+		}
+		if !regexp.MustCompile(`Key: [0-9a-f]{8}-`).Match(out) {
+			t.Errorf("expected a uuid Key from the referenced binding, got:\n%s", out)
+		}
+	})
+}

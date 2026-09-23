@@ -360,7 +360,7 @@ func TestRunPlantsKeyIntoPayload(t *testing.T) {
 	binding := map[string]any{"type": "string", "format": "uuid"}
 	gen := generator.New(synth.New(1, testNow()))
 	plan, err := keyplan.New(&boundGenerator{gen: gen, schema: binding},
-		generator.NewKeyChecker(schema, binding, nil), "customer.id")
+		generator.NewKeyChecker(schema, binding), "customer.id")
 	if err != nil {
 		t.Fatalf("keyplan.New: %v", err)
 	}

@@ -114,17 +114,40 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 	assertUnsupported(t, err, "properties", RootPath+".a")
 }
 
-func TestValueRefResolutionError(t *testing.T) {
+// TestValueRefMissingDef covers a local $ref whose $defs entry is absent: the
+// schema cannot be honoured, so generation stops with a typed error.
+func TestValueRefMissingDef(t *testing.T) {
 	gen := New(synth.New(1, fixedNow()))
-	gen.SetRefResolver(func(ref string) (map[string]any, error) {
-		return nil, errors.New("no such definition")
+	_, err := gen.Value(map[string]any{
+		"$ref":  "#/$defs/Missing",
+		"$defs": map[string]any{"Node": map[string]any{"type": "string"}},
 	})
-	_, err := gen.Value(map[string]any{"$ref": "#/defs/Missing"})
 	assertUnsupported(t, err, "$ref", RootPath)
 }
 
-func TestValueRefMissingResolver(t *testing.T) {
+// TestValueRefOutsideSchema covers a $ref that does not point into the
+// schema's own $defs: schemas arrive self-contained (#73), so there is nothing
+// else to resolve it against.
+func TestValueRefOutsideSchema(t *testing.T) {
 	gen := New(synth.New(1, fixedNow()))
-	_, err := gen.Value(map[string]any{"$ref": "#/defs/Node"})
+	_, err := gen.Value(map[string]any{"$ref": "#/components/schemas/Node"})
 	assertUnsupported(t, err, "$ref", RootPath)
+}
+
+// TestValueDefsIsNotAKeyword proves $defs is a definitions container: an
+// object schema carrying it generates exactly its properties.
+func TestValueDefsIsNotAKeyword(t *testing.T) {
+	gen := New(synth.New(1, fixedNow()))
+	v, err := gen.Value(map[string]any{
+		"type":       "object",
+		"required":   []any{"id"},
+		"properties": map[string]any{"id": map[string]any{"type": "string"}},
+		"$defs":      map[string]any{"Unused": map[string]any{"type": "integer"}},
+	})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	if m := v.(map[string]any); len(m) != 1 || m["id"] == nil {
+		t.Errorf("value = %v, want exactly the id property", v)
+	}
 }

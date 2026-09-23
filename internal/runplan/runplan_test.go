@@ -64,8 +64,8 @@ channels:
             nickname: {type: string}
 `
 
-// twoEntriesSpec binds two spec entries to one Kafka topic, which the plan
-// refuses until their Message types can be mixed (#74).
+// twoEntriesSpec binds two spec entries to one Kafka topic, whose two Message
+// types the plan refuses until they can be mixed (#74).
 const twoEntriesSpec = `
 asyncapi: '2.6.0'
 info: {title: Two, version: '1.0.0'}
@@ -256,6 +256,13 @@ func TestPlanRejects(t *testing.T) {
 	value := write(t, "value.avsc", valueAvsc)
 	key := write(t, "key.avsc", keyAvsc)
 	twoEntries := write(t, "two.yaml", twoEntriesSpec)
+	badBinding := write(t, "bad.yaml", `
+asyncapi: '2.6.0'
+info: {title: Bad, version: '1.0.0'}
+channels:
+  orders:
+    publish: {message: {bindings: {kafka: {key: string}}, payload: {type: object}}}
+`)
 	broken := write(t, "broken.avsc", `{"type":"record","name":"X","fields":[{"name":"n","type":"nope"}]}`)
 
 	cases := []struct {
@@ -268,7 +275,8 @@ func TestPlanRejects(t *testing.T) {
 		{"no spec", []string{"-topic", "orders"}, "spec", "-spec is required", nil},
 		{"no topic", []string{"-spec", spec}, "topic", "-topic is required", nil},
 		{"renamed channel flag", []string{"-spec", spec, "-channel", "orders"}, "channel", "-channel was renamed to -topic", nil},
-		{"two spec entries for one Kafka topic", []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"}, "topic", "orders-v1, orders-v2", nil},
+		{"two spec entries for one Kafka topic", []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"}, "topic", "2 Message types (orders-v1 publish, orders-v2 publish)", nil},
+		{"unusable key binding", []string{"-spec", badBinding, "-topic", "orders", "-dry-run"}, "topic", "bindings.kafka.key must be a schema object", nil},
 		{"renamed key flag", []string{"-spec", spec, "-topic", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
 		{"avro without value avsc", []string{"-spec", spec, "-topic", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},
 		{"avro key path without key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires -avro-key-schema", nil},
