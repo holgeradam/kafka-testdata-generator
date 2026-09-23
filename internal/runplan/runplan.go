@@ -8,6 +8,7 @@ package runplan
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -85,16 +86,18 @@ func newFlags() *flags {
 	fs := flag.NewFlagSet("kafka-testdata-generator", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	f := &flags{
-		set:           fs,
-		specPath:      fs.String("spec", "", "Path to AsyncAPI spec file (required)"),
-		channel:       fs.String("channel", "", "Kafka topic/channel to produce to (required)"),
-		broker:        fs.String("broker", "localhost:9092", "Kafka broker address"),
-		count:         fs.Int("count", 10, "Number of payloads to generate (0 = infinite)"),
-		rateLimit:     fs.Duration("rate", 10*time.Millisecond, "Minimum time between messages"),
-		keyPath:       fs.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)"),
-		renamedKey:    fs.String("key", "", "deprecated: renamed to -keyPath"),
-		dryRun:        fs.Bool("dry-run", false, "Generate payloads without producing to Kafka"),
-		seed:          fs.Int64("seed", time.Now().UnixNano(), "Random seed for reproducibility"),
+		set:        fs,
+		specPath:   fs.String("spec", "", "Path to AsyncAPI spec file (required)"),
+		channel:    fs.String("channel", "", "Kafka topic/channel to produce to (required)"),
+		broker:     fs.String("broker", "localhost:9092", "Kafka broker address"),
+		count:      fs.Int("count", 10, "Number of payloads to generate (0 = infinite)"),
+		rateLimit:  fs.Duration("rate", 10*time.Millisecond, "Minimum time between messages"),
+		keyPath:    fs.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)"),
+		renamedKey: fs.String("key", "", "deprecated: renamed to -keyPath"),
+		dryRun:     fs.Bool("dry-run", false, "Generate payloads without producing to Kafka"),
+		// 0 stands in for "random" so help states no seed that will not be used;
+		// Plan draws the real one when -seed is not given.
+		seed:          fs.Int64("seed", 0, "Random seed for reproducibility (default: random)"),
 		now:           newNowFlag(),
 		acks:          newAcksFlag(),
 		format:        newFormatFlag(),
@@ -102,10 +105,22 @@ func newFlags() *flags {
 		avroKeySchema: fs.String("avro-key-schema", "", "Path to key avsc file (the AVRO key schema)"),
 		registryURL:   fs.String("registry", "", "Confluent Schema Registry base URL (required with -format avro when producing)"),
 	}
-	fs.Var(f.now, "now", "Clock for date fields (RFC3339; default now)")
-	fs.Var(f.acks, "acks", "Acks level: 1 (leader) or all (all in-sync replicas)")
-	fs.Var(f.format, "format", "Output wire format: json (default) or avro")
+	// A back-quoted word names the value in help, in place of "value".
+	fs.Var(f.now, "now", "Clock for date fields, as an RFC3339 `time` (default: the current time)")
+	fs.Var(f.acks, "acks", "Acks `level`: 1 (leader) or all (all in-sync replicas)")
+	fs.Var(f.format, "format", "Output wire format `name`: json or avro")
 	return f
+}
+
+// isSet reports whether the named flag was given on the command line.
+func (f *flags) isSet(name string) bool {
+	set := false
+	f.set.Visit(func(fl *flag.Flag) {
+		if fl.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // Usage writes the help block for the CLI to w, naming the binary as invoked.
@@ -124,11 +139,20 @@ func Usage(w io.Writer, name string) {
 
 // Plan validates args and builds the run they describe, or returns the first
 // rule they break. It performs no network I/O: only argv, the spec file and the
-// avsc files are read.
+// avsc files are read. -h and -help return flag.ErrHelp, a request for Usage
+// rather than a rule broken.
 func Plan(args []string) (*Run, error) {
 	f := newFlags()
 	if err := f.set.Parse(args); err != nil {
-		return nil, &Error{Err: err}
+		if errors.Is(err, flag.ErrHelp) {
+			return nil, err
+		}
+		// An unknown or unparsable flag is a rule about the flags themselves,
+		// so it carries no cause.
+		return nil, &Error{Detail: err.Error()}
+	}
+	if !f.isSet("seed") {
+		*f.seed = time.Now().UnixNano()
 	}
 
 	if *f.specPath == "" {
@@ -198,13 +222,7 @@ func (r *Run) checkFormatFlags(f *flags) error {
 // in dry run (the Key is echoed), so only the options that reach Kafka or the
 // registry count as disregarded.
 func (r *Run) warnDisregardedOptions(f *flags) {
-	brokerSet := false
-	f.set.Visit(func(fl *flag.Flag) {
-		if fl.Name == "broker" {
-			brokerSet = true
-		}
-	})
-	if r.DryRun && (brokerSet || f.acks.set || r.RegistryURL != "") {
+	if r.DryRun && (f.isSet("broker") || f.isSet("acks") || r.RegistryURL != "") {
 		r.Warnings = append(r.Warnings, "Warning: dry-run mode disregards Kafka options")
 	}
 }
@@ -308,7 +326,6 @@ func (r *Run) NewEncoder(ctx context.Context) (pipeline.Encoder, error) {
 // Kafka acknowledgement level. Invalid values fail at parse time with a hint.
 type acksFlag struct {
 	acks producer.Acks
-	set  bool
 }
 
 func newAcksFlag() *acksFlag {
@@ -323,14 +340,14 @@ func (a *acksFlag) Set(v string) error {
 		return fmt.Errorf("invalid -acks: %w", err)
 	}
 	a.acks = acks
-	a.set = true
 	return nil
 }
 
-// String satisfies flag.Value and is used for the flag default and usage.
+// String satisfies flag.Value and is used for the flag default and usage. The
+// unset zero value renders empty, so help shows the real default beside it.
 func (a *acksFlag) String() string {
-	if a == nil {
-		return producer.AcksLeader.String()
+	if a == nil || a.acks == 0 {
+		return ""
 	}
 	return a.acks.String()
 }
@@ -340,6 +357,7 @@ func (a *acksFlag) String() string {
 // invalid value fails at parse time with a hint.
 type nowFlag struct {
 	now time.Time
+	set bool
 }
 
 func newNowFlag() *nowFlag {
@@ -354,13 +372,15 @@ func (n *nowFlag) Set(v string) error {
 		return fmt.Errorf("invalid -now: %w", err)
 	}
 	n.now = parsed
+	n.set = true
 	return nil
 }
 
-// String satisfies flag.Value and is used for the flag default and usage.
+// String satisfies flag.Value. The wall-clock default renders empty, so help
+// states no moment that the run will not use.
 func (n *nowFlag) String() string {
-	if n == nil {
-		return time.Now().Format(time.RFC3339)
+	if n == nil || !n.set {
+		return ""
 	}
 	return n.now.Format(time.RFC3339)
 }
@@ -386,10 +406,11 @@ func (f *formatFlag) Set(v string) error {
 	return nil
 }
 
-// String satisfies flag.Value and is used for the flag default and usage.
+// String satisfies flag.Value and is used for the flag default and usage. The
+// zero value renders empty, so help shows the json default beside it.
 func (f *formatFlag) String() string {
 	if f == nil {
-		return "json"
+		return ""
 	}
 	return f.format
 }
