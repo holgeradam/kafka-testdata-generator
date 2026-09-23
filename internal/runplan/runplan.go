@@ -252,7 +252,6 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 
 	r.Config = pipeline.Config{
 		Generator: parts.Values,
-		Schema:    schema,
 		Count:     *f.count,
 		RateLimit: *f.rateLimit,
 		KeyPlan:   keyPlan,

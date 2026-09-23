@@ -58,7 +58,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 
 	gen := avro.NewGenerator(opts.Synth)
 	parts := &wire.Parts{
-		Values:  &valueGenerator{gen: gen, model: value},
+		Values:  &boundGenerator{gen: gen, model: value},
 		Encoder: encoderFor(opts, value, key),
 	}
 	// A key binding declares a JSON-schema-shaped Key; generating one would
@@ -67,7 +67,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
 	}
 	if key != nil {
-		parts.KeyGen = &keyGenerator{gen: gen, model: key}
+		parts.KeyGen = &boundGenerator{gen: gen, model: key}
 		if opts.KeyPath != "" {
 			parts.Checker = avro.NewKeyChecker(value, key)
 		}
@@ -108,20 +108,11 @@ func loadAvsc(path string) (*avro.Schema, error) {
 	return avro.Parse(b)
 }
 
-// valueGenerator keeps AVRO generation on the Pipeline's ValueGenerator seam:
-// generation follows the value avsc model, so the Message schema the Pipeline
-// passes is ignored (ADR-0007 decision 3).
-type valueGenerator struct {
+// boundGenerator binds an avsc model to the generator: the value avsc for the
+// Payload, the key avsc for the Key (ADR-0007 decision 3).
+type boundGenerator struct {
 	gen   *avro.Generator
 	model *avro.Schema
 }
 
-func (g *valueGenerator) Value(map[string]any) (any, error) { return g.gen.Value(g.model.Root) }
-
-// keyGenerator generates each Key from the key avsc model.
-type keyGenerator struct {
-	gen   *avro.Generator
-	model *avro.Schema
-}
-
-func (g *keyGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }
+func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }

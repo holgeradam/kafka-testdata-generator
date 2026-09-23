@@ -24,14 +24,14 @@ func options() wire.Options {
 }
 
 // TestBuildGeneratesFromMessageSchema proves the Payload honours the Message
-// schema the Pipeline passes in.
+// schema the format bound at Build.
 func TestBuildGeneratesFromMessageSchema(t *testing.T) {
 	opts := options()
 	parts, err := Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	v, err := parts.Values.Value(opts.Schema)
+	v, err := parts.Values.Value()
 	if err != nil {
 		t.Fatalf("Value: %v", err)
 	}
