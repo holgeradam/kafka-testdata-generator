@@ -23,14 +23,12 @@ type Sink interface {
 }
 
 // ValueGenerator is the seam between the Pipeline and payload generation. The
-// generator produces a random value honouring the given JSON Schema, or a typed
-// error when it cannot (ADR-0006). The Pipeline depends only on this interface;
-// *generator.Generator satisfies it, and tests substitute a fake so pipeline
-// tests never load a schema or touch an RNG.
+// Wire format binds the schema that governs it, so each Value is a random
+// Payload honouring that schema, or a typed error when the schema holds a
+// construct that cannot be honoured (ADR-0006). The Pipeline knows no schema of
+// any language; tests substitute a fake so they never load one or touch an RNG.
 type ValueGenerator interface {
-	// Value generates a value conforming to schema, or an error when the schema
-	// contains a construct that cannot be honoured.
-	Value(schema map[string]any) (any, error)
+	Value() (any, error)
 }
 
 // KeyPlan is the seam between the Pipeline and the Key of a run: it generates
@@ -46,7 +44,6 @@ type KeyPlan interface {
 // Config carries the fixed inputs of a run.
 type Config struct {
 	Generator ValueGenerator
-	Schema    map[string]any
 	Count     int
 	RateLimit time.Duration
 	// KeyPlan, when set, produces the Key of each record; nil means a null Key.
@@ -66,9 +63,9 @@ type Stats struct {
 	Elapsed time.Duration
 }
 
-// Pipeline drives a run: generate each Payload from the Message schema, extract
-// the Key, encode via the injected Encoder, and hand bytes to the configured
-// Sink until Count is reached or the context is cancelled.
+// Pipeline drives a run: generate each Payload, take its Key from the Key
+// plan, encode via the injected Encoder, and hand bytes to the configured Sink
+// until Count is reached or the context is cancelled.
 type Pipeline struct {
 	cfg  Config
 	sink Sink
@@ -103,7 +100,7 @@ loop:
 		default:
 		}
 
-		payload, err := p.cfg.Generator.Value(p.cfg.Schema)
+		payload, err := p.cfg.Generator.Value()
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}

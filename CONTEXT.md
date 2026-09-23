@@ -48,11 +48,11 @@ The validated description of one run, built from the command line before anythin
 _Avoid_: config, options, args
 
 **Pipeline**:
-The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation, and on an optional **Key plan** for the Key; `*generator.Generator` and `*keyplan.Plan` satisfy them, and tests substitute fakes.
+The deep module driving a run: generates each record for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **ValueGenerator** seam for record generation, and on an optional **Key plan** for the Key; the Wire format's generator and `*keyplan.Plan` satisfy them, and tests substitute fakes. It holds no schema of any language.
 _Avoid_: runner, loop, producer loop
 
 **ValueGenerator**:
-The seam between the Pipeline and record generation: one method, `Value(schema) (any, error)`, promises a Payload honouring the Message schema or a typed conformance error. Adapters pass the deletion test: `*generator.Generator` in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
+The seam between the Pipeline and record generation: one method, `Value() (any, error)`, promises a Payload honouring the schema that governs the active Wire format (see Conformance), or a typed conformance error. The Wire format binds that schema when it builds the generator: the Message schema in JSON mode, the value avsc in AVRO mode. Adapters pass the deletion test: one per Wire format in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
 _Avoid_: generator interface, data source
 
 **Synthesizer**:

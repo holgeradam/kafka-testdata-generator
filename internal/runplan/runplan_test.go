@@ -93,8 +93,8 @@ func TestPlanAccepts(t *testing.T) {
 				if r.Config.KeyPlan != nil {
 					t.Error("no key schema: KeyPlan must be nil, so records carry a null Key")
 				}
-				if r.Config.Schema == nil || r.Config.Generator == nil {
-					t.Error("plan must carry the Message schema and a generator")
+				if r.Config.Generator == nil {
+					t.Error("plan must carry a generator")
 				}
 			},
 		},
@@ -306,11 +306,11 @@ func TestPlanIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	a, err := first.Config.Generator.Value(first.Config.Schema)
+	a, err := first.Config.Generator.Value()
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	b, err := second.Config.Generator.Value(second.Config.Schema)
+	b, err := second.Config.Generator.Value()
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}

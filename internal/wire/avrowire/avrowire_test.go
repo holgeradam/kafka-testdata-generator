@@ -43,13 +43,13 @@ func options(t *testing.T) wire.Options {
 }
 
 // TestBuildGeneratesFromValueAvsc proves the Payload follows the value avsc,
-// whatever Message schema the Pipeline hands the generator.
+// whatever Message schema the spec declares.
 func TestBuildGeneratesFromValueAvsc(t *testing.T) {
 	parts, err := Format{}.Build(options(t))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	v, err := parts.Values.Value(map[string]any{"type": "integer"})
+	v, err := parts.Values.Value()
 	if err != nil {
 		t.Fatalf("Value: %v", err)
 	}

@@ -41,13 +41,13 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	gen.SetRefResolver(opts.ResolveRef)
 
 	parts := &wire.Parts{
-		Values: gen,
+		Values: &boundGenerator{gen: gen, schema: opts.Schema},
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
 			return JsonEncoder{}, nil
 		},
 	}
 	if opts.KeyBinding != nil {
-		parts.KeyGen = &bindingKeyGenerator{gen: gen, schema: opts.KeyBinding}
+		parts.KeyGen = &boundGenerator{gen: gen, schema: opts.KeyBinding}
 		if opts.KeyPath != "" {
 			parts.Checker = generator.NewKeyChecker(opts.Schema, opts.KeyBinding, opts.ResolveRef)
 		}
@@ -55,11 +55,11 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	return parts, nil
 }
 
-// bindingKeyGenerator binds the key binding's schema to the generator, giving
-// the Key plan its no-argument Generator.
-type bindingKeyGenerator struct {
+// boundGenerator binds a JSON Schema to the generator: the Message schema for
+// the Payload, the key binding for the Key.
+type boundGenerator struct {
 	gen    *generator.Generator
 	schema map[string]any
 }
 
-func (g *bindingKeyGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
+func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
