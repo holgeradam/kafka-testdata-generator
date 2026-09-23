@@ -9,7 +9,6 @@ package wire
 import (
 	"context"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -45,12 +44,11 @@ type Options struct {
 
 	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
 	Synth *synth.Synthesizer
-	// Schema is the Kafka topic's Message schema, KeyBinding its
-	// bindings.kafka.key (nil when absent), and ResolveRef resolves the $refs
-	// both may hold.
+	// Schema is the Kafka topic's Message schema and KeyBinding its
+	// bindings.kafka.key (nil when absent). Both are self-contained: a $ref
+	// points into the schema's own $defs.
 	Schema     map[string]any
 	KeyBinding map[string]any
-	ResolveRef generator.RefResolver
 }
 
 // Parts is a run as its Wire format wires it.

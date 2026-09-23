@@ -1,421 +1,464 @@
+// Package asyncapi reads an AsyncAPI 2.x spec into what a run needs: the
+// Message types the spec declares for a Kafka topic, each with a Payload schema
+// and an optional Key binding. The spec is decoded once into a JSON-normalized
+// map, and one walk resolves every $ref on the way - at an entry's bindings, an
+// operation's message, a oneOf variant, a message's bindings, the kafka
+// binding, the key, and inside the schemas (ADR-0005). What the walk cannot
+// read is an error naming the Message type, never a silent fallback.
 package asyncapi
 
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// Document represents a parsed AsyncAPI specification.
-type Document struct {
-	AsyncAPI string `yaml:"asyncapi" json:"asyncapi"`
-	Info     Info   `yaml:"info" json:"info"`
-	// Channels is AsyncAPI's channels: key, holding the spec's entries for
-	// Kafka topics.
-	Channels   map[string]ChannelItem `yaml:"channels" json:"channels"`
-	Components *Components            `yaml:"components,omitempty" json:"components,omitempty"`
+// maxRefChain bounds a chain of $refs that point at further $refs, so a spec
+// whose refs form a loop without content stops with an error.
+const maxRefChain = 32
 
-	// raw is the whole spec decoded once into a navigable, JSON-normalized map
-	// that $ref resolution walks directly.
+// Document is a parsed AsyncAPI 2.x spec.
+type Document struct {
 	raw map[string]any
 }
 
-type Info struct {
-	Title       string `yaml:"title" json:"title"`
-	Version     string `yaml:"version" json:"version"`
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+// MessageType is one kind of message the spec declares for a Kafka topic. Its
+// schemas are self-contained: a cyclic $ref points into the schema's own
+// $defs, so they are used without the Document.
+type MessageType struct {
+	// Name is the message's name, else its component key, else where it is
+	// declared, e.g. "orders publish oneOf[1]".
+	Name string
+	// Payload is the JSON Schema the Payload honours.
+	Payload map[string]any
+	// KeyBinding is the bindings.kafka.key schema, nil when none is declared.
+	KeyBinding map[string]any
 }
 
-// ChannelItem is AsyncAPI's Channel Item Object: the spec's entry for a Kafka
-// topic. Its key under channels: names the Kafka topic unless its Kafka
-// binding declares another (bindings.kafka.topic).
-type ChannelItem struct {
-	Ref         string         `yaml:"$ref,omitempty" json:"$ref,omitempty"`
-	Bindings    map[string]any `yaml:"bindings,omitempty" json:"bindings,omitempty"`
-	Messages    map[string]any `yaml:"messages,omitempty" json:"messages,omitempty"`
-	Publish     *Operation     `yaml:"publish,omitempty" json:"publish,omitempty"`
-	Subscribe   *Operation     `yaml:"subscribe,omitempty" json:"subscribe,omitempty"`
-	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
-}
-
-type Operation struct {
-	Message any `yaml:"message,omitempty" json:"message,omitempty"`
-}
-
-type Message struct {
-	Ref         string         `yaml:"$ref,omitempty" json:"$ref,omitempty"`
-	Name        string         `yaml:"name,omitempty" json:"name,omitempty"`
-	Payload     map[string]any `yaml:"payload,omitempty" json:"payload,omitempty"`
-	Bindings    map[string]any `yaml:"bindings,omitempty" json:"bindings,omitempty"`
-	Description string         `yaml:"description,omitempty" json:"description,omitempty"`
-}
-
-type Components struct {
-	Messages map[string]Message `yaml:"messages,omitempty" json:"messages,omitempty"`
-	Schemas  map[string]any     `yaml:"schemas,omitempty" json:"schemas,omitempty"`
-}
-
-// Load reads and parses an AsyncAPI specification from a YAML or JSON file.
-// The document is also decoded once into a navigable JSON-normalized map so
-// that $ref resolution can walk it directly instead of re-marshalling per ref.
+// Load reads and parses an AsyncAPI 2.x specification from a YAML or JSON
+// file. A 3.x document is refused rather than half-read.
 func Load(path string) (*Document, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading spec file: %w", err)
 	}
-
-	var doc Document
-	if err := decode(data, path, &doc); err != nil {
-		return nil, fmt.Errorf("parsing spec: %w", err)
-	}
-
 	raw, err := unmarshalRaw(data, path)
 	if err != nil {
 		return nil, err
 	}
-	doc.raw = raw
-
-	return &doc, nil
-}
-
-// decode unmarshals spec bytes into target, choosing YAML or JSON by suffix.
-func decode(data []byte, path string, target any) error {
-	if strings.HasSuffix(path, ".json") {
-		return json.Unmarshal(data, target)
+	if v, _ := raw["asyncapi"].(string); strings.HasPrefix(v, "3.") {
+		return nil, fmt.Errorf("AsyncAPI %s is not supported yet: the tool reads AsyncAPI 2.x specs", v)
 	}
-	return yaml.Unmarshal(data, target)
+	return &Document{raw: raw}, nil
 }
 
-// unmarshalRaw decodes the spec bytes into a navigable map and normalizes it
-// through a JSON round-trip so every number is float64 regardless of whether
-// the source was YAML (integers) or JSON. This keeps numbers consistent with
-// the JSON round-trip the message structs already undergo.
+// unmarshalRaw decodes the spec bytes, choosing YAML or JSON by suffix, and
+// normalizes them through a JSON round-trip so every number is float64
+// whichever format the source was.
 func unmarshalRaw(data []byte, path string) (map[string]any, error) {
-	var m map[string]any
-	if err := decode(data, path, &m); err != nil {
+	var decoded any
+	var err error
+	if strings.HasSuffix(path, ".json") {
+		err = json.Unmarshal(data, &decoded)
+	} else {
+		err = yaml.Unmarshal(data, &decoded)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("parsing spec: %w", err)
 	}
-	buf, err := json.Marshal(m)
+	buf, err := json.Marshal(decoded)
 	if err != nil {
 		return nil, fmt.Errorf("normalizing spec: %w", err)
 	}
 	var normalized map[string]any
 	if err := json.Unmarshal(buf, &normalized); err != nil {
-		return nil, fmt.Errorf("normalizing spec: %w", err)
+		return nil, fmt.Errorf("parsing spec: the document is not an object")
 	}
 	return normalized, nil
 }
 
-// KeyBinding extracts the message-level kafka key binding schema for the given
-// Kafka topic. Returns nil when no binding is present. The returned schema has
-// $ref nodes resolved so it can be fed directly to the Generator.
-func (d *Document) KeyBinding(topic string) (map[string]any, error) {
-	item, err := d.entryFor(topic)
-	if err != nil {
-		return nil, err
+// MessageTypes returns every Message type the spec declares for a Kafka topic,
+// in a stable order: across the spec's entries for it (sorted by key), the
+// publish then the subscribe operation, and oneOf variants in order. A
+// component message referenced more than once is one Message type.
+func (d *Document) MessageTypes(topic string) ([]MessageType, error) {
+	channels, _ := d.raw["channels"].(map[string]any)
+	keys := make([]string, 0, len(channels))
+	for key := range channels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	c := &collector{d: d, seen: map[string]bool{}}
+	found := false
+	for _, key := range keys {
+		entry, err := d.object(channels[key], "spec entry "+key)
+		if err != nil {
+			return nil, err
+		}
+		bound, err := d.kafkaTopic(entry, key)
+		if err != nil {
+			return nil, err
+		}
+		if bound != topic {
+			continue
+		}
+		found = true
+		if entry["messages"] != nil {
+			return nil, fmt.Errorf("spec entry %s: messages on a spec entry is AsyncAPI 3.0 syntax; in 2.x, declare them under publish or subscribe (several as message.oneOf)", key)
+		}
+		for _, op := range []string{"publish", "subscribe"} {
+			if err := c.operation(entry[op], key+" "+op); err != nil {
+				return nil, err
+			}
+		}
 	}
 
-	msg, err := d.resolveMessage(item)
-	if err != nil {
-		return nil, fmt.Errorf("Kafka topic %q: %w", topic, err)
+	switch {
+	case !found:
+		if entry, ok := channels[topic]; ok {
+			if e, err := d.object(entry, "spec entry "+topic); err == nil {
+				if bound, err := d.kafkaTopic(e, topic); err == nil {
+					return nil, fmt.Errorf("Kafka topic %q not found in spec: the spec entry %s binds Kafka topic %q", topic, topic, bound)
+				}
+			}
+		}
+		return nil, fmt.Errorf("Kafka topic %q not found in spec", topic)
+	case len(c.types) == 0:
+		return nil, fmt.Errorf("Kafka topic %q: the spec declares no message for it", topic)
 	}
-
-	if msg.Bindings == nil {
-		return nil, nil
-	}
-
-	kafka, ok := msg.Bindings["kafka"].(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-
-	keySchema, ok := kafka["key"].(map[string]any)
-	if !ok {
-		return nil, nil
-	}
-
-	resolved, err := d.resolveNode(keySchema, nil)
-	if err != nil {
-		return nil, fmt.Errorf("resolving key binding refs: %w", err)
-	}
-
-	out, ok := resolved.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("key binding schema must be an object")
-	}
-
-	return out, nil
+	return c.types, nil
 }
 
-// PayloadSchema extracts the JSON Schema for the message payload of the given
-// Kafka topic. If its spec entry has publish and subscribe operations, publish
-// is preferred.
-func (d *Document) PayloadSchema(topic string) (map[string]any, error) {
-	item, err := d.entryFor(topic)
-	if err != nil {
-		return nil, err
+// kafkaTopic is the Kafka topic a spec entry keyed key stands for: its
+// bindings.kafka.topic when declared, else the key itself.
+func (d *Document) kafkaTopic(entry map[string]any, key string) (string, error) {
+	where := "spec entry " + key
+	kafka, err := d.kafkaBinding(entry["bindings"], where)
+	if err != nil || kafka == nil {
+		return key, err
 	}
-
-	msg, err := d.resolveMessage(item)
-	if err != nil {
-		return nil, fmt.Errorf("Kafka topic %q: %w", topic, err)
+	switch topic := kafka["topic"].(type) {
+	case nil:
+		return key, nil
+	case string:
+		return topic, nil
+	default:
+		return "", fmt.Errorf("%s: bindings.kafka.topic must be a string", where)
 	}
-
-	schema := msg.Payload
-	if schema == nil {
-		return nil, fmt.Errorf("no payload schema in message for Kafka topic %q", topic)
-	}
-
-	resolved, err := d.resolveNode(schema, nil)
-	if err != nil {
-		return nil, fmt.Errorf("resolving refs: %w", err)
-	}
-	out, ok := resolved.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("payload schema for Kafka topic %q must be an object", topic)
-	}
-
-	// Cyclic refs are preserved as $ref nodes in `out`; the generator walks
-	// them within its depth budget.
-	return out, nil
 }
 
-// ResolveRef returns the schema node a $ref points at, for the generator to
-// follow preserved cyclic $ref nodes within its depth budget.
-func (d *Document) ResolveRef(ref string) (map[string]any, error) {
-	v, err := d.resolveRef(ref)
+// kafkaBinding resolves a bindings object and its kafka binding, either of
+// which may be a $ref. It returns nil when no kafka binding is declared, and
+// an error when one is declared but is not an object.
+func (d *Document) kafkaBinding(bindings any, where string) (map[string]any, error) {
+	if bindings == nil {
+		return nil, nil
+	}
+	b, err := d.object(bindings, where+": bindings")
 	if err != nil {
 		return nil, err
 	}
-	m, ok := v.(map[string]any)
+	if b["kafka"] == nil {
+		return nil, nil
+	}
+	return d.object(b["kafka"], where+": bindings.kafka")
+}
+
+// collector gathers the Message types of one Kafka topic.
+type collector struct {
+	d     *Document
+	seen  map[string]bool
+	types []MessageType
+}
+
+// operation adds the Message types of one publish or subscribe operation.
+func (c *collector) operation(node any, where string) error {
+	if node == nil {
+		return nil
+	}
+	op, err := c.d.object(node, where)
+	if err != nil {
+		return err
+	}
+	if op["message"] == nil {
+		return nil
+	}
+	return c.message(op["message"], where)
+}
+
+// message adds one message, or each variant of a oneOf message.
+func (c *collector) message(node any, where string) error {
+	ref := refOf(node)
+	if ref != "" {
+		if c.seen[ref] {
+			return nil
+		}
+		c.seen[ref] = true
+	}
+	msg, err := c.d.object(node, where)
+	if err != nil {
+		return err
+	}
+	if variants, ok := msg["oneOf"].([]any); ok {
+		for i, v := range variants {
+			if err := c.message(v, fmt.Sprintf("%s oneOf[%d]", where, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	name := where
+	if n, ok := msg["name"].(string); ok && n != "" {
+		name = n
+	} else if ref != "" {
+		name = lastToken(ref)
+	}
+
+	if msg["payload"] == nil {
+		return fmt.Errorf("message %s declares no payload", name)
+	}
+	payload, err := c.d.schema(msg["payload"])
+	if err != nil {
+		return fmt.Errorf("message %s: payload: %w", name, err)
+	}
+	mt := MessageType{Name: name, Payload: payload}
+
+	kafka, err := c.d.kafkaBinding(msg["bindings"], "message "+name)
+	if err != nil {
+		return err
+	}
+	if kafka != nil && kafka["key"] != nil {
+		if _, ok := kafka["key"].(map[string]any); !ok {
+			return fmt.Errorf("message %s: bindings.kafka.key must be a schema object", name)
+		}
+		if mt.KeyBinding, err = c.d.schema(kafka["key"]); err != nil {
+			return fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
+		}
+	}
+	c.types = append(c.types, mt)
+	return nil
+}
+
+// object resolves node through any $ref chain and requires an object there.
+func (d *Document) object(node any, where string) (map[string]any, error) {
+	for i := 0; ; i++ {
+		m, ok := node.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: must be an object", where)
+		}
+		ref := refOf(m)
+		if ref == "" {
+			return m, nil
+		}
+		if i == maxRefChain {
+			return nil, fmt.Errorf("%s: $ref chain longer than %d", where, maxRefChain)
+		}
+		target, err := d.pointer(ref)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", where, err)
+		}
+		node = target
+	}
+}
+
+// refOf returns the $ref of a node, or "" when it is not a reference.
+func refOf(node any) string {
+	m, _ := node.(map[string]any)
+	ref, _ := m["$ref"].(string)
+	return ref
+}
+
+// pointer resolves an internal reference: a JSON Pointer (RFC 6901) in a URI
+// fragment, so percent-encoding decodes and ~1 and ~0 unescape to / and ~.
+// External references are rejected (ADR-0005 decision 4).
+func (d *Document) pointer(ref string) (any, error) {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil, fmt.Errorf("resolving $ref %s: external refs not supported", ref)
+	}
+	fragment, err := url.PathUnescape(ref[1:])
+	if err != nil {
+		return nil, fmt.Errorf("resolving $ref %s: %w", ref, err)
+	}
+	var current any = d.raw
+	for _, token := range strings.Split(fragment[1:], "/") {
+		token = unescapeToken(token)
+		switch node := current.(type) {
+		case map[string]any:
+			next, ok := node[token]
+			if !ok {
+				return nil, fmt.Errorf("resolving $ref %s: %q not found", ref, token)
+			}
+			current = next
+		case []any:
+			i, err := strconv.Atoi(token)
+			if err != nil || i < 0 || i >= len(node) {
+				return nil, fmt.Errorf("resolving $ref %s: no item %q", ref, token)
+			}
+			current = node[i]
+		default:
+			return nil, fmt.Errorf("resolving $ref %s: cannot descend into %q", ref, token)
+		}
+	}
+	return current, nil
+}
+
+// schema resolves a schema node into a self-contained schema: every non-cyclic
+// $ref expanded in place, and every cycle preserved as a $ref into the
+// schema's own $defs, which holds the cycle's resolved target (ADR-0005,
+// amended by #73). Resolution walks each path with a stack of the refs being
+// expanded, so a diamond resolves in full and only a true cycle is kept.
+func (d *Document) schema(node any) (map[string]any, error) {
+	r := &resolver{d: d, defs: map[string]any{}}
+	out, err := r.node(node, nil)
+	if err != nil {
+		return nil, err
+	}
+	m, ok := out.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("ref %s does not resolve to a schema object", ref)
+		return nil, fmt.Errorf("the schema must be an object")
+	}
+	if len(r.defs) > 0 {
+		defs, _ := m["$defs"].(map[string]any)
+		if defs == nil {
+			defs = map[string]any{}
+		}
+		for name, target := range r.defs {
+			defs[name] = target
+		}
+		m["$defs"] = defs
 	}
 	return m, nil
 }
 
-// resolveNode expands $ref nodes along a single path. The stack holds the refs
-// currently being expanded, so a ref that targets a node already on the stack
-// (a cycle) is preserved as a $ref node; diamonds resolve correctly because
-// each sibling starts a fresh path. Non-cyclic refs are fully expanded.
-func (d *Document) resolveNode(node any, stack []string) (any, error) {
-	if m, ok := node.(map[string]any); ok {
-		if ref, isRef := m["$ref"].(string); isRef {
-			if contains(stack, ref) {
-				return deepCopy(m), nil
-			}
-			target, err := d.resolveRef(ref)
-			if err != nil {
-				return nil, fmt.Errorf("resolving $ref %s: %w", ref, err)
-			}
-			return d.resolveNode(target, append(stack, ref))
-		}
+// resolver expands one schema, collecting its cycles' targets in defs.
+type resolver struct {
+	d    *Document
+	defs map[string]any
+}
 
-		out := make(map[string]any, len(m))
-		for k, v := range m {
-			rv, err := d.resolveNode(v, stack)
+func (r *resolver) node(node any, stack []string) (any, error) {
+	switch n := node.(type) {
+	case map[string]any:
+		if ref, ok := n["$ref"].(string); ok {
+			for _, open := range stack {
+				if open == ref {
+					return r.cycle(ref)
+				}
+			}
+			target, err := r.d.pointer(ref)
+			if err != nil {
+				return nil, err
+			}
+			return r.node(target, append(stack, ref))
+		}
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			rv, err := r.node(v, stack)
 			if err != nil {
 				return nil, err
 			}
 			out[k] = rv
 		}
 		return out, nil
-	}
-
-	if arr, ok := node.([]any); ok {
-		out := make([]any, len(arr))
-		for i, item := range arr {
-			rv, err := d.resolveNode(item, stack)
+	case []any:
+		out := make([]any, len(n))
+		for i, item := range n {
+			rv, err := r.node(item, stack)
 			if err != nil {
 				return nil, err
 			}
 			out[i] = rv
 		}
 		return out, nil
+	default:
+		return node, nil
 	}
-
-	return node, nil
 }
 
-func contains(stack []string, ref string) bool {
-	for _, s := range stack {
-		if s == ref {
-			return true
-		}
+// cycle returns the local $ref that preserves a cycle through ref, defining
+// ref's target the first time.
+func (r *resolver) cycle(ref string) (any, error) {
+	name, err := r.define(ref)
+	if err != nil {
+		return nil, err
 	}
-	return false
+	return map[string]any{"$ref": "#/$defs/" + escapeToken(name)}, nil
 }
 
-// deepCopy clones a nested value built from maps, slices, and scalars.
-func deepCopy(v any) any {
-	switch n := v.(type) {
+// define puts ref's target into defs under the reference's own pointer, so two
+// targets never collide. The target is copied with each $ref inside it
+// rewritten to a local one rather than expanded, and each of those defined in
+// turn: every $ref the generator follows inside a cycle then costs one step of
+// its depth budget, exactly as when it followed the spec's refs (ADR-0005).
+func (r *resolver) define(ref string) (string, error) {
+	name, err := url.PathUnescape(strings.TrimPrefix(ref, "#/"))
+	if err != nil {
+		return "", fmt.Errorf("resolving $ref %s: %w", ref, err)
+	}
+	if _, done := r.defs[name]; done {
+		return name, nil
+	}
+	r.defs[name] = nil // claimed, so the target's own cycles stop here
+	target, err := r.d.pointer(ref)
+	if err != nil {
+		return "", err
+	}
+	local, err := r.local(target)
+	if err != nil {
+		return "", err
+	}
+	r.defs[name] = local
+	return name, nil
+}
+
+// local copies a node, rewriting each $ref in it to a local one.
+func (r *resolver) local(node any) (any, error) {
+	switch n := node.(type) {
 	case map[string]any:
-		out := make(map[string]any, len(n))
-		for k, val := range n {
-			out[k] = deepCopy(val)
+		if ref, ok := n["$ref"].(string); ok {
+			return r.cycle(ref)
 		}
-		return out
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			lv, err := r.local(v)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = lv
+		}
+		return out, nil
 	case []any:
 		out := make([]any, len(n))
 		for i, item := range n {
-			out[i] = deepCopy(item)
-		}
-		return out
-	default:
-		return n
-	}
-}
-
-// entryFor returns the spec's entry for a Kafka topic: the one entry whose
-// Kafka binding names it, or whose key names it when it binds no other Kafka
-// topic. Several entries bound to one Kafka topic are refused by name rather
-// than one of them picked, until their Message types can be mixed (#74).
-func (d *Document) entryFor(topic string) (ChannelItem, error) {
-	var names []string
-	for name, item := range d.Channels {
-		if item.kafkaTopic(name) == topic {
-			names = append(names, name)
-		}
-	}
-	switch len(names) {
-	case 0:
-		if item, ok := d.Channels[topic]; ok {
-			return ChannelItem{}, fmt.Errorf("Kafka topic %q not found in spec: the spec entry %s binds Kafka topic %q", topic, topic, item.kafkaTopic(topic))
-		}
-		return ChannelItem{}, fmt.Errorf("Kafka topic %q not found in spec", topic)
-	case 1:
-		return d.Channels[names[0]], nil
-	}
-	sort.Strings(names)
-	return ChannelItem{}, fmt.Errorf("Kafka topic %q is bound by several spec entries (%s); mixing their Message types is not supported yet", topic, strings.Join(names, ", "))
-}
-
-// kafkaTopic is the Kafka topic an entry keyed name stands for: its
-// bindings.kafka.topic when declared, else the key itself.
-func (c ChannelItem) kafkaTopic(name string) string {
-	if kafka, ok := c.Bindings["kafka"].(map[string]any); ok {
-		if topic, ok := kafka["topic"].(string); ok && topic != "" {
-			return topic
-		}
-	}
-	return name
-}
-
-func (d *Document) resolveMessage(item ChannelItem) (*Message, error) {
-	// Try publish first, then subscribe
-	for _, op := range []*Operation{item.Publish, item.Subscribe} {
-		if op == nil || op.Message == nil {
-			continue
-		}
-		msgs, err := d.normalizeMessages(op.Message)
-		if err != nil {
-			continue
-		}
-		if len(msgs) > 0 {
-			return msgs[0], nil
-		}
-	}
-
-	// Try entry-level messages
-	if item.Messages != nil {
-		for _, v := range item.Messages {
-			if m, ok := v.(map[string]any); ok {
-				msg, err := messageFromMap(d, m)
-				if err != nil {
-					return nil, err
-				}
-				return msg, nil
+			lv, err := r.local(item)
+			if err != nil {
+				return nil, err
 			}
+			out[i] = lv
 		}
-	}
-
-	return nil, fmt.Errorf("no message found in its spec entry")
-}
-
-func (d *Document) normalizeMessages(raw any) ([]*Message, error) {
-	switch v := raw.(type) {
-	case map[string]any:
-		msg, err := messageFromMap(d, v)
-		if err != nil {
-			return nil, err
-		}
-		return []*Message{msg}, nil
-	case []any:
-		var msgs []*Message
-		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				msg, err := messageFromMap(d, m)
-				if err != nil {
-					return nil, err
-				}
-				msgs = append(msgs, msg)
-			}
-		}
-		return msgs, nil
+		return out, nil
 	default:
-		return nil, fmt.Errorf("unsupported message type: %T", raw)
+		return node, nil
 	}
 }
 
-// messageFromMap decodes one message map into a *Message, resolving a
-// message-level $ref when present. Unlike resolveNode, which expands schema
-// nodes into anonymous nested values, this works at the top-level message
-// boundary and decodes into the typed Message struct.
-func messageFromMap(d *Document, m map[string]any) (*Message, error) {
-	msg := &Message{}
-	if ref, ok := m["$ref"].(string); ok {
-		resolved, err := d.resolveRef(ref)
-		if err != nil {
-			return nil, err
-		}
-		rm, ok := resolved.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("resolved message %s is not an object", ref)
-		}
-		if err := mapToStruct(rm, msg); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := mapToStruct(m, msg); err != nil {
-			return nil, err
-		}
-	}
-	return msg, nil
+// lastToken is the final, unescaped token of a JSON Pointer reference.
+func lastToken(ref string) string {
+	return unescapeToken(ref[strings.LastIndex(ref, "/")+1:])
 }
 
-// resolveRef resolves an internal (#/) reference by navigating the document's
-// raw map directly. External refs are rejected.
-func (d *Document) resolveRef(ref string) (any, error) {
-	if !strings.HasPrefix(ref, "#/") {
-		return nil, fmt.Errorf("external refs not supported: %s", ref)
-	}
-
-	path := strings.TrimPrefix(ref, "#/")
-	parts := strings.Split(path, "/")
-
-	var current any = d.raw
-	for _, part := range parts {
-		m, ok := current.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("cannot navigate ref %s at %q", ref, part)
-		}
-		current = m[part]
-		if current == nil {
-			return nil, fmt.Errorf("ref %s not found at %q", ref, part)
-		}
-	}
-
-	return current, nil
+func escapeToken(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
 
-func mapToStruct(m map[string]any, target any) error {
-	data, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, target)
+func unescapeToken(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
 }
