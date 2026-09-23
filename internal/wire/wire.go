@@ -9,6 +9,7 @@ package wire
 import (
 	"context"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -44,11 +45,11 @@ type Options struct {
 
 	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
 	Synth *synth.Synthesizer
-	// Schema is the Kafka topic's Message schema and KeyBinding its
-	// bindings.kafka.key (nil when absent). Both are self-contained: a $ref
-	// points into the schema's own $defs.
-	Schema     map[string]any
-	KeyBinding map[string]any
+	// MessageTypes are the Message types the spec declares for the Kafka
+	// topic, each with a self-contained Payload schema and Key binding. How
+	// they are used is the format's business: JSON mixes them, AVRO follows
+	// its avsc instead.
+	MessageTypes []asyncapi.MessageType
 }
 
 // Parts is a run as its Wire format wires it.

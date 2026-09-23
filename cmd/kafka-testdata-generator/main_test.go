@@ -1116,8 +1116,8 @@ func TestScenarioAvroRecordKeyDryRun(t *testing.T) {
 
 // TestScenarioSpecMistakesAreReported is #73 end to end: every spec mistake
 // the reader used to swallow - a broken message $ref hidden by a fallback, a
-// oneOf read as "no payload", a malformed Key binding read as no Key - now
-// stops the run naming what is wrong, and a bindings $ref is followed.
+// malformed Key binding read as no Key - now stops the run naming what is
+// wrong, and a bindings $ref is followed.
 func TestScenarioSpecMistakesAreReported(t *testing.T) {
 	bin := buildBinary(t)
 	const head = "asyncapi: '2.6.0'\ninfo: {title: T, version: '1'}\n"
@@ -1135,14 +1135,6 @@ components: {messages: {Order: {payload: {type: object}}}}
     publish: {message: {$ref: '#/components/messages/Typo'}}
 components: {messages: {Order: {payload: {type: object}}}}
 `, `resolving $ref #/components/messages/Typo`},
-		{"oneOf messages", head + `channels:
-  orders:
-    publish:
-      message:
-        oneOf:
-          - {name: OrderCreated, payload: {type: object}}
-          - {name: OrderUpdated, payload: {type: object}}
-`, "2 Message types (OrderCreated, OrderUpdated)"},
 		{"entry-level messages", head + `channels:
   orders:
     messages: {created: {payload: {type: object}}}
@@ -1185,4 +1177,64 @@ components:
 			t.Errorf("expected a uuid Key from the referenced binding, got:\n%s", out)
 		}
 	})
+}
+
+// TestScenarioMessageTypeMix is #74's acceptance: a Kafka topic with several
+// Message types produces all of them across its records, the same -seed
+// repeats the exact sequence, and the shared Key is planted in every type.
+func TestScenarioMessageTypeMix(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `asyncapi: '2.6.0'
+info: {title: Mix, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - $ref: '#/components/messages/OrderCreated'
+          - $ref: '#/components/messages/OrderUpdated'
+components:
+  messageBindings:
+    keyed: {kafka: {key: {type: string, format: uuid}}}
+  messages:
+    OrderCreated:
+      bindings: {$ref: '#/components/messageBindings/keyed'}
+      payload: {type: object, required: [kind, orderId], properties: {kind: {const: created}, orderId: {type: string}}}
+    OrderUpdated:
+      bindings: {$ref: '#/components/messageBindings/keyed'}
+      payload: {type: object, required: [kind, orderId], properties: {kind: {const: updated}, orderId: {type: string}}}
+`)
+	run := func() (string, string) {
+		cmd := exec.Command(bin, "-spec", spec, "-topic", "orders", "-dry-run",
+			"-count", "30", "-seed", "5", "-now", "2026-01-02T03:04:05Z", "-keyPath", "orderId")
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+		}
+		return stdout.String(), stderr.String()
+	}
+	out, errOut := run()
+	lines := filterJSONLines(out)
+	keys := regexp.MustCompile(`(?m)^Key: (.+)$`).FindAllStringSubmatch(errOut, -1)
+	if len(lines) != 30 || len(keys) != 30 {
+		t.Fatalf("expected 30 payloads and 30 keys, got %d and %d", len(lines), len(keys))
+	}
+	seen := map[string]int{}
+	for i, line := range lines {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+		seen[fmt.Sprint(payload["kind"])]++
+		if payload["orderId"] != keys[i][1] {
+			t.Errorf("record %d (%v): orderId %v, Key %s; want the Key planted", i, payload["kind"], payload["orderId"], keys[i][1])
+		}
+	}
+	if seen["created"] == 0 || seen["updated"] == 0 {
+		t.Errorf("Message types across 30 records = %v, want both", seen)
+	}
+	if again, _ := run(); again != out {
+		t.Error("the same -seed produced a different sequence")
+	}
 }

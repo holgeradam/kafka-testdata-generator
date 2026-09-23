@@ -62,9 +62,13 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		Encoder: encoderFor(opts, value, key),
 	}
 	// A key binding declares a JSON-schema-shaped Key; generating one would
-	// silently violate the avsc key contract, so it is ignored, out loud.
-	if opts.KeyBinding != nil {
-		parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
+	// silently violate the avsc key contract, so it is ignored, out loud. The
+	// spec's Message types play no other part: the avsc governs the Payload.
+	for _, mt := range opts.MessageTypes {
+		if mt.KeyBinding != nil {
+			parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
+			break
+		}
 	}
 	if key != nil {
 		parts.KeyGen = &boundGenerator{gen: gen, model: key}

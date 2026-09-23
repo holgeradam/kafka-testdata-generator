@@ -65,7 +65,7 @@ channels:
 `
 
 // twoEntriesSpec binds two spec entries to one Kafka topic, whose two Message
-// types the plan refuses until they can be mixed (#74).
+// types the run mixes (#74).
 const twoEntriesSpec = `
 asyncapi: '2.6.0'
 info: {title: Two, version: '1.0.0'}
@@ -85,6 +85,7 @@ const keyAvsc = `{"type":"string"}`
 // carries rather than what the binary prints.
 func TestPlanAccepts(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
+	twoEntries := write(t, "two.yaml", twoEntriesSpec)
 	bound := write(t, "bound.yaml", bindingSpec)
 	value := write(t, "value.avsc", valueAvsc)
 	key := write(t, "key.avsc", keyAvsc)
@@ -94,6 +95,28 @@ func TestPlanAccepts(t *testing.T) {
 		args  []string
 		check func(*testing.T, *Run)
 	}{
+		{
+			name: "two Message types mix",
+			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"},
+			check: func(t *testing.T, r *Run) {
+				if _, err := r.Config.Generator.Value(); err != nil {
+					t.Errorf("generating from the mix: %v", err)
+				}
+			},
+		},
+		{
+			name: "avro ignores the Message types",
+			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
+			check: func(t *testing.T, r *Run) {
+				v, err := r.Config.Generator.Value()
+				if err != nil {
+					t.Fatalf("generating: %v", err)
+				}
+				if _, ok := v.(map[string]any)["id"]; !ok {
+					t.Errorf("payload = %v, want the value avsc's record", v)
+				}
+			},
+		},
 		{
 			name: "json dry run",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run"},
@@ -255,7 +278,28 @@ func TestPlanRejects(t *testing.T) {
 	bound := write(t, "bound.yaml", bindingSpec)
 	value := write(t, "value.avsc", valueAvsc)
 	key := write(t, "key.avsc", keyAvsc)
-	twoEntries := write(t, "two.yaml", twoEntriesSpec)
+	mixedKeys := write(t, "mixed.yaml", `
+asyncapi: '2.6.0'
+info: {title: Mixed, version: '1.0.0'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - {name: OrderCreated, bindings: {kafka: {key: {type: string}}}, payload: {type: object}}
+          - {name: OrderUpdated, payload: {type: object}}
+`)
+	keyedMix := write(t, "keyed.yaml", `
+asyncapi: '2.6.0'
+info: {title: Keyed, version: '1.0.0'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - {name: OrderCreated, bindings: {kafka: {key: {type: string}}}, payload: {type: object, required: [orderId], properties: {orderId: {type: string}}}}
+          - {name: OrderUpdated, bindings: {kafka: {key: {type: string}}}, payload: {type: object, properties: {orderId: {type: string}}}}
+`)
 	badBinding := write(t, "bad.yaml", `
 asyncapi: '2.6.0'
 info: {title: Bad, version: '1.0.0'}
@@ -275,7 +319,8 @@ channels:
 		{"no spec", []string{"-topic", "orders"}, "spec", "-spec is required", nil},
 		{"no topic", []string{"-spec", spec}, "topic", "-topic is required", nil},
 		{"renamed channel flag", []string{"-spec", spec, "-channel", "orders"}, "channel", "-channel was renamed to -topic", nil},
-		{"two spec entries for one Kafka topic", []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"}, "topic", "2 Message types (orders-v1 publish, orders-v2 publish)", nil},
+		{"Message types with different Key bindings", []string{"-spec", mixedKeys, "-topic", "orders", "-dry-run"}, "topic", "different Key bindings (OrderCreated vs OrderUpdated (none))", nil},
+		{"key path missing in one Message type", []string{"-spec", keyedMix, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "in Message type OrderUpdated", new(*keyplan.PathError)},
 		{"unusable key binding", []string{"-spec", badBinding, "-topic", "orders", "-dry-run"}, "topic", "bindings.kafka.key must be a schema object", nil},
 		{"renamed key flag", []string{"-spec", spec, "-topic", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
 		{"avro without value avsc", []string{"-spec", spec, "-topic", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},

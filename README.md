@@ -214,9 +214,16 @@ channels:
 
 Every message the spec declares for the Kafka topic is one Message type: the `publish` and
 `subscribe` operations' messages, each variant of a `message.oneOf`, and those of every entry
-bound to the Kafka topic. A component message referenced more than once counts once. A run on a
-Kafka topic with several Message types stops and lists them for now; mixing them is planned
-(#74). AsyncAPI 3.0 documents are refused at load (3.0 support is tracked in #76).
+bound to the Kafka topic. A component message referenced more than once counts once.
+
+In JSON mode a Kafka topic's Message types are **mixed**: each record is of one, picked from the
+seeded stream, so `-seed` still reproduces the exact sequence and a Kafka topic with one Message
+type behaves as it always did. The Message types must declare the same Key binding, or none - a
+Key identifies one Entity, such as one order, across its OrderCreated and OrderUpdated records -
+and `-keyPath` must be guaranteed in every Message type's payload; either mistake stops the run
+naming the Message types involved. Under `-format avro` the avsc governs the payload, so the
+spec's Message types play no part. AsyncAPI 3.0 documents are refused at load (3.0 support is
+tracked in #76).
 
 Every spec mistake stops the run with an error naming the message: a broken `$ref`, a missing
 payload, or a Key binding that is declared but not a schema. It supports:
