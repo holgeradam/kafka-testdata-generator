@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,10 @@ var buildSink = func(ctx context.Context, r *runplan.Run, stdout, stderr io.Writ
 // interrupted (ADR-0010).
 func run(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
 	plan, err := runplan.Plan(args)
+	if errors.Is(err, flag.ErrHelp) {
+		runplan.Usage(stdout, name)
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
 		// A rule about the flags themselves is worth a reminder of the flag

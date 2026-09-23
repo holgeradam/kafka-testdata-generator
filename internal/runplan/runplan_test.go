@@ -3,6 +3,7 @@ package runplan
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -414,4 +415,38 @@ func TestUsage(t *testing.T) {
 	}
 	var discard io.Writer = io.Discard
 	Usage(discard, "ktg") // must not panic on a plain writer
+}
+
+// TestUsageStatesEachDefaultOnceAndTruly proves every default in the help block
+// is stated once and holds for every invocation: no default printed by the
+// flag package on top of one the usage text already names, no timestamp or
+// random number frozen at the moment help was printed, and a placeholder that
+// says what the value is.
+func TestUsageStatesEachDefaultOnceAndTruly(t *testing.T) {
+	var buf strings.Builder
+	Usage(&buf, "ktg")
+	out := buf.String()
+	for _, want := range []string{
+		"  -acks level\n    \tAcks level: 1 (leader) or all (all in-sync replicas) (default 1)\n",
+		"  -format name\n    \tOutput wire format name: json or avro (default json)\n",
+		"  -now time\n    \tClock for date fields, as an RFC3339 time (default: the current time)\n",
+		"  -seed int\n    \tRandom seed for reproducibility (default: random)\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("usage is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, " value\n") {
+		t.Errorf("a flag shows the generic placeholder \"value\":\n%s", out)
+	}
+}
+
+// TestPlanHelp proves -h reaches the caller as flag.ErrHelp, so the process
+// edge can treat it as a request rather than a failure.
+func TestPlanHelp(t *testing.T) {
+	for _, arg := range []string{"-h", "-help"} {
+		if _, err := Plan([]string{arg}); !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("Plan(%s) error = %v, want flag.ErrHelp", arg, err)
+		}
+	}
 }

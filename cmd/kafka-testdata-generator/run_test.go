@@ -169,6 +169,7 @@ func TestRunUsageOnlyForFlagRules(t *testing.T) {
 	}{
 		{"missing flag", []string{"-channel", "orders"}, true},
 		{"renamed flag", []string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-key", "orderId"}, true},
+		{"unknown flag", []string{"-spec", writeSpec(t, runnableSpec), "-channel", "orders", "-bogus"}, true},
 		{"missing spec file", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-channel", "orders"}, false},
 	}
 	for _, c := range cases {
@@ -182,6 +183,23 @@ func TestRunUsageOnlyForFlagRules(t *testing.T) {
 				t.Errorf("usage printed = %v, want %v\nstderr: %s", hasUsage, c.wantUsage, stderr.String())
 			}
 		})
+	}
+}
+
+// TestRunHelp proves -h is a request, not a failure: the usage block goes to
+// stdout, where it can be paged, and the run exits 0 without an error line.
+func TestRunHelp(t *testing.T) {
+	for _, arg := range []string{"-h", "-help"} {
+		var stdout, stderr strings.Builder
+		if code := run(context.Background(), "ktg", []string{arg}, &stdout, &stderr); code != 0 {
+			t.Errorf("%s: exit code = %d, want 0", arg, code)
+		}
+		if !strings.Contains(stdout.String(), "Usage: ktg") {
+			t.Errorf("%s: stdout = %q, want the usage block", arg, stdout.String())
+		}
+		if stderr.Len() != 0 {
+			t.Errorf("%s: stderr = %q, want nothing", arg, stderr.String())
+		}
 	}
 }
 
