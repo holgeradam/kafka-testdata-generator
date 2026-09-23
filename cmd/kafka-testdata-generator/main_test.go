@@ -1238,3 +1238,56 @@ components:
 		t.Error("the same -seed produced a different sequence")
 	}
 }
+
+// TestScenarioKeyReuse is #75's acceptance: with -records-per-key above 1 the
+// same Key recurs across records, in both Wire formats, and -keyPath plants
+// whichever Key a record got, so Key and Payload still agree.
+func TestScenarioKeyReuse(t *testing.T) {
+	bin := buildBinary(t)
+	jsonSpec := writeTempSpec(t, `asyncapi: '2.6.0'
+info: {title: Reuse, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        bindings: {kafka: {key: {type: string, format: uuid}}}
+        payload: {type: object, required: [orderId], properties: {orderId: {type: string}}}
+`)
+	valueAvsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"Order","fields":[{"name":"orderId","type":"string"}]}`)
+	keyAvsc := writeTempAvsc(t, "key.avsc", `{"type":"string"}`)
+	cases := map[string][]string{
+		"json": {"-spec", jsonSpec, "-topic", "orders"},
+		"avro": {"-spec", jsonSpec, "-topic", "orders", "-format", "avro", "-avro-schema", valueAvsc, "-avro-key-schema", keyAvsc},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			args = append(args, "-dry-run", "-count", "40", "-seed", "11", "-records-per-key", "4", "-keyPath", "orderId")
+			cmd := exec.Command(bin, args...)
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("command failed: %v\nstderr: %s", err, stderr.String())
+			}
+			keys := regexp.MustCompile(`(?m)^Key: (.+)$`).FindAllStringSubmatch(stderr.String(), -1)
+			lines := filterJSONLines(stdout.String())
+			if len(keys) != 40 || len(lines) != 40 {
+				t.Fatalf("expected 40 keys and payloads, got %d and %d", len(keys), len(lines))
+			}
+			distinct := map[string]bool{}
+			for i, line := range lines {
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(line), &payload); err != nil {
+					t.Fatalf("record %d: %v", i, err)
+				}
+				key := strings.Trim(keys[i][1], `"`) // AVRO shows a string Key quoted
+				if payload["orderId"] != key {
+					t.Errorf("record %d: orderId %v, Key %s; want the Key planted", i, payload["orderId"], keys[i][1])
+				}
+				distinct[key] = true
+			}
+			if len(distinct) >= 30 {
+				t.Errorf("40 records over %d distinct Keys; want Keys recurring (about 10)", len(distinct))
+			}
+		})
+	}
+}

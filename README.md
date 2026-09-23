@@ -134,6 +134,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
 | `-count` | `10` | Number of records to generate (0 = infinite) |
 | `-rate` | `10ms` | Minimum time between messages |
 | `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema) |
+| `-records-per-key` | `1` | Average number of records sharing one Key, i.e. one Entity (requires a key schema above 1) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
 | `-seed` | random | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
@@ -187,6 +188,17 @@ Key comes from the key avsc, is registered under `<topic>-key` and framed like t
 guaranteed in Avro, a path stepping into a union, an array or a map is rejected, and the type
 at the path must be the key avsc's type (same primitive kind and logical overlay, or the same
 full name for a record, enum or fixed).
+
+`-records-per-key N` reuses Keys, so one Entity - one order, say - carries several records, as it
+does on a real Kafka topic: each record starts a new Entity with probability 1/N and otherwise
+reuses the Key of one of the 1,000 most recent Entities. Combined with several Message types, one
+order's Key appears on its OrderCreated and its OrderUpdated records. `-keyPath` plants whichever
+Key a record got, and it works the same with an AVRO key avsc. Records of an Entity come in no
+particular order yet. The default of 1 gives every record a fresh Key.
+
+```bash
+kafka-testdata-generator -spec order.yaml -topic orders.created -records-per-key 4 -keyPath customer.id -dry-run
+```
 
 > **Renamed:** `-key` became `-keyPath` and changed meaning. It used to extract a payload field
 > as the key; it now plants the generated Key into the payload and requires a key schema.
