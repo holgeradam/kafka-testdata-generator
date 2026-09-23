@@ -178,44 +178,26 @@ func Plan(args []string) (*Run, error) {
 		RegistryURL: *f.registryURL,
 	}
 
-	if err := run.checkFormatFlags(f); err != nil {
+	// The format owns the rules about its flags; they hold before any file
+	// is read.
+	format := formats[run.Format]
+	opts := wire.Options{
+		DryRun:        run.DryRun,
+		Topic:         run.Topic,
+		KeyPath:       *f.keyPath,
+		RegistryURL:   run.RegistryURL,
+		AvroSchema:    *f.avroSchema,
+		AvroKeySchema: *f.avroKeySchema,
+	}
+	if err := format.Check(opts); err != nil {
 		return nil, err
 	}
 	run.warnDisregardedOptions(f)
 
-	if err := run.loadSchemas(f); err != nil {
+	if err := run.loadSchemas(f, format, opts); err != nil {
 		return nil, err
 	}
 	return run, nil
-}
-
-// checkFormatFlags applies the AVRO flag surface (ADR-0007 decision 6, amended
-// by ADR-0009): the avro flags are invalid for json; under avro, -avro-schema
-// is required and the Key comes from -avro-key-schema, which -keyPath requires.
-// It runs before any file is read.
-func (r *Run) checkFormatFlags(f *flags) error {
-	if r.Format == "avro" {
-		if *f.avroSchema == "" {
-			return &Error{Flag: "avro-schema", Detail: "-avro-schema is required with -format avro"}
-		}
-		if *f.keyPath != "" && *f.avroKeySchema == "" {
-			return &Error{Flag: "keyPath", Detail: "-keyPath requires -avro-key-schema under -format avro, so there is a Key to plant"}
-		}
-		// Producing AVRO data needs Confluent framing (magic byte + registry
-		// schema ID, ADR-0007 decision 2), and registration of the value avsc is
-		// how that ID comes to exist. Dry run never touches a registry.
-		if !r.DryRun && r.RegistryURL == "" {
-			return &Error{Flag: "registry", Detail: "-registry is required with -format avro when producing"}
-		}
-		return nil
-	}
-	if *f.avroSchema != "" || *f.avroKeySchema != "" {
-		return &Error{Flag: "avro-schema", Detail: "-avro-schema and -avro-key-schema are only valid with -format avro"}
-	}
-	if r.RegistryURL != "" {
-		return &Error{Flag: "registry", Detail: "-registry is only valid with -format avro"}
-	}
-	return nil
 }
 
 // warnDisregardedOptions records the dry-run diagnostic. -keyPath is honoured
@@ -229,7 +211,7 @@ func (r *Run) warnDisregardedOptions(f *flags) {
 
 // loadSchemas reads the spec, then has the Wire format wire the run's
 // generation, Key source and encoder from it and its own files.
-func (r *Run) loadSchemas(f *flags) error {
+func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error {
 	doc, err := asyncapi.Load(*f.specPath)
 	if err != nil {
 		return &Error{Flag: "spec", Detail: "loading spec", Err: err}
@@ -243,37 +225,18 @@ func (r *Run) loadSchemas(f *flags) error {
 		return &Error{Flag: "channel", Detail: "extracting key binding", Err: err}
 	}
 
-	if *f.keyPath != "" && r.Format != "avro" && keyBinding == nil {
-		return &Error{Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
-	}
-
-	// Key bindings declare a JSON-schema-shaped key, but under -format avro the
-	// Key comes from the key avsc or stays null. Generating a JSON-shaped key
-	// value would silently violate the avsc key contract, so bindings are
-	// ignored under avro with a warning.
-	if r.Format == "avro" && keyBinding != nil {
-		r.Warnings = append(r.Warnings, "Warning: key bindings are ignored under -format avro")
-		keyBinding = nil
-	}
-
-	parts, err := formats[r.Format].Build(wire.Options{
-		DryRun:        r.DryRun,
-		Topic:         r.Topic,
-		KeyPath:       *f.keyPath,
-		RegistryURL:   r.RegistryURL,
-		AvroSchema:    *f.avroSchema,
-		AvroKeySchema: *f.avroKeySchema,
-		// One Synthesizer per run: the Payload and the Key draw from one
-		// shared stream in both wire formats (ADR-0008 decision 4).
-		Synth:      synth.New(*f.seed, f.now.now),
-		Schema:     schema,
-		KeyBinding: keyBinding,
-		ResolveRef: doc.ResolveRef,
-	})
+	// One Synthesizer per run: the Payload and the Key draw from one shared
+	// stream in both wire formats (ADR-0008 decision 4).
+	opts.Synth = synth.New(*f.seed, f.now.now)
+	opts.Schema = schema
+	opts.KeyBinding = keyBinding
+	opts.ResolveRef = doc.ResolveRef
+	parts, err := format.Build(opts)
 	if err != nil {
 		return err
 	}
 	r.encoder = parts.Encoder
+	r.Warnings = append(r.Warnings, parts.Warnings...)
 
 	// The Key plan owns the Key of the run: the key schema generates it, and
 	// -keyPath says where it is planted into the Payload (ADR-0009). Its checks
@@ -385,8 +348,8 @@ func (n *nowFlag) String() string {
 	return n.now.Format(time.RFC3339)
 }
 
-// formatFlag is a flag.Value accepting "json" or "avro" (case-sensitive) for
-// the output wire format. Invalid values fail at parse time with a hint.
+// formatFlag is a flag.Value accepting the name of a Wire format
+// (case-sensitive). Invalid values fail at parse time with a hint.
 type formatFlag struct {
 	format string
 }

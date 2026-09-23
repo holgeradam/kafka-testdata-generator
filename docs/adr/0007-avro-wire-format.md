@@ -95,6 +95,13 @@ record fields are guaranteed in Avro, so a step into a union, an array or a map 
 the type at the path must be the key avsc's type (same primitive kind and logical overlay, or
 the same full name for a named type).
 
+Amended (2026-09-23, issue #29): the Wire format seam owns these rules. Each format is one
+adapter in `internal/wire` (`jsonwire`, `avrowire`) with a `Check` phase for its flag rules
+before any file is read and a `Build` phase that loads its own schemas and wires generation, the
+Key source and the Encoders. The rules above are unchanged; they now live in the adapter they
+concern, and `-keyPath` requiring a key schema is checked by each format against its own Key
+source. The encoders of decision 1 moved out of `internal/pipeline` with them.
+
 ### 7. Dry run never contacts a registry
 
 Dry run generates from the local avsc and renders records readably, without any registry

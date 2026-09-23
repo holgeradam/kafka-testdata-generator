@@ -1,6 +1,7 @@
-// Package wire is the Wire format seam: one adapter per format owns how a run
-// generates its Payload and Key and which Encoder turns them into bytes, so
-// neither the Run plan nor the Pipeline branches on the format (issue #29).
+// Package wire is the Wire format seam: one adapter per format owns the rules
+// about its flags, how a run generates its Payload and Key, and which Encoder
+// turns them into bytes, so neither the Run plan nor the Pipeline branches on
+// the format (issue #29).
 // The adapters live in internal/wire/jsonwire and internal/wire/avrowire; this
 // package holds only what they share.
 package wire
@@ -22,14 +23,18 @@ import (
 type Format interface {
 	// Name is the -format value that selects the adapter.
 	Name() string
-	// Build reads the format's own files and wires the run from them. It
-	// performs no network I/O: the Encoder it returns connects when called.
+	// Check applies the format's rules about its flags. It runs before any
+	// file is read, so only the flag fields of opts are set.
+	Check(opts Options) error
+	// Build reads the format's own files and wires the run from them, with
+	// the spec's fields of opts set too. It performs no network I/O: the
+	// Encoder it returns connects when called.
 	Build(opts Options) (*Parts, error)
 }
 
-// Options is what a run hands its Wire format: the relevant flags, the
-// Synthesizer shared by Payload and Key, and what the AsyncAPI spec declares
-// for the channel.
+// Options is what a run hands its Wire format: the relevant flags, then, from
+// Build on, the Synthesizer shared by Payload and Key and what the AsyncAPI
+// spec declares for the channel.
 type Options struct {
 	// DryRun is a property of the run; each format decides what it means.
 	DryRun bool
@@ -64,6 +69,9 @@ type Parts struct {
 	// Encoder builds the run's Encoder. It is called after the sink exists, so
 	// a run that cannot reach its broker never contacts a registry (ADR-0010).
 	Encoder func(ctx context.Context) (pipeline.Encoder, error)
+	// Warnings are diagnostics for the caller to print, such as a spec
+	// declaration the format ignores.
+	Warnings []string
 }
 
 // Error reports a run a Wire format rejects. Flag names the option at fault

@@ -2,6 +2,7 @@ package jsonwire
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -97,5 +98,46 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 		if _, ok := enc.(JsonEncoder); !ok {
 			t.Errorf("dry run %v: encoder = %T, want JsonEncoder", dry, enc)
 		}
+	}
+}
+
+// TestCheck proves JSON rejects the AVRO flags before any file is read,
+// naming the flag at fault.
+func TestCheck(t *testing.T) {
+	cases := []struct {
+		name, flag string
+		opts       wire.Options
+	}{
+		{"plain run", "", wire.Options{Topic: "orders"}},
+		{"value avsc", "avro-schema", wire.Options{AvroSchema: "v.avsc"}},
+		{"key avsc", "avro-schema", wire.Options{AvroKeySchema: "k.avsc"}},
+		{"registry", "registry", wire.Options{RegistryURL: "http://localhost:8081"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Format{}.Check(tc.opts)
+			if tc.flag == "" {
+				if err != nil {
+					t.Fatalf("Check: %v, want nil", err)
+				}
+				return
+			}
+			var we *wire.Error
+			if !errors.As(err, &we) || we.Flag != tc.flag {
+				t.Fatalf("err = %v, want a *wire.Error on -%s", err, tc.flag)
+			}
+		})
+	}
+}
+
+// TestBuildRejectsKeyPathWithoutBinding proves -keyPath needs a key binding to
+// generate the Key it plants.
+func TestBuildRejectsKeyPathWithoutBinding(t *testing.T) {
+	opts := options()
+	opts.KeyPath = "orderId"
+	_, err := Format{}.Build(opts)
+	var we *wire.Error
+	if !errors.As(err, &we) || we.Flag != "keyPath" {
+		t.Fatalf("err = %v, want a *wire.Error on -keyPath", err)
 	}
 }
