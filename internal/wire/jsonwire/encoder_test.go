@@ -1,13 +1,14 @@
-package pipeline
+package jsonwire
 
 import (
 	"encoding/json"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"testing"
 )
 
 // Compile-time check: JsonEncoder must satisfy the Encoder interface. If the
 // Encoder interface or JsonEncoder is deleted, this file will not compile.
-var _ Encoder = JsonEncoder{}
+var _ pipeline.Encoder = JsonEncoder{}
 
 // TestJsonEncoderPayloadBytesAreJsonMarshal proves byte-identical output:
 // the encoder must produce the exact same bytes as a direct json.Marshal of
@@ -105,7 +106,7 @@ func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 // interface or JsonEncoder is removed, the compile-time assertion above
 // catches it; this test verifies the interface is referenced at runtime.
 func TestEncoderDeletionGuard(t *testing.T) {
-	var enc Encoder = JsonEncoder{}
+	var enc pipeline.Encoder = JsonEncoder{}
 	key, payload, err := enc.Encode("k", map[string]any{"v": 1})
 	if err != nil {
 		t.Fatal(err)

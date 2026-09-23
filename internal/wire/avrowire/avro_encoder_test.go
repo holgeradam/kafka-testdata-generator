@@ -1,10 +1,11 @@
-package pipeline
+package avrowire
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,7 @@ import (
 )
 
 // Compile-time check: AvroEncoder must satisfy the Encoder interface.
-var _ Encoder = (*AvroEncoder)(nil)
+var _ pipeline.Encoder = (*AvroEncoder)(nil)
 
 // registryCall records one schema-registration request: the subject the schema
 // was registered under and the raw request body.

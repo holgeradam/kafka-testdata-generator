@@ -1,7 +1,8 @@
-package pipeline
+package avrowire
 
 import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // AvroDisplayEncoder is the Dry-run AVRO adapter on the Encoder seam: it
@@ -25,7 +26,7 @@ func NewAvroDisplayEncoder(model *avro.Schema) *AvroDisplayEncoder {
 // readable spec-defined text form of the datum) and the key as plain-scalar
 // bytes (shared contract, CONTEXT.md Key).
 func (e *AvroDisplayEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
-	keyBytes, err := encodeKeyBytes(key)
+	keyBytes, err := wire.PlainScalarKey(key)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,20 @@ type fakeGenerator struct {
 
 func (f *fakeGenerator) Value(_ map[string]any) (any, error) {
 	return f.payload, f.err
+}
+
+// fakeEncoder is the Encoder seam's test adapter: the Payload as JSON and the
+// Key as its printed form, so tests can read both back. The real adapters live
+// in internal/wire and are tested there.
+type fakeEncoder struct{}
+
+func (fakeEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
+	var keyBytes []byte
+	if key != nil {
+		keyBytes = []byte(fmt.Sprint(key))
+	}
+	payloadBytes, err := json.Marshal(payload)
+	return keyBytes, payloadBytes, err
 }
 
 func testNow() time.Time {
@@ -93,7 +108,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 		Generator: gen,
 		Schema:    schemaFor(""),
 		Count:     3,
-		Encoder:   JsonEncoder{},
+		Encoder:   fakeEncoder{},
 	}, sink)
 
 	stats, _ := p.Run(context.Background())
@@ -120,7 +135,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 func TestRunStopsAtCount(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, Encoder: fakeEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -135,7 +150,7 @@ func TestRunStopsAtCount(t *testing.T) {
 func TestRunCancellationMidRun(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: fakeEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Stats, 1)
@@ -170,7 +185,7 @@ func TestRunCancellationMidRun(t *testing.T) {
 func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := newBlockingSink()
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 100000, Encoder: fakeEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan Stats, 1)
@@ -206,7 +221,7 @@ func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 func TestRunCountsSendFailures(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{err: errors.New("boom")}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3, Encoder: fakeEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -222,7 +237,7 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 		Generator: gen,
 		Schema:    map[string]any{"type": "widget"},
 		Count:     3,
-		Encoder:   JsonEncoder{},
+		Encoder:   fakeEncoder{},
 	}, sink)
 
 	stats, err := p.Run(context.Background())
@@ -252,7 +267,7 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 		Generator: gen,
 		Schema:    schemaFor(""),
 		Count:     1,
-		Encoder:   JsonEncoder{},
+		Encoder:   fakeEncoder{},
 		Warn:      &warn,
 	}, sink)
 
@@ -296,7 +311,7 @@ func TestRunKeyPlanProducesKey(t *testing.T) {
 	plan := &fakePlan{key: "planned-key"}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, KeyPlan: plan, Encoder: JsonEncoder{}, Warn: &warn}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 2, KeyPlan: plan, Encoder: fakeEncoder{}, Warn: &warn}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -324,7 +339,7 @@ func TestRunKeyPlanErrorAborts(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 3,
-		KeyPlan: &fakePlan{err: errors.New("key schema cannot be honoured")}, Encoder: JsonEncoder{}}, sink)
+		KeyPlan: &fakePlan{err: errors.New("key schema cannot be honoured")}, Encoder: fakeEncoder{}}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err == nil {
@@ -361,7 +376,7 @@ func TestRunPlantsKeyIntoPayload(t *testing.T) {
 		t.Fatalf("keyplan.New: %v", err)
 	}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schema, Count: 3, KeyPlan: plan, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schema, Count: 3, KeyPlan: plan, Encoder: fakeEncoder{}}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -391,7 +406,7 @@ func TestRunUnhonorableKeySchemaAborts(t *testing.T) {
 		t.Fatalf("keyplan.New: %v", err)
 	}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 1, KeyPlan: plan, Encoder: JsonEncoder{}}, sink)
+	p := New(Config{Generator: gen, Schema: schemaFor(""), Count: 1, KeyPlan: plan, Encoder: fakeEncoder{}}, sink)
 
 	stats, err := p.Run(context.Background())
 	var ue *generator.UnsupportedSchemaError
