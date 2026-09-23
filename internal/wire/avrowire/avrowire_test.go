@@ -168,3 +168,56 @@ func TestBuildEncoderPerMode(t *testing.T) {
 		t.Errorf("registry calls = %+v, want one registration under orders-value", *calls)
 	}
 }
+
+// TestCheck proves the AVRO flag rules hold before any file is read: a value
+// avsc always, a key avsc for -keyPath, and a registry only when producing.
+func TestCheck(t *testing.T) {
+	cases := []struct {
+		name, flag string
+		opts       wire.Options
+	}{
+		{"dry run", "", wire.Options{AvroSchema: "v.avsc", DryRun: true}},
+		{"produce", "", wire.Options{AvroSchema: "v.avsc", RegistryURL: "http://localhost:8081"}},
+		{"planted key", "", wire.Options{AvroSchema: "v.avsc", AvroKeySchema: "k.avsc", KeyPath: "id", DryRun: true}},
+		{"no value avsc", "avro-schema", wire.Options{DryRun: true}},
+		{"key path without key avsc", "keyPath", wire.Options{AvroSchema: "v.avsc", KeyPath: "id", DryRun: true}},
+		{"produce without registry", "registry", wire.Options{AvroSchema: "v.avsc"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Format{}.Check(tc.opts)
+			if tc.flag == "" {
+				if err != nil {
+					t.Fatalf("Check: %v, want nil", err)
+				}
+				return
+			}
+			var we *wire.Error
+			if !errors.As(err, &we) || we.Flag != tc.flag {
+				t.Fatalf("err = %v, want a *wire.Error on -%s", err, tc.flag)
+			}
+		})
+	}
+}
+
+// TestBuildWarnsOfIgnoredBinding proves a spec's key binding is reported as
+// ignored under AVRO, and stays silent when there is none.
+func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
+	opts := options(t)
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(parts.Warnings) != 1 || parts.Warnings[0] != "Warning: key bindings are ignored under -format avro" {
+		t.Errorf("warnings = %q, want the ignored-binding warning", parts.Warnings)
+	}
+
+	opts.KeyBinding = nil
+	parts, err = Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(parts.Warnings) != 0 {
+		t.Errorf("warnings = %q, want none without a binding", parts.Warnings)
+	}
+}

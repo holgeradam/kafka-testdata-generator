@@ -17,9 +17,26 @@ type Format struct{}
 // Name is the -format value that selects JSON.
 func (Format) Name() string { return "json" }
 
+// Check rejects the AVRO flags: under JSON the Message schema governs and
+// nothing is registered.
+func (Format) Check(opts wire.Options) error {
+	if opts.AvroSchema != "" || opts.AvroKeySchema != "" {
+		return &wire.Error{Flag: "avro-schema", Detail: "-avro-schema and -avro-key-schema are only valid with -format avro"}
+	}
+	if opts.RegistryURL != "" {
+		return &wire.Error{Flag: "registry", Detail: "-registry is only valid with -format avro"}
+	}
+	return nil
+}
+
 // Build wires the JSON Schema generator for Payload and Key. The Key comes
-// from the key binding, and a -keyPath is checked against the Message schema.
+// from the key binding, which -keyPath therefore requires, and a -keyPath is
+// checked against the Message schema.
 func (Format) Build(opts wire.Options) (*wire.Parts, error) {
+	if opts.KeyPath != "" && opts.KeyBinding == nil {
+		return nil, &wire.Error{Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
+	}
+
 	gen := generator.New(opts.Synth)
 	gen.SetRefResolver(opts.ResolveRef)
 

@@ -64,7 +64,7 @@ The Wire-format seam that turns a generated record (Key + Payload) into bytes. O
 _Avoid_: serializer, marshaler, codec
 
 **Wire format**:
-The byte shape of produced records and how they render for Dry run. Today JSON (NDJSON); AVRO uses the Confluent wire format (magic byte + big-endian schema ID + Avro binary) and registers schemas in a registry. The Wire format decides which schema governs generation (see Conformance).
+The byte shape of produced records and how they render for Dry run. Today JSON (NDJSON); AVRO uses the Confluent wire format (magic byte + big-endian schema ID + Avro binary) and registers schemas in a registry. Each Wire format is one adapter that owns everything format-specific about a run: the rules about its own flags, which schema governs generation of the Payload (see Conformance) and of the Key, and the Encoders for produce and Dry run. The Run plan only picks the adapter by name.
 _Avoid_: format, encoding, output format
 
 **avsc**:

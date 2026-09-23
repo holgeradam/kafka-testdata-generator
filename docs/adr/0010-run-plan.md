@@ -15,6 +15,8 @@ Two defects came from the same shape. `os.Exit(1)` after `defer sink.Close()` sk
 ## Decisions
 
 1. **`internal/runplan` owns the rules.** `Plan(args []string) (*Run, error)` turns argv into a validated run: flags, validation, spec and avsc loading, the generator and the Key plan. Every rule is a table row in a test that spawns no process.
+
+   Amended (2026-09-23, issue #29): the format-specific rules, avsc loading, generator and encoder selection moved to the Wire format adapters in `internal/wire` (ADR-0007). `runplan` still declares every flag, runs the format-agnostic rules and spec loading, and calls the selected adapter; its table keeps every row, since `*runplan.Error` is the adapters' error type.
 2. **Planning is pure; construction is on demand.** `Plan` performs no network I/O. `Run.NewSink` dials the broker and `Run.NewEncoder` talks to the registry, called by the process edge after planning. Warnings are data on the `Run`, not writes to stderr during planning.
 3. **One typed error.** `*runplan.Error` names the offending flag and wraps the cause (`keyplan.PathError`, `avro.ParseError`, `generator.UnsupportedSchemaError`). Tests assert with `errors.As`, so message wording stops being test API. Validation fails on the first rejected rule.
 4. **`main` is `os.Exit(run(...))`.** `run(ctx, name, args, stdout, stderr) int` wires signals, builds sink and encoder, defers cleanup, drives the Pipeline, prints stats and returns an exit code. No `os.Exit` inside means every defer runs on every path, so the leak class is structurally gone rather than patched. Writers are parameters, so a test observes output without a process.
