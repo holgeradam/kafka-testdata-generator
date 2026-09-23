@@ -1,6 +1,7 @@
-package pipeline
+package avrowire
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"strings"
 	"testing"
 
@@ -9,7 +10,7 @@ import (
 )
 
 // Compile-time check: AvroDisplayEncoder must satisfy the Encoder interface.
-var _ Encoder = (*AvroDisplayEncoder)(nil)
+var _ pipeline.Encoder = (*AvroDisplayEncoder)(nil)
 
 // testDisplayModel parses an avsc for the display tests.
 func testDisplayModel(t *testing.T, avsc string) *avro.Schema {

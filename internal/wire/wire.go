@@ -1,0 +1,124 @@
+// Package wire is the Wire format seam: one adapter per format owns how a run
+// generates its Payload and Key and which Encoder turns them into bytes, so
+// neither the Run plan nor the Pipeline branches on the format (issue #29).
+// The adapters live in internal/wire/jsonwire and internal/wire/avrowire; this
+// package holds only what they share.
+package wire
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
+)
+
+// Format is one Wire format adapter.
+type Format interface {
+	// Name is the -format value that selects the adapter.
+	Name() string
+	// Build reads the format's own files and wires the run from them. It
+	// performs no network I/O: the Encoder it returns connects when called.
+	Build(opts Options) (*Parts, error)
+}
+
+// Options is what a run hands its Wire format: the relevant flags, the
+// Synthesizer shared by Payload and Key, and what the AsyncAPI spec declares
+// for the channel.
+type Options struct {
+	// DryRun is a property of the run; each format decides what it means.
+	DryRun bool
+	// Topic is the channel produced to.
+	Topic string
+	// KeyPath is -keyPath; empty when the Key is not planted.
+	KeyPath string
+	// RegistryURL, AvroSchema and AvroKeySchema are the AVRO flags.
+	RegistryURL   string
+	AvroSchema    string
+	AvroKeySchema string
+
+	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
+	Synth *synth.Synthesizer
+	// Schema is the channel's Message schema, KeyBinding its
+	// bindings.kafka.key (nil when absent), and ResolveRef resolves the $refs
+	// both may hold.
+	Schema     map[string]any
+	KeyBinding map[string]any
+	ResolveRef generator.RefResolver
+}
+
+// Parts is a run as its Wire format wires it.
+type Parts struct {
+	// Values generates each Payload.
+	Values pipeline.ValueGenerator
+	// KeyGen generates each Key; nil means records carry a null Key.
+	KeyGen keyplan.Generator
+	// Checker validates -keyPath against the Payload schema; nil when the run
+	// has no -keyPath.
+	Checker keyplan.Checker
+	// Encoder builds the run's Encoder. It is called after the sink exists, so
+	// a run that cannot reach its broker never contacts a registry (ADR-0010).
+	Encoder func(ctx context.Context) (pipeline.Encoder, error)
+}
+
+// Error reports a run a Wire format rejects. Flag names the option at fault
+// (without its dash) when one rule owns the failure, and Err carries the typed
+// cause. runplan.Error is this type, so callers see one shape wherever a rule
+// lives.
+type Error struct {
+	Flag   string
+	Detail string
+	Err    error
+}
+
+func (e *Error) Error() string {
+	switch {
+	case e.Detail != "" && e.Err != nil:
+		return e.Detail + ": " + e.Err.Error()
+	case e.Detail != "":
+		return e.Detail
+	case e.Err != nil:
+		return e.Err.Error()
+	default:
+		return "invalid run"
+	}
+}
+
+// Unwrap exposes the cause for errors.Is/As.
+func (e *Error) Unwrap() error { return e.Err }
+
+// PlainScalarKey renders a Key by the plain-scalar contract (CONTEXT.md Key):
+// a string as UTF-8, a number as decimal text, and a structured value as JSON -
+// never a JSON-wrapped scalar. A nil Key yields nil bytes, so the record
+// carries a null Key. Both encoders that show a Key readably share it.
+func PlainScalarKey(key any) ([]byte, error) {
+	switch v := key.(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return []byte(v), nil
+	case float64:
+		// The JSON generator produces numbers as float64; any other numeric
+		// type falls through to JSON, which renders integers as decimal text.
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("key: cannot encode non-finite number %v", v)
+		}
+		return []byte(strconv.FormatFloat(v, 'f', -1, 64)), nil
+	case bool:
+		return []byte(strconv.FormatBool(v)), nil
+	case []byte:
+		return v, nil
+	default:
+		// Objects, arrays, and any other structured value become JSON.
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("key: %w", err)
+		}
+		return b, nil
+	}
+}

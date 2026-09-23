@@ -17,6 +17,8 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/avrowire"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 )
 
 // write puts content in a temp file and returns its path.
@@ -352,8 +354,8 @@ func TestNewEncoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEncoder: %v", err)
 	}
-	if _, ok := enc.(pipeline.JsonEncoder); !ok {
-		t.Errorf("json encoder = %T, want pipeline.JsonEncoder", enc)
+	if _, ok := enc.(jsonwire.JsonEncoder); !ok {
+		t.Errorf("json encoder = %T, want jsonwire.JsonEncoder", enc)
 	}
 
 	avroDry, err := Plan([]string{"-spec", spec, "-channel", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
@@ -364,8 +366,8 @@ func TestNewEncoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEncoder: %v", err)
 	}
-	if _, ok := enc.(*pipeline.AvroDisplayEncoder); !ok {
-		t.Errorf("avro dry-run encoder = %T, want *pipeline.AvroDisplayEncoder (no registry contact)", enc)
+	if _, ok := enc.(*avrowire.AvroDisplayEncoder); !ok {
+		t.Errorf("avro dry-run encoder = %T, want *avrowire.AvroDisplayEncoder (no registry contact)", enc)
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -381,8 +383,8 @@ func TestNewEncoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEncoder: %v", err)
 	}
-	if _, ok := enc.(*pipeline.AvroEncoder); !ok {
-		t.Errorf("avro produce encoder = %T, want *pipeline.AvroEncoder", enc)
+	if _, ok := enc.(*avrowire.AvroEncoder); !ok {
+		t.Errorf("avro produce encoder = %T, want *avrowire.AvroEncoder", enc)
 	}
 
 	dead, err := Plan([]string{"-spec", spec, "-channel", "orders", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
@@ -392,9 +394,9 @@ func TestNewEncoder(t *testing.T) {
 	if _, err := dead.NewEncoder(context.Background()); err == nil {
 		t.Error("an unreachable registry must fail encoder construction")
 	} else {
-		var re *pipeline.RegistryError
+		var re *avrowire.RegistryError
 		if !errors.As(err, &re) {
-			t.Errorf("error %v is %T, want *pipeline.RegistryError", err, err)
+			t.Errorf("error %v is %T, want *avrowire.RegistryError", err, err)
 		}
 	}
 }

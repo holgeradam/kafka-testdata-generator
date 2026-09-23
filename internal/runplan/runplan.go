@@ -1,8 +1,9 @@
 // Package runplan turns argv into a validated Run: the plan of one generation
-// run (ADR-0010). Planning is pure - flags, validation, spec and avsc loading,
-// the generator and the Key plan - so every rule is reachable from a table test
-// without spawning a process or dialing anything. The two constructors that do
-// I/O, NewSink and NewEncoder, are called by the process edge afterwards.
+// run (ADR-0010). Planning is pure - flags, validation, spec loading, the Wire
+// format's parts and the Key plan - so every rule is reachable from a table
+// test without spawning a process or dialing anything. The two constructors
+// that do I/O, NewSink and NewEncoder, are called by the process edge
+// afterwards.
 package runplan
 
 import (
@@ -10,44 +11,34 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
-	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/avrowire"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 )
 
 // Error reports a run the planner rejects. Flag names the option at fault
 // (without its dash) when one rule owns the failure, and Err carries the typed
 // cause when the rejection came from another module: a *keyplan.PathError, an
 // *avro.ParseError, a *generator.UnsupportedSchemaError. Tests assert on those
-// rather than on message text.
-type Error struct {
-	Flag   string
-	Detail string
-	Err    error
-}
+// rather than on message text. It is the Wire formats' error type, so a rule
+// reports the same shape whether runplan or a format owns it.
+type Error = wire.Error
 
-func (e *Error) Error() string {
-	switch {
-	case e.Detail != "" && e.Err != nil:
-		return e.Detail + ": " + e.Err.Error()
-	case e.Detail != "":
-		return e.Detail
-	case e.Err != nil:
-		return e.Err.Error()
-	default:
-		return "invalid run"
+// formats are the Wire format adapters, by the -format value that selects them.
+var formats = map[string]wire.Format{}
+
+func init() {
+	for _, f := range []wire.Format{jsonwire.Format{}, avrowire.Format{}} {
+		formats[f.Name()] = f
 	}
 }
-
-// Unwrap exposes the cause for errors.Is/As.
-func (e *Error) Unwrap() error { return e.Err }
 
 // Run is a validated plan: everything one generation run needs, with the two
 // pieces that touch the network left to NewSink and NewEncoder. Config.Warn is
@@ -69,8 +60,7 @@ type Run struct {
 	// disregarded Kafka options in dry run, a key binding ignored under AVRO.
 	Warnings []string
 
-	valueModel *avro.Schema
-	keyModel   *avro.Schema
+	encoder func(ctx context.Context) (pipeline.Encoder, error)
 }
 
 // flags holds the parsed flag surface, so the rules below read as a checklist
@@ -219,8 +209,8 @@ func (r *Run) warnDisregardedOptions(f *flags) {
 	}
 }
 
-// loadSchemas reads the spec and any avsc files, then wires the generator and
-// the Key plan from them.
+// loadSchemas reads the spec, then has the Wire format wire the run's
+// generation, Key source and encoder from it and its own files.
 func (r *Run) loadSchemas(f *flags) error {
 	doc, err := asyncapi.Load(*f.specPath)
 	if err != nil {
@@ -248,80 +238,45 @@ func (r *Run) loadSchemas(f *flags) error {
 		keyBinding = nil
 	}
 
-	// One Synthesizer per run: the Payload and the Key draw from one shared
-	// stream in both wire formats (ADR-0008 decision 4).
-	synthesizer := synth.New(*f.seed, f.now.now)
-	gen := generator.New(synthesizer)
-	gen.SetRefResolver(doc.ResolveRef)
-
-	if r.Format == "avro" {
-		// Parse the value avsc (and key avsc when supplied) up front so a
-		// malformed schema surfaces a typed error before any pipeline work
-		// (ADR-0007 decision 4). The models drive AVRO generation; their raw
-		// avsc is what the AvroEncoder registers with the registry.
-		if r.valueModel, err = loadAvsc(*f.avroSchema); err != nil {
-			return &Error{Flag: "avro-schema", Err: err}
-		}
-		if *f.avroKeySchema != "" {
-			if r.keyModel, err = loadAvsc(*f.avroKeySchema); err != nil {
-				return &Error{Flag: "avro-key-schema", Err: err}
-			}
-		}
+	parts, err := formats[r.Format].Build(wire.Options{
+		DryRun:        r.DryRun,
+		Topic:         r.Topic,
+		KeyPath:       *f.keyPath,
+		RegistryURL:   r.RegistryURL,
+		AvroSchema:    *f.avroSchema,
+		AvroKeySchema: *f.avroKeySchema,
+		// One Synthesizer per run: the Payload and the Key draw from one
+		// shared stream in both wire formats (ADR-0008 decision 4).
+		Synth:      synth.New(*f.seed, f.now.now),
+		Schema:     schema,
+		KeyBinding: keyBinding,
+		ResolveRef: doc.ResolveRef,
+	})
+	if err != nil {
+		return err
 	}
-
-	// AVRO generation follows the value avsc model instead of the JSON Schema
-	// (ADR-0007 decision 3); the adapter keeps the Pipeline on the same seam by
-	// ignoring the JSON schema argument.
-	valueGenerator := pipeline.ValueGenerator(gen)
-	avroGen := avro.NewGenerator(synthesizer)
-	if r.Format == "avro" {
-		valueGenerator = &avroValueGenerator{generator: avroGen, model: r.valueModel}
-	}
+	r.encoder = parts.Encoder
 
 	// The Key plan owns the Key of the run: the key schema generates it, and
 	// -keyPath says where it is planted into the Payload (ADR-0009). Its checks
 	// run here, so an unusable path stops the run before a record exists.
-	keyPlan, err := r.newKeyPlan(*f.keyPath, schema, keyBinding, doc.ResolveRef, gen, avroGen)
-	if err != nil {
-		return &Error{Flag: "keyPath", Err: err}
+	var keyPlan pipeline.KeyPlan
+	if parts.KeyGen != nil {
+		plan, err := keyplan.New(parts.KeyGen, parts.Checker, *f.keyPath)
+		if err != nil {
+			return &Error{Flag: "keyPath", Err: err}
+		}
+		keyPlan = plan
 	}
 
 	r.Config = pipeline.Config{
-		Generator: valueGenerator,
+		Generator: parts.Values,
 		Schema:    schema,
 		Count:     *f.count,
 		RateLimit: *f.rateLimit,
 		KeyPlan:   keyPlan,
 	}
 	return nil
-}
-
-// newKeyPlan builds the run's Key plan, or nil when no key schema is
-// configured, in which case records carry a null Key.
-func (r *Run) newKeyPlan(path string, schema, keyBinding map[string]any, resolveRef generator.RefResolver, jsonGen pipeline.ValueGenerator, avroGen *avro.Generator) (pipeline.KeyPlan, error) {
-	var (
-		keyGen  keyplan.Generator
-		checker keyplan.Checker
-	)
-	switch {
-	case r.Format == "avro" && r.keyModel != nil:
-		keyGen = &schemaKeyGenerator{gen: &avroValueGenerator{generator: avroGen, model: r.keyModel}}
-		if path != "" {
-			checker = avro.NewKeyChecker(r.valueModel, r.keyModel)
-		}
-	case r.Format != "avro" && keyBinding != nil:
-		keyGen = &schemaKeyGenerator{gen: jsonGen, schema: keyBinding}
-		if path != "" {
-			checker = generator.NewKeyChecker(schema, keyBinding, resolveRef)
-		}
-	default:
-		return nil, nil
-	}
-	plan, err := keyplan.New(keyGen, checker, path)
-	if err != nil {
-		return nil, err
-	}
-	return plan, nil
 }
 
 // NewSink builds the run's destination: stdout in dry run, otherwise a Kafka
@@ -342,61 +297,11 @@ func (r *Run) NewSink(ctx context.Context, stdout, stderr io.Writer) (pipeline.S
 	return pipeline.NewKafkaSink(r.Topic, prod), nil
 }
 
-// NewEncoder builds the Encoder for the active format and mode. json marshals
-// generated values directly; avro returns an AvroEncoder that registers the
-// exact value avsc under <topic>-value and the key avsc under <topic>-key and
-// frames records with the registry-assigned schema IDs. Dry-run avro returns
-// the AvroDisplayEncoder, which renders each value in the Avro JSON encoding
-// from the local avsc and never opens a registry connection (ADR-0007
-// decision 7).
+// NewEncoder builds the Encoder the Wire format chose for the run's mode. Only
+// AVRO produce contacts a network: it registers the avsc files with the schema
+// registry, so it is called after NewSink has reached the broker.
 func (r *Run) NewEncoder(ctx context.Context) (pipeline.Encoder, error) {
-	if r.Format != "avro" {
-		return pipeline.JsonEncoder{}, nil
-	}
-	if r.DryRun {
-		return pipeline.NewAvroDisplayEncoder(r.valueModel), nil
-	}
-	var keyAvsc string
-	if r.keyModel != nil {
-		keyAvsc = string(r.keyModel.Raw())
-	}
-	enc, err := pipeline.NewAvroEncoder(ctx, r.RegistryURL, r.Topic, string(r.valueModel.Raw()), keyAvsc)
-	if err != nil {
-		return nil, err
-	}
-	return enc, nil
-}
-
-// loadAvsc reads an avsc file and parses it into the Avro model, wrapping read
-// failures and propagating the typed *avro.ParseError.
-func loadAvsc(path string) (*avro.Schema, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading avsc %s: %w", path, err)
-	}
-	return avro.Parse(b)
-}
-
-// schemaKeyGenerator adapts a schema-taking ValueGenerator to the Key plan's
-// no-argument Generator by binding the key schema to it. Under AVRO the schema
-// argument is ignored, since generation follows the key avsc model.
-type schemaKeyGenerator struct {
-	gen    pipeline.ValueGenerator
-	schema map[string]any
-}
-
-func (g *schemaKeyGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
-
-// avroValueGenerator is a pipeline.ValueGenerator adapter: AVRO generation
-// follows the parsed value avsc model, so the JSON schema argument from the
-// Pipeline is ignored and every Value honours the model (ADR-0007 decision 3).
-type avroValueGenerator struct {
-	generator *avro.Generator
-	model     *avro.Schema
-}
-
-func (g *avroValueGenerator) Value(_ map[string]any) (any, error) {
-	return g.generator.Value(g.model.Root)
+	return r.encoder(ctx)
 }
 
 // acksFlag is a flag.Value accepting "1" or "all" (case-insensitive) for the
