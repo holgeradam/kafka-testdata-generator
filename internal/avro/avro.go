@@ -1,25 +1,22 @@
 // Package avro parses Apache Avro schemas (avsc) into a generation model the
 // AVRO wire format drives values from (ADR-0007 decision 3: generation follows
-// the avsc). Parsing delegates to the same gogen-avro schema parser the
-// Confluent Go Avro serde uses, so the avsc the serializer accepts parses
-// identically into this model (issue #21).
+// the avsc). The avsc is parsed once, by confluent-avro-go - the codec the
+// AvroEncoder marshals with - and the model is built from that parse, which it
+// carries for the encoder (#65).
 //
 // The model covers the Avro constructs the generator will need - records,
 // primitives, unions, arrays, maps, enums, fixed, and the in-scope logical
 // types (timestamp-millis/micros, date, time-millis/micros, decimal).
 // Anything the model cannot honour - malformed avsc, unresolvable references,
-// unknown or mis-typed logical types - stops Parse with a *ParseError instead
-// of producing a model that would generate non-conforming data.
+// mis-typed logical types - stops Parse with a *ParseError instead of producing
+// a model that would generate non-conforming data.
 package avro
 
 import (
 	"bytes"
 	"fmt"
-	"sort"
 
-	"github.com/actgardner/gogen-avro/v10/parser"
-	"github.com/actgardner/gogen-avro/v10/resolver"
-	gogen "github.com/actgardner/gogen-avro/v10/schema"
+	codec "github.com/confluentinc/confluent-avro-go/v2"
 )
 
 // TypeKind enumerates the kinds a model node can hold.
@@ -98,14 +95,22 @@ type Type interface {
 	isType()
 }
 
-// Schema is a parsed avsc: the Root type plus the raw bytes it was built from.
-// The raw avsc is retained so the AVRO path can register or compare the exact
-// schema the serializer will encode against (ADR-0007 decision 5).
+// Schema is a parsed avsc: the Root type, the raw bytes it was built from, and
+// the codec's parse of them. The raw avsc is what the AVRO path registers
+// (ADR-0007 decision 3: the exact avsc); the codec schema is what it encodes
+// against, so nothing parses the avsc a second time.
 type Schema struct {
 	// Root is the top-level Avro type of the schema.
 	Root Type
 
-	raw []byte
+	raw   []byte
+	codec codec.Schema
+}
+
+// Codec returns the codec's parsed schema the model was built from, for
+// marshalling values against.
+func (s *Schema) Codec() codec.Schema {
+	return s.codec
 }
 
 // Raw returns the avsc bytes this model was parsed from, with leading and
@@ -237,9 +242,9 @@ func (f *Fixed) FullName() string {
 }
 
 // Parse parses avsc bytes into the Avro model, or returns a *ParseError naming
-// the offending construct. It drives gogen-avro's parser through exactly the
-// sequence the Confluent Go Avro serde runs, so the avsc the serializer
-// accepts parses identically here.
+// the offending construct. The avsc is parsed once, by the codec the AvroEncoder
+// marshals with (#65), and the model is built from that parse, so what the
+// generator honours and what the encoder accepts can never disagree.
 func Parse(avsc []byte) (s *Schema, err error) {
 	// The library parser operates on untrusted input; a panic must surface as
 	// a typed error rather than crashing the run.
@@ -254,215 +259,144 @@ func Parse(avsc []byte) (s *Schema, err error) {
 		return nil, &ParseError{Detail: "avsc is empty"}
 	}
 
-	ns := parser.NewNamespace(false)
-	root, pErr := ns.TypeForSchema(avsc)
+	// A fresh cache per parse: the codec's default cache is process-global, so
+	// named types from one avsc would resolve bare references in the next.
+	parsed, pErr := codec.ParseBytesWithCache(avsc, "", &codec.SchemaCache{})
 	if pErr != nil {
-		return nil, parseErr(pErr)
-	}
-	for _, def := range ns.Roots {
-		if rErr := resolver.ResolveDefinition(def, ns.Definitions); rErr != nil {
-			return nil, parseErr(rErr)
-		}
+		return nil, &ParseError{Detail: pErr.Error(), Err: pErr}
 	}
 
-	model, mErr := buildModel(root, ns.Definitions)
+	b := &builder{named: map[string]Type{}}
+	root, mErr := b.build(parsed)
 	if mErr != nil {
 		return nil, mErr
 	}
-	return &Schema{Root: model, raw: avsc}, nil
+	return &Schema{Root: root, raw: avsc, codec: parsed}, nil
 }
 
-// parseErr wraps a library parse error as a typed *ParseError.
-func parseErr(err error) error {
-	if err == nil {
-		return nil
-	}
-	return &ParseError{Detail: err.Error(), Err: err}
+// builder turns the codec's parsed schema into the model. Named types (record,
+// enum, fixed) become one shared node per fullname, registered before their
+// fields are built so a recursive record refers back to itself.
+type builder struct {
+	named map[string]Type
 }
 
-// buildModel turns gogen-avro's resolved schema tree into the model. Named
-// types (record, enum, fixed) become shared nodes keyed by their fullname; the
-// two-phase build keeps recursive records acyclic in memory while letting a
-// reference to a named type yield the same node everywhere it appears.
-func buildModel(root gogen.AvroType, defs map[gogen.QualifiedName]gogen.Definition) (Type, error) {
-	// Deterministic iteration over the definition map (fullnames sorted) so
-	// repeated parses of the same avsc always build byte-identical models.
-	names := make([]gogen.QualifiedName, 0, len(defs))
-	for qn := range defs {
-		names = append(names, qn)
-	}
-	sort.Slice(names, func(i, j int) bool { return names[i].String() < names[j].String() })
-
-	named := make(map[gogen.QualifiedName]Type, len(defs))
-	for _, qn := range names {
-		switch d := defs[qn].(type) {
-		case *gogen.RecordDefinition:
-			named[qn] = &Record{Name: qn.Name, Namespace: qn.Namespace}
-		case *gogen.EnumDefinition:
-			named[qn] = &Enum{Name: qn.Name, Namespace: qn.Namespace, Symbols: d.Symbols(), Default: enumDefault(d)}
-		case *gogen.FixedDefinition:
-			named[qn] = &Fixed{Name: qn.Name, Namespace: qn.Namespace, Size: d.SizeBytes()}
+func (b *builder) build(s codec.Schema) (Type, error) {
+	switch t := s.(type) {
+	case *codec.RefSchema:
+		return b.build(t.Schema())
+	case *codec.RecordSchema:
+		if n, ok := b.named[t.FullName()]; ok {
+			return n, nil
 		}
-	}
-
-	for _, qn := range names {
-		switch d := defs[qn].(type) {
-		case *gogen.RecordDefinition:
-			rec := named[qn].(*Record)
-			for _, f := range d.Fields() {
-				ft, err := buildType(f.Type(), named)
-				if err != nil {
-					return nil, err
-				}
-				rec.Fields = append(rec.Fields, &Field{
-					Name:       f.Name(),
-					Type:       ft,
-					HasDefault: f.HasDefault(),
-					Default:    f.Default(),
-				})
-			}
-		case *gogen.FixedDefinition:
-			fixed := named[qn].(*Fixed)
-			lt, err := parseLogical(d.Attribute("logicalType"), KindFixed, d.Attribute("precision"), d.Attribute("scale"))
+		rec := &Record{Name: t.Name(), Namespace: t.Namespace()}
+		b.named[t.FullName()] = rec
+		for _, f := range t.Fields() {
+			ft, err := b.build(f.Type())
 			if err != nil {
 				return nil, err
 			}
-			fixed.Logical = lt
+			rec.Fields = append(rec.Fields, &Field{
+				Name:       f.Name(),
+				Type:       ft,
+				HasDefault: f.HasDefault(),
+				Default:    f.Default(),
+			})
 		}
-	}
-
-	return buildType(root, named)
-}
-
-// buildType converts one non-named schema node (or a reference to a named one)
-// into a model Type.
-func buildType(t gogen.AvroType, named map[gogen.QualifiedName]Type) (Type, error) {
-	switch tt := t.(type) {
-	case *gogen.Reference:
-		node, ok := named[tt.TypeName]
-		if !ok {
-			return nil, &ParseError{Detail: fmt.Sprintf("reference to %s is not defined in this avsc", tt.TypeName)}
+		return rec, nil
+	case *codec.EnumSchema:
+		if n, ok := b.named[t.FullName()]; ok {
+			return n, nil
 		}
-		return node, nil
-	case *gogen.UnionField:
-		branches := make([]Type, 0, len(tt.AvroTypes()))
-		for _, b := range tt.AvroTypes() {
-			bt, err := buildType(b, named)
+		enum := &Enum{Name: t.Name(), Namespace: t.Namespace(), Symbols: t.Symbols()}
+		if t.HasDefault() {
+			d := t.Default()
+			enum.Default = &d
+		}
+		b.named[t.FullName()] = enum
+		return enum, nil
+	case *codec.FixedSchema:
+		if n, ok := b.named[t.FullName()]; ok {
+			return n, nil
+		}
+		lt, err := logicalOf(t.Logical(), t.Prop("logicalType"), KindFixed)
+		if err != nil {
+			return nil, err
+		}
+		fixed := &Fixed{Name: t.Name(), Namespace: t.Namespace(), Size: t.Size(), Logical: lt}
+		b.named[t.FullName()] = fixed
+		return fixed, nil
+	case *codec.UnionSchema:
+		branches := make([]Type, 0, len(t.Types()))
+		for _, br := range t.Types() {
+			bt, err := b.build(br)
 			if err != nil {
 				return nil, err
 			}
 			branches = append(branches, bt)
 		}
 		return &Union{Branches: branches}, nil
-	case *gogen.ArrayField:
-		items, err := buildType(tt.ItemType(), named)
+	case *codec.ArraySchema:
+		items, err := b.build(t.Items())
 		if err != nil {
 			return nil, err
 		}
 		return &Array{Items: items}, nil
-	case *gogen.MapField:
-		values, err := buildType(tt.ItemType(), named)
+	case *codec.MapSchema:
+		values, err := b.build(t.Values())
 		if err != nil {
 			return nil, err
 		}
 		return &Map{Values: values}, nil
-	default:
-		return buildPrimitive(tt)
-	}
-}
-
-// buildPrimitive converts a primitive node, reading any logical-type overlay
-// off its declaring attributes.
-func buildPrimitive(t gogen.AvroType) (Type, error) {
-	var kind PrimitiveKind
-	var pr *gogen.PrimitiveField
-	switch tt := t.(type) {
-	case *gogen.NullField:
-		kind, pr = KindNull, &tt.PrimitiveField
-	case *gogen.BoolField:
-		kind, pr = KindBoolean, &tt.PrimitiveField
-	case *gogen.IntField:
-		kind, pr = KindInt, &tt.PrimitiveField
-	case *gogen.LongField:
-		kind, pr = KindLong, &tt.PrimitiveField
-	case *gogen.FloatField:
-		kind, pr = KindFloat, &tt.PrimitiveField
-	case *gogen.DoubleField:
-		kind, pr = KindDouble, &tt.PrimitiveField
-	case *gogen.BytesField:
-		kind, pr = KindBytes, &tt.PrimitiveField
-	case *gogen.StringField:
-		kind, pr = KindString, &tt.PrimitiveField
-	default:
-		return nil, &ParseError{Detail: fmt.Sprintf("unexpected schema node of type %T", t)}
-	}
-	lt, err := parseLogical(pr.Attribute("logicalType"), kind, pr.Attribute("precision"), pr.Attribute("scale"))
-	if err != nil {
-		return nil, err
-	}
-	return &Primitive{Kind: kind, Logical: lt}, nil
-}
-
-// enumDefault returns the declared default symbol, or nil when the avsc names
-// none (an empty default symbol and an absent one are distinguishable here).
-func enumDefault(e *gogen.EnumDefinition) *string {
-	if v, ok := e.Attribute("default").(string); ok {
-		return &v
-	}
-	return nil
-}
-
-// parseLogical validates a declared logicalType against its base kind and
-// returns the overlay. A logical type the model does not know is ignored and
-// the base type governs, as the Avro spec requires of readers; the value still
-// encodes, because the serializer treats an unknown overlay as its base type
-// too (timestamp-nanos as a long, duration as a fixed, big-decimal as bytes).
-// A known kind on the wrong base type is a malformed avsc and still stops Parse
-// with a typed error (ADR-0007 decision 4). A nil attr means none is declared.
-func parseLogical(attr any, base TypeKind, precision, scale any) (*LogicalType, error) {
-	name, ok := attr.(string)
-	if !ok || name == "" {
-		return nil, nil
-	}
-	kind := LogicalTypeKind(name)
-
-	if kind == LogicalDecimal {
-		if base != KindBytes && base != KindFixed {
-			return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires a bytes or fixed base type, got %s", name, base)}
-		}
-		p, err := decimalPrecision(precision)
+	case *codec.NullSchema:
+		return &Primitive{Kind: KindNull}, nil
+	case *codec.PrimitiveSchema:
+		kind := TypeKind(t.Type())
+		lt, err := logicalOf(t.Logical(), t.Prop("logicalType"), kind)
 		if err != nil {
 			return nil, err
 		}
-		return &LogicalType{Kind: kind, Precision: p, Scale: decimalScale(scale)}, nil
+		return &Primitive{Kind: kind, Logical: lt}, nil
+	default:
+		return nil, &ParseError{Detail: fmt.Sprintf("unexpected schema node of type %T", s)}
 	}
+}
 
-	want, known := logicalBaseOK[kind]
-	if !known {
+// logicalOf returns the model's overlay for a node. honoured is the logical
+// type the codec recognised; declared is the raw logicalType attribute, which
+// the codec leaves in place when it does not honour it. A logical type the
+// model does not know is ignored and the base type governs, as the Avro spec
+// requires of readers - the codec treats it as its base type too. A known
+// logical type the codec did not honour (wrong base type, a decimal whose
+// precision or scale is invalid or does not fit its fixed size) is a malformed
+// avsc: keeping the overlay would generate values the encoder rejects, so Parse
+// stops with a typed error (ADR-0007 decision 4).
+func logicalOf(honoured codec.LogicalSchema, declared any, base TypeKind) (*LogicalType, error) {
+	if honoured != nil {
+		if d, ok := honoured.(*codec.DecimalLogicalSchema); ok {
+			return &LogicalType{Kind: LogicalDecimal, Precision: d.Precision(), Scale: d.Scale()}, nil
+		}
+		kind := LogicalTypeKind(honoured.Type())
+		if _, known := logicalBaseOK[kind]; known {
+			return &LogicalType{Kind: kind}, nil
+		}
 		return nil, nil
 	}
-	if base != want {
+
+	name, _ := declared.(string)
+	kind := LogicalTypeKind(name)
+	switch {
+	case name == "":
+		return nil, nil
+	case kind == LogicalDecimal && base != KindBytes && base != KindFixed:
+		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires a bytes or fixed base type, got %s", name, base)}
+	case kind == LogicalDecimal:
+		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires a precision above 0 that fits the %s, and a scale from 0 to the precision", name, base)}
+	}
+	if want, known := logicalBaseOK[kind]; known {
 		return nil, &ParseError{Detail: fmt.Sprintf("logicalType %q requires base type %s, got %s", name, want, base)}
 	}
-	return &LogicalType{Kind: kind}, nil
-}
-
-// decimalPrecision requires the precision attribute the Avro spec makes
-// mandatory for decimal.
-func decimalPrecision(v any) (int, error) {
-	f, ok := v.(float64)
-	if !ok {
-		return 0, &ParseError{Detail: "logicalType \"decimal\" requires an integer precision attribute"}
-	}
-	return int(f), nil
-}
-
-// decimalScale defaults to 0 when the scale attribute is absent.
-func decimalScale(v any) int {
-	if f, ok := v.(float64); ok {
-		return int(f)
-	}
-	return 0
+	return nil, nil
 }
 
 func fullName(namespace, name string) string {

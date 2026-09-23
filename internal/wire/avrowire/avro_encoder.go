@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/confluentinc/confluent-avro-go/v2"
+	codec "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
+	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 )
 
 // confluentMagicByte is the leading byte of every Confluent-framed record
@@ -47,32 +48,30 @@ func (e *RegistryError) Unwrap() error {
 // interaction and the encoding (ADR-0007 decision 5), so the registry client is
 // confined to this adapter and franz-go stays the producer. The explicit avsc
 // files are what get registered (decision 3), and the generic marshaller
-// honours them, so what the encoder frames is always registry-valid wire data a
-// Confluent/AVRO-aware consumer can deserialize.
+// honours the codec schema they were parsed into, so what the encoder frames is
+// always registry-valid wire data a Confluent/AVRO-aware consumer can
+// deserialize.
 type AvroEncoder struct {
-	api    avro.API
-	schema avro.Schema
+	api    codec.API
+	schema codec.Schema
 	id     int
-	// keySchema is the parsed key avsc, nil when the run produces payload-only
-	// records; keyID is the ID the registry assigned to the <topic>-key subject.
-	keySchema avro.Schema
+	// keySchema is the key avsc's codec schema, nil when the run produces
+	// payload-only records; keyID is the ID the registry assigned to the
+	// <topic>-key subject.
+	keySchema codec.Schema
 	keyID     int
 }
 
-// NewAvroEncoder registers the explicit value avsc under <topic>-value and,
-// when keyAvsc is given, the key avsc under <topic>-key, then returns an
-// encoder that frames payloads and keys with the registry-assigned schema IDs.
-// Registration happens up front so an unreachable or rejecting registry stops
-// the run with a typed *RegistryError before any produce work starts
-// (ADR-0007 decision 4: fail fast, never a silent nil).
-func NewAvroEncoder(ctx context.Context, registryURL, topic, valueAvsc, keyAvsc string) (*AvroEncoder, error) {
+// NewAvroEncoder registers the exact value avsc under <topic>-value and, when
+// key is non-nil, the key avsc under <topic>-key, then returns an encoder that
+// frames payloads and keys with the registry-assigned schema IDs. It encodes
+// against the codec schema each model already carries, so the avsc is never
+// parsed twice (#65). Registration happens up front so an unreachable or
+// rejecting registry stops the run with a typed *RegistryError before any
+// produce work starts (ADR-0007 decision 4: fail fast, never a silent nil).
+func NewAvroEncoder(ctx context.Context, registryURL, topic string, value, key *avro.Schema) (*AvroEncoder, error) {
 	if ctx == nil {
 		ctx = context.Background()
-	}
-
-	schema, err := avro.Parse(valueAvsc)
-	if err != nil {
-		return nil, fmt.Errorf("avro: parsing value avsc for encoding: %w", err)
 	}
 
 	client, err := registry.NewClient(registryURL)
@@ -80,26 +79,18 @@ func NewAvroEncoder(ctx context.Context, registryURL, topic, valueAvsc, keyAvsc 
 		return nil, &RegistryError{URL: registryURL, Err: err}
 	}
 
-	var keySchema avro.Schema
-	if keyAvsc != "" {
-		keySchema, err = avro.Parse(keyAvsc)
-		if err != nil {
-			return nil, fmt.Errorf("avro: parsing key avsc for encoding: %w", err)
-		}
-	}
-
 	enc := &AvroEncoder{
-		api:       avro.Config{}.Freeze(),
-		schema:    schema,
-		keySchema: keySchema,
+		api:    codec.Config{}.Freeze(),
+		schema: value.Codec(),
 	}
 
-	enc.id, _, err = client.CreateSchema(ctx, topic+"-value", valueAvsc)
+	enc.id, _, err = client.CreateSchema(ctx, topic+"-value", string(value.Raw()))
 	if err != nil {
 		return nil, &RegistryError{URL: registryURL, Err: err}
 	}
-	if enc.keySchema != nil {
-		enc.keyID, _, err = client.CreateSchema(ctx, topic+"-key", keyAvsc)
+	if key != nil {
+		enc.keySchema = key.Codec()
+		enc.keyID, _, err = client.CreateSchema(ctx, topic+"-key", string(key.Raw()))
 		if err != nil {
 			return nil, &RegistryError{URL: registryURL, Err: err}
 		}

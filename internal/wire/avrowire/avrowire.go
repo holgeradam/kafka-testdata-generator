@@ -86,11 +86,7 @@ func encoderFor(opts wire.Options, value, key *avro.Schema) func(context.Context
 		}
 	}
 	return func(ctx context.Context) (pipeline.Encoder, error) {
-		var keyAvsc string
-		if key != nil {
-			keyAvsc = string(key.Raw())
-		}
-		enc, err := NewAvroEncoder(ctx, opts.RegistryURL, opts.Topic, string(value.Raw()), keyAvsc)
+		enc, err := NewAvroEncoder(ctx, opts.RegistryURL, opts.Topic, value, key)
 		if err != nil {
 			return nil, err
 		}
