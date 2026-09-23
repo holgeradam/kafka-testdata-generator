@@ -69,7 +69,7 @@ type Run struct {
 type flags struct {
 	set                                    *flag.FlagSet
 	specPath, topic, broker                *string
-	count                                  *int
+	count, recordsPerKey                   *int
 	rateLimit                              *time.Duration
 	keyPath, renamedKey, renamedChannel    *string
 	dryRun                                 *bool
@@ -91,6 +91,7 @@ func newFlags() *flags {
 		topic:          fs.String("topic", "", "Kafka topic to produce to (required)"),
 		broker:         fs.String("broker", "localhost:9092", "Kafka broker address"),
 		count:          fs.Int("count", 10, "Number of payloads to generate (0 = infinite)"),
+		recordsPerKey:  fs.Int("records-per-key", 1, "Average number of records sharing one Key, i.e. one Entity (requires a key schema)"),
 		rateLimit:      fs.Duration("rate", 10*time.Millisecond, "Minimum time between messages"),
 		keyPath:        fs.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)"),
 		renamedKey:     fs.String("key", "", "deprecated: renamed to -keyPath"),
@@ -168,6 +169,9 @@ func Plan(args []string) (*Run, error) {
 	if *f.topic == "" {
 		return nil, &Error{Flag: "topic", Detail: "-topic is required"}
 	}
+	if *f.recordsPerKey < 1 {
+		return nil, &Error{Flag: "records-per-key", Detail: "-records-per-key must be at least 1"}
+	}
 
 	// -key extracted a field from the Payload; -keyPath plants the generated
 	// Key into it (ADR-0009). The meaning changed, so an old invocation stops
@@ -229,7 +233,8 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	}
 
 	// One Synthesizer per run: the Payload and the Key draw from one shared
-	// stream in both wire formats (ADR-0008 decision 4).
+	// stream in both wire formats (ADR-0008 decision 4), and so do the Key
+	// reuse decisions.
 	opts.Synth = synth.New(*f.seed, f.now.now)
 	opts.MessageTypes = types
 	parts, err := format.Build(opts)
@@ -242,9 +247,15 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	// The Key plan owns the Key of the run: the key schema generates it, and
 	// -keyPath says where it is planted into the Payload (ADR-0009). Its checks
 	// run here, so an unusable path stops the run before a record exists.
+	// With -records-per-key above 1 its Keys identify Entities that recur
+	// across records, which needs a Key schema to generate them from.
+	if *f.recordsPerKey > 1 && parts.KeyGen == nil {
+		return &Error{Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec (JSON mode) or pass -avro-key-schema (AVRO), so there is a Key to reuse"}
+	}
 	var keyPlan pipeline.KeyPlan
 	if parts.KeyGen != nil {
-		plan, err := keyplan.New(parts.KeyGen, parts.Checker, *f.keyPath)
+		keyGen := keyplan.Reuse(parts.KeyGen, *f.recordsPerKey, opts.Synth)
+		plan, err := keyplan.New(keyGen, parts.Checker, *f.keyPath)
 		if err != nil {
 			return &Error{Flag: "keyPath", Err: err}
 		}

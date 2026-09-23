@@ -153,6 +153,27 @@ func TestPlanAccepts(t *testing.T) {
 			},
 		},
 		{
+			name: "keys reused across records",
+			args: []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "orderId", "-records-per-key", "4", "-seed", "3"},
+			check: func(t *testing.T, r *Run) {
+				distinct := map[any]bool{}
+				for i := 0; i < 400; i++ {
+					payload := map[string]any{"orderId": "before"}
+					k, err := r.Config.KeyPlan.Apply(payload)
+					if err != nil {
+						t.Fatalf("Apply: %v", err)
+					}
+					if payload["orderId"] != k {
+						t.Fatalf("record %d: planted %v, key %v; want the reused Key planted", i, payload["orderId"], k)
+					}
+					distinct[k] = true
+				}
+				if avg := 400.0 / float64(len(distinct)); avg < 3 || avg > 5 {
+					t.Errorf("400 records over %d Keys = %.1f per Key, want about 4", len(distinct), avg)
+				}
+			},
+		},
+		{
 			name: "binding without a path still keys",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run"},
 			check: func(t *testing.T, r *Run) {
@@ -322,6 +343,9 @@ channels:
 		{"Message types with different Key bindings", []string{"-spec", mixedKeys, "-topic", "orders", "-dry-run"}, "topic", "different Key bindings (OrderCreated vs OrderUpdated (none))", nil},
 		{"key path missing in one Message type", []string{"-spec", keyedMix, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "in Message type OrderUpdated", new(*keyplan.PathError)},
 		{"unusable key binding", []string{"-spec", badBinding, "-topic", "orders", "-dry-run"}, "topic", "bindings.kafka.key must be a schema object", nil},
+		{"records per key below 1", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-records-per-key", "0"}, "records-per-key", "-records-per-key must be at least 1", nil},
+		{"key reuse without a key schema", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-records-per-key", "2"}, "records-per-key", "-records-per-key above 1 requires a key schema", nil},
+		{"avro key reuse without a key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-records-per-key", "2"}, "records-per-key", "requires a key schema", nil},
 		{"renamed key flag", []string{"-spec", spec, "-topic", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
 		{"avro without value avsc", []string{"-spec", spec, "-topic", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},
 		{"avro key path without key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires -avro-key-schema", nil},
@@ -478,7 +502,7 @@ func TestUsage(t *testing.T) {
 	var buf strings.Builder
 	Usage(&buf, "ktg")
 	out := buf.String()
-	for _, want := range []string{"Usage: ktg", "-topic", "-keyPath", "-avro-schema", "Examples:", "ktg -spec order.yaml -topic orders.created"} {
+	for _, want := range []string{"Usage: ktg", "-topic", "-keyPath", "-records-per-key", "-avro-schema", "Examples:", "ktg -spec order.yaml -topic orders.created"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("usage is missing %q:\n%s", want, out)
 		}

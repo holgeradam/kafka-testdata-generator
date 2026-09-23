@@ -45,8 +45,12 @@ The schema that governs Key generation, supplied per Wire format: `message.bindi
 _Avoid_: key binding (JSON-only term), key avsc (AVRO-only term)
 
 **Key plan**:
-The run's rule for the Key: generate it from the Key schema and, when a **Key path** is configured, plant that value into the Payload so both hold it. Built once at the process edge, where it refuses a Key path the run cannot honour, then applied to each generated Payload.
+The run's rule for the Key: generate it from the Key schema and, when a **Key path** is configured, plant that value into the Payload so both hold it. With `-records-per-key` above 1 it reuses Keys, so an **Entity** recurs across records. Built once at the process edge, where it refuses a Key path the run cannot honour, then applied to each generated Payload.
 _Avoid_: key source, key strategy
+
+**Entity**:
+The thing a Key identifies across messages, such as one order. With `-records-per-key N` each message starts a new Entity with probability 1/N and otherwise reuses the Key of one of the most recent Entities, so several messages of any Message type share an Entity's Key - N on average. The default of 1 gives every message its own Entity. No lifecycle order yet: an Entity's messages come in no particular order.
+_Avoid_: aggregate, object
 
 **Key path**:
 Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every message and the type there can hold the Key; both are checked before the run starts, against whichever schema language governs the Payload.

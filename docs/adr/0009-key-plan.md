@@ -28,3 +28,5 @@ A Kafka key and value are unrelated by design, and neither a kafka binding nor a
 - Breaking: `-key fieldName` without a key schema used to produce Keys and is now a flag error. Specs need `bindings.kafka.key` (or `-avro-key-schema` under AVRO).
 - Key generation draws from the run's one Synthesizer (ADR-0008 decision 4), after the Payload, because planting writes into it.
 - Dry run keeps the `Key:` stderr echo (ADR-0003), which now also proves the planted value.
+
+Amended (2026-09-23, issue #75): the plan can reuse Keys. With `-records-per-key N` above 1, its Generator is wrapped in a pool of Entities (`keyplan.Reuse`): each record starts a new Entity, with a fresh Key from the Key schema, with probability 1/N, drawn from the run's Synthesizer, and otherwise reuses the Key of one of the 1,000 most recent Entities. Planting is unchanged, so Key and Payload still agree for a reused Key. The pool is format-blind like the rest of the plan, so an AVRO key avsc gets the same reuse. N = 1 is the Generator itself and draws nothing, so the default run is exactly what it was. Lifecycle order (an Entity's created record first) is left to a later feature.
