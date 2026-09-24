@@ -42,7 +42,20 @@ func (d *Document) traits(msg map[string]any, name string) ([]map[string]any, er
 // removes the key, anything else replaces. Neither input is modified. Where
 // both sides hold an object, a $ref on either side is resolved first, so a
 // patch extends a referenced object instead of being shadowed by its $ref.
-func (d *Document) mergePatch(target map[string]any, patch any, where string, depth int) (any, error) {
+func (d *Document) mergePatch(target map[string]any, patch any, where string) (any, error) {
+	return d.merge(target, patch, where, true, 0)
+}
+
+// underlay is mergePatch with the target winning, AsyncAPI 3.0's rule that "a
+// property on a trait MUST NOT override the same property on the target
+// object": patch only adds what target does not declare, objects still merging
+// key by key. A null in target is its value, kept as written.
+func (d *Document) underlay(target map[string]any, patch any, where string) (any, error) {
+	return d.merge(target, patch, where, false, 0)
+}
+
+// merge is mergePatch when patchWins, else underlay.
+func (d *Document) merge(target map[string]any, patch any, where string, patchWins bool, depth int) (any, error) {
 	p, ok := patch.(map[string]any)
 	if !ok {
 		return patch, nil
@@ -61,13 +74,21 @@ func (d *Document) mergePatch(target map[string]any, patch any, where string, de
 		out = map[string]any{}
 	}
 	for key, value := range p {
-		if value == nil {
+		current, declared := out[key]
+		sub, _ := current.(map[string]any)
+		_, isObject := value.(map[string]any)
+		switch {
+		case value == nil && patchWins:
 			delete(out, key)
+			continue
+		case value == nil || (declared && !patchWins && (sub == nil || !isObject)):
+			continue // underlay: the target's own value stands
+		case !declared && !patchWins:
+			out[key] = value
 			continue
 		}
 		at := where + "." + key
-		sub, _ := out[key].(map[string]any)
-		if _, isObject := value.(map[string]any); isObject && sub != nil {
+		if isObject && sub != nil {
 			if ref := refOf(sub); ref != "" && ref == refOf(value) {
 				continue // the same object on both sides: merging changes nothing
 			}
@@ -76,7 +97,7 @@ func (d *Document) mergePatch(target map[string]any, patch any, where string, de
 				return nil, err
 			}
 		}
-		merged, err := d.mergePatch(sub, value, at, depth+1)
+		merged, err := d.merge(sub, value, at, patchWins, depth+1)
 		if err != nil {
 			return nil, err
 		}

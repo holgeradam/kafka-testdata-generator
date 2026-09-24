@@ -1,12 +1,12 @@
-// Package asyncapi reads an AsyncAPI 2.x spec into what a run needs: the
-// Message types the spec declares for a Kafka topic, each with a Payload schema
-// and an optional Key binding. The spec is decoded once into a JSON-normalized
-// map, and one walk resolves every $ref on the way - at an entry's bindings, an
-// operation's message, a oneOf variant, a message's bindings, the kafka
-// binding, the key, and inside the schemas (ADR-0005). A message's traits are
-// merged into it before it is read, and its payload is read only in a JSON
-// Schema format (#81). What the walk cannot read is an error naming the
-// Message type, never a silent fallback.
+// Package asyncapi reads an AsyncAPI 2.x or 3.0 spec into what a run needs:
+// the Message types the spec declares for a Kafka topic, each with a Payload
+// schema and an optional Key binding. The spec is decoded once into a
+// JSON-normalized map. A front end per version finds the spec entries for a
+// Kafka topic and their messages (v2.go, v3.go); both hand each message to one
+// back end that merges its traits, refuses a payload format the tool does not
+// read (#81), and resolves every $ref on the way - at bindings, messages, the
+// key and inside the schemas (ADR-0005). What the walk cannot read is an error
+// naming the Message type, never a silent fallback.
 package asyncapi
 
 import (
@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -25,9 +24,11 @@ import (
 // whose refs form a loop without content stops with an error.
 const maxRefChain = 32
 
-// Document is a parsed AsyncAPI 2.x spec.
+// Document is a parsed AsyncAPI 2.x or 3.x spec.
 type Document struct {
 	raw map[string]any
+	// major is the spec's AsyncAPI major version, 2 or 3.
+	major int
 }
 
 // MessageType is one kind of message the spec declares for a Kafka topic. Its
@@ -43,8 +44,8 @@ type MessageType struct {
 	KeyBinding map[string]any
 }
 
-// Load reads and parses an AsyncAPI 2.x specification from a YAML or JSON
-// file. A 3.x document is refused rather than half-read.
+// Load reads and parses an AsyncAPI 2.x or 3.x specification from a YAML or
+// JSON file.
 func Load(path string) (*Document, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -54,10 +55,11 @@ func Load(path string) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	major := 2
 	if v, _ := raw["asyncapi"].(string); strings.HasPrefix(v, "3.") {
-		return nil, fmt.Errorf("AsyncAPI %s is not supported yet: the tool reads AsyncAPI 2.x specs", v)
+		major = 3
 	}
-	return &Document{raw: raw}, nil
+	return &Document{raw: raw, major: major}, nil
 }
 
 // unmarshalRaw decodes the spec bytes, choosing YAML or JSON by suffix, and
@@ -86,74 +88,39 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 }
 
 // MessageTypes returns every Message type the spec declares for a Kafka topic,
-// in a stable order: across the spec's entries for it (sorted by key), the
-// publish then the subscribe operation, and oneOf variants in order. A
-// component message referenced more than once is one Message type.
+// in a stable order. A component message referenced more than once is one
+// Message type.
 func (d *Document) MessageTypes(topic string) ([]MessageType, error) {
-	channels, _ := d.raw["channels"].(map[string]any)
-	keys := make([]string, 0, len(channels))
-	for key := range channels {
-		keys = append(keys, key)
+	if d.major == 3 {
+		return d.messageTypes3(topic)
 	}
-	sort.Strings(keys)
-
-	c := &collector{d: d, seen: map[string]bool{}}
-	found := false
-	for _, key := range keys {
-		entry, err := d.object(channels[key], "spec entry "+key)
-		if err != nil {
-			return nil, err
-		}
-		bound, err := d.kafkaTopic(entry, key)
-		if err != nil {
-			return nil, err
-		}
-		if bound != topic {
-			continue
-		}
-		found = true
-		if entry["messages"] != nil {
-			return nil, fmt.Errorf("spec entry %s: messages on a spec entry is AsyncAPI 3.0 syntax; in 2.x, declare them under publish or subscribe (several as message.oneOf)", key)
-		}
-		for _, op := range []string{"publish", "subscribe"} {
-			if err := c.operation(entry[op], key+" "+op); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	switch {
-	case !found:
-		if entry, ok := channels[topic]; ok {
-			if e, err := d.object(entry, "spec entry "+topic); err == nil {
-				if bound, err := d.kafkaTopic(e, topic); err == nil {
-					return nil, fmt.Errorf("Kafka topic %q not found in spec: the spec entry %s binds Kafka topic %q", topic, topic, bound)
-				}
-			}
-		}
-		return nil, fmt.Errorf("Kafka topic %q not found in spec", topic)
-	case len(c.types) == 0:
-		return nil, fmt.Errorf("Kafka topic %q: the spec declares no message for it", topic)
-	}
-	return c.types, nil
+	return d.messageTypes2(topic)
 }
 
-// kafkaTopic is the Kafka topic a spec entry keyed key stands for: its
-// bindings.kafka.topic when declared, else the key itself.
-func (d *Document) kafkaTopic(entry map[string]any, key string) (string, error) {
-	where := "spec entry " + key
-	kafka, err := d.kafkaBinding(entry["bindings"], where)
-	if err != nil || kafka == nil {
-		return key, err
+// collector gathers the Message types of one Kafka topic, reading each
+// referenced component once.
+type collector struct {
+	d     *Document
+	seen  map[string]bool
+	types []MessageType
+}
+
+func newCollector(d *Document) *collector {
+	return &collector{d: d, seen: map[string]bool{}}
+}
+
+// once reports whether node should be read: true unless it is a $ref already
+// read.
+func (c *collector) once(node any) bool {
+	ref := refOf(node)
+	if ref == "" {
+		return true
 	}
-	switch topic := kafka["topic"].(type) {
-	case nil:
-		return key, nil
-	case string:
-		return topic, nil
-	default:
-		return "", fmt.Errorf("%s: bindings.kafka.topic must be a string", where)
+	if c.seen[ref] {
+		return false
 	}
+	c.seen[ref] = true
+	return true
 }
 
 // kafkaBinding resolves a bindings object and its kafka binding, either of
@@ -173,92 +140,29 @@ func (d *Document) kafkaBinding(bindings any, where string) (map[string]any, err
 	return d.object(b["kafka"], where+": bindings.kafka")
 }
 
-// collector gathers the Message types of one Kafka topic.
-type collector struct {
-	d     *Document
-	seen  map[string]bool
-	types []MessageType
-}
-
-// operation adds the Message types of one publish or subscribe operation.
-func (c *collector) operation(node any, where string) error {
-	if node == nil {
-		return nil
-	}
-	op, err := c.d.object(node, where)
-	if err != nil {
-		return err
-	}
-	if op["message"] == nil {
-		return nil
-	}
-	return c.message(op["message"], where)
-}
-
-// message adds one message, or each variant of a oneOf message.
-func (c *collector) message(node any, where string) error {
-	ref := refOf(node)
-	if ref != "" {
-		if c.seen[ref] {
-			return nil
-		}
-		c.seen[ref] = true
-	}
-	msg, err := c.d.object(node, where)
-	if err != nil {
-		return err
-	}
-	if variants, ok := msg["oneOf"].([]any); ok {
-		for i, v := range variants {
-			if err := c.message(v, fmt.Sprintf("%s oneOf[%d]", where, i)); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	declared := messageName(msg, ref, where)
-	traits, err := c.d.traits(msg, declared)
-	if err != nil {
-		return err
-	}
-	for _, trait := range traits { // 2.x: a trait overrides the message's own field
-		merged, err := c.d.mergePatch(msg, trait, "message "+declared, 0)
-		if err != nil {
-			return err
-		}
-		msg = merged.(map[string]any)
-	}
-	mt, err := c.d.messageType(msg, messageName(msg, ref, where))
-	if err != nil {
-		return err
-	}
-	c.types = append(c.types, mt)
-	return nil
-}
-
-// messageName names a message: its name, else its component key, else where
-// it is declared.
-func messageName(msg map[string]any, ref, where string) string {
+// messageName names a message: its name, else its component key, else the
+// front end's fallback.
+func messageName(msg map[string]any, ref, fallback string) string {
 	if n, ok := msg["name"].(string); ok && n != "" {
 		return n
 	}
 	if ref != "" {
 		return lastToken(ref)
 	}
-	return where
+	return fallback
 }
 
 // messageType reads a message, its traits already merged, into a Message
-// type: its payload, in a format the tool reads, and its Key binding.
-func (d *Document) messageType(msg map[string]any, name string) (MessageType, error) {
-	if msg["payload"] == nil {
+// type: its payload schema, which the front end found with its schemaFormat
+// (nil when none is declared), and its Key binding.
+func (d *Document) messageType(msg map[string]any, name string, payloadNode, format any) (MessageType, error) {
+	if payloadNode == nil {
 		return MessageType{}, fmt.Errorf("message %s declares no payload", name)
 	}
-	if err := checkSchemaFormat(msg, name); err != nil {
+	if err := d.checkSchemaFormat(format, name); err != nil {
 		return MessageType{}, err
 	}
-	payload, err := d.schema(msg["payload"])
+	payload, err := d.schema(payloadNode)
 	if err != nil {
 		return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
 	}

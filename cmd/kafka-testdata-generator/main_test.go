@@ -67,6 +67,28 @@ func TestScenarioDeterministic(t *testing.T) {
 	}
 }
 
+// TestScenarioV3ExampleMatchesV2 is #82 end to end: the AsyncAPI 3.0 example
+// restates the 2.x one, so the same seed and clock give the same output.
+func TestScenarioV3ExampleMatchesV2(t *testing.T) {
+	bin := buildBinary(t)
+	run := func(spec string) string {
+		t.Helper()
+		out, err := exec.Command(bin, "-spec", filepath.Join("..", "..", "examples", spec), "-topic", "orders.created",
+			"-dry-run", "-count", "20", "-seed", "42", "-now", "2026-01-02T03:04:05Z").Output()
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", spec, err, out)
+		}
+		return string(out)
+	}
+	v2, v3 := run("order.asyncapi.yaml"), run("order.asyncapi.v3.yaml")
+	if len(filterJSONLines(v3)) != 20 {
+		t.Fatalf("3.0 example: want 20 records, got:\n%s", v3)
+	}
+	if v2 != v3 {
+		t.Errorf("outputs differ:\n2.x:\n%s\n3.0:\n%s", v2, v3)
+	}
+}
+
 func TestScenarioPiping(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
