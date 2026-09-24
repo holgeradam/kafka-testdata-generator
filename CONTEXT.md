@@ -9,8 +9,12 @@ A YAML or JSON document describing Kafka topics and the messages on them. The to
 _Avoid_: schema, contract, API spec
 
 **Kafka topic**:
-The Kafka topic a run produces to, exactly one per run, named by `-topic`. The AsyncAPI spec describes it in an entry under its `channels:` key: the entry whose Kafka binding (`bindings.kafka.topic`) names it, or else the entry keyed by its name. "Channel" is only AsyncAPI's syntax for that entry, never a name for the Kafka topic.
+The Kafka topic a run produces to, exactly one per run, named by `-topic`. The AsyncAPI spec describes it in an entry under its `channels:` key: the entry whose Kafka binding (`bindings.kafka.topic`) names it, or else the entry keyed by its name (AsyncAPI 2.x) or whose address it is (AsyncAPI 3.0). "Channel" is only AsyncAPI's syntax for that entry, never a name for the Kafka topic.
 _Avoid_: channel, topic (alone)
+
+**Topic parameter**:
+A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (AsyncAPI 3.0). Not supported yet: a template that could name the Kafka topic stops the run.
+_Avoid_: channel parameter, address parameter
 
 **Message**:
 The meaningful content produced as one unit: a Key and a Payload. A run generates one message per Count, and a Kafka record carries it.

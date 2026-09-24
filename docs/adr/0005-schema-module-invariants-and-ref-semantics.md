@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-08-23). Decisions 1 and 5 amended (2026-09-23, issue #73). Decision 2 extended to trait merges (2026-09-24, issue #81).
+Accepted (2026-08-23). Decisions 1 and 5 amended (2026-09-23, issue #73). Decision 2 extended to trait merges (2026-09-24, issue #81) and to AsyncAPI 3.0 (2026-09-24, issue #82).
 
 ## Context
 
@@ -65,3 +65,7 @@ Decision 5 is finished rather than reopened. One walk over the decoded spec read
 ## Amendment (2026-09-24, issue #81)
 
 A message's `traits` are merged into it with JSON Merge Patch (RFC 7386) before the walk reads it; in 2.x a trait overrides the message's own field. Merge Patch knows nothing of `$ref`, so the merge resolves one wherever both the message and the trait hold an object under the same key, and a trait extends a referenced binding instead of being shadowed by the `$ref`. Where only one side declares a value it is copied as written, `$ref` included, and resolved by the walk as before. Two identical `$ref`s merge to that `$ref` unexpanded, so a message and a trait naming the same cyclic schema never follow the cycle; merges that descend more than 64 levels stop with an error. Merging copies, so the decoded spec stays unchanged for every other Message type.
+
+## Amendment (2026-09-24, issue #82)
+
+The walk now has two front ends, one per AsyncAPI version, over one back end. The 2.x front end reads a spec entry's publish and subscribe messages; the 3.0 front end reads a channel's `messages` map and finds its Kafka topic in `bindings.kafka.topic` or `address`. Both hand each message to the same trait merge, schemaFormat check, `$ref` resolution and Key binding, so every rule in this ADR holds for both, and there is no lossy 3.0-to-2.x conversion: errors name the spec paths as written. The only difference in the back end is the trait precedence each version specifies: in 2.x the trait wins, in 3.0 the message does, and there the message's own nulls are values rather than deletions. A 3.0 payload is a plain schema or a Multi Format Schema `{schemaFormat, schema}`; a plain one is passed on as declared, `$ref` and all, so its cycles resolve exactly as a 2.x payload's.

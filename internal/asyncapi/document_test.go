@@ -945,21 +945,6 @@ components:
 	}
 }
 
-// TestLoadRejectsAsyncAPI3 proves a 3.x document is refused at load rather
-// than half-read (#34 decision 6).
-func TestLoadRejectsAsyncAPI3(t *testing.T) {
-	_, err := Load(writeSpec(t, `
-asyncapi: '3.0.0'
-info: {title: T, version: '1'}
-channels:
-  orders:
-    address: orders
-    messages:
-      created: {payload: {type: object}}
-`))
-	wantErr(t, err, "3.0.0", "2.x")
-}
-
 // TestEntryLevelMessagesNamed proves a 2.x spec entry that declares its
 // messages the 3.0 way is told so, instead of reading the map in random order
 // or reporting no message.

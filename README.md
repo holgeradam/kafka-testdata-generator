@@ -4,7 +4,7 @@ A CLI tool that reads an AsyncAPI specification, generates random test data conf
 
 ## Features
 
-- Parses AsyncAPI 2.x specifications (YAML and JSON)
+- Parses AsyncAPI 2.x and 3.0 specifications (YAML and JSON)
 - Generates realistic test data based on JSON Schema constraints
 - Supports all standard JSON Schema types and formats
 - Produces to Kafka with configurable broker and topic
@@ -210,9 +210,10 @@ kafka-testdata-generator -spec order.yaml -topic orders.created -records-per-key
 
 ## AsyncAPI Specification
 
-The tool reads AsyncAPI 2.x specifications and extracts the message schemas the spec declares
-for the Kafka topic. AsyncAPI describes a Kafka topic in an entry under its `channels:` key;
-`-topic` finds the entry whose Kafka binding names it, or else the one keyed by its name:
+The tool reads AsyncAPI 2.x and 3.0 specifications and extracts the message schemas the spec
+declares for the Kafka topic. AsyncAPI describes a Kafka topic in an entry under its `channels:`
+key. `-topic` finds the entry whose Kafka binding names it, or else, in 2.x, the one keyed by its
+name:
 
 ```yaml
 channels:
@@ -224,9 +225,25 @@ channels:
       message: {...}
 ```
 
-Every message the spec declares for the Kafka topic is one Message type: the `publish` and
-`subscribe` operations' messages, each variant of a `message.oneOf`, and those of every entry
-bound to the Kafka topic. A component message referenced more than once counts once.
+In 3.0 the entry's `address` names the Kafka topic when no binding does; the entry's key never
+does. An entry with a `null` or absent address names no Kafka topic, as 3.0 treats it as unknown:
+
+```yaml
+channels:
+  ordersCreated:             # the channel id: not a Kafka topic name
+    address: orders.created  # -topic orders.created finds this entry
+    messages:
+      OrderCreated: {$ref: '#/components/messages/OrderCreated'}
+```
+
+`examples/order.asyncapi.v3.yaml` restates `examples/order.asyncapi.yaml` in 3.0, and both give
+the same output for the same `-seed` and `-now`.
+
+Every message the spec declares for the Kafka topic is one Message type, across every entry
+bound to it. In 2.x those are the `publish` and `subscribe` operations' messages and each variant
+of a `message.oneOf`; in 3.0 every message in the entry's `messages` (operations are not read, as
+the entry lists every message sent to it). A component message referenced more than once counts
+once.
 
 In JSON mode a Kafka topic's Message types are **mixed**: each record is of one, picked from the
 seeded stream, so `-seed` still reproduces the exact sequence and a Kafka topic with one Message
@@ -234,21 +251,24 @@ type behaves as it always did. The Message types must declare the same Key bindi
 Key identifies one Entity, such as one order, across its OrderCreated and OrderUpdated records -
 and `-keyPath` must be guaranteed in every Message type's payload; either mistake stops the run
 naming the Message types involved. Under `-format avro` the avsc governs the payload, so the
-spec's Message types play no part. AsyncAPI 3.0 documents are refused at load (3.0 support is
-tracked in #76).
+spec's Message types play no part.
 
 Every spec mistake stops the run with an error naming the message: a broken `$ref`, a missing
 payload, a Key binding that is declared but not a schema, or a payload in a format the tool does
 not read. It supports:
 
-- `publish` and `subscribe` operations, and `message.oneOf`
-- Message `traits`, inline or `$ref`, merged into the message with JSON Merge Patch in the order
-  listed, so a trait overrides the message's own field (as AsyncAPI 2.x specifies): a trait can
-  declare the Key binding, for instance
-- Payloads in JSON Schema: no `schemaFormat`, the AsyncAPI Schema format
-  (`application/vnd.aai.asyncapi[+json|+yaml];version=2.x.y`) or JSON Schema draft-07
-  (`application/schema+json;version=draft-07`, or `+yaml`). Any other format, such as an Avro or
-  Protobuf payload, stops the run naming it; for Avro, pass the avsc with `-format avro` instead
+- `publish` and `subscribe` operations, and `message.oneOf` (2.x); channel `messages` (3.0)
+- Message `traits`, inline or `$ref`, merged with JSON Merge Patch in the order listed, as each
+  version specifies: in 2.x a trait overrides the message's own field, in 3.0 the message's own
+  field wins. A trait can declare the Key binding, for instance
+- Payloads in JSON Schema: no `schemaFormat`, the AsyncAPI Schema format of the spec's version
+  (`application/vnd.aai.asyncapi[+json|+yaml];version=2.x.y`, or `3.x.y` in a 3.0 spec) or JSON
+  Schema draft-07 (`application/schema+json;version=draft-07`, or `+yaml`). 2.x declares the
+  format as the message's `schemaFormat`, 3.0 as a payload `{schemaFormat, schema}`. Any other
+  format, such as an Avro or Protobuf payload, stops the run naming it; for Avro, pass the avsc
+  with `-format avro` instead
+- 3.0 templated addresses such as `orders.{region}` stop the run when they could name the Kafka
+  topic: Topic parameters are not supported yet
 - `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
   binding, the Key schema and the payload schema, as JSON Pointers (`~1`, `~0` and
   percent-escapes decode)
