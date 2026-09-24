@@ -238,9 +238,17 @@ spec's Message types play no part. AsyncAPI 3.0 documents are refused at load (3
 tracked in #76).
 
 Every spec mistake stops the run with an error naming the message: a broken `$ref`, a missing
-payload, or a Key binding that is declared but not a schema. It supports:
+payload, a Key binding that is declared but not a schema, or a payload in a format the tool does
+not read. It supports:
 
 - `publish` and `subscribe` operations, and `message.oneOf`
+- Message `traits`, inline or `$ref`, merged into the message with JSON Merge Patch in the order
+  listed, so a trait overrides the message's own field (as AsyncAPI 2.x specifies): a trait can
+  declare the Key binding, for instance
+- Payloads in JSON Schema: no `schemaFormat`, the AsyncAPI Schema format
+  (`application/vnd.aai.asyncapi[+json|+yaml];version=2.x.y`) or JSON Schema draft-07
+  (`application/schema+json;version=draft-07`, or `+yaml`). Any other format, such as an Avro or
+  Protobuf payload, stops the run naming it; for Avro, pass the avsc with `-format avro` instead
 - `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
   binding, the Key schema and the payload schema, as JSON Pointers (`~1`, `~0` and
   percent-escapes decode)

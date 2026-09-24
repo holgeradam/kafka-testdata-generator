@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-08-23). Decisions 1 and 5 amended (2026-09-23, issue #73).
+Accepted (2026-08-23). Decisions 1 and 5 amended (2026-09-23, issue #73). Decision 2 extended to trait merges (2026-09-24, issue #81).
 
 ## Context
 
@@ -61,3 +61,7 @@ A schema is therefore self-contained: the generator and the JSON key checker res
 
 Decision 5 is finished rather than reopened. One walk over the decoded spec reads a Kafka topic's Message types, resolving a `$ref` wherever the spec may use one: a spec entry's bindings, an operation's message, a `oneOf` variant, a message's bindings, the kafka binding, the key and the schemas. References are JSON Pointers (RFC 6901): percent-encoding decodes, and `~1`/`~0` unescape. What the walk cannot read is an error naming the Message type; a broken reference is never replaced by another operation's message or reported as "no message". The typed struct decode and its `mapToStruct` round-trip, and `generator.normalizeSchema`, went with the old mechanisms. Decision 1's invariant-guaranteed `map[string]any` return is untouched.
 
+
+## Amendment (2026-09-24, issue #81)
+
+A message's `traits` are merged into it with JSON Merge Patch (RFC 7386) before the walk reads it; in 2.x a trait overrides the message's own field. Merge Patch knows nothing of `$ref`, so the merge resolves one wherever both the message and the trait hold an object under the same key, and a trait extends a referenced binding instead of being shadowed by the `$ref`. Where only one side declares a value it is copied as written, `$ref` included, and resolved by the walk as before. Two identical `$ref`s merge to that `$ref` unexpanded, so a message and a trait naming the same cyclic schema never follow the cycle; merges that descend more than 64 levels stop with an error. Merging copies, so the decoded spec stays unchanged for every other Message type.
