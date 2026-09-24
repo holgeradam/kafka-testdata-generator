@@ -3,8 +3,10 @@
 // and an optional Key binding. The spec is decoded once into a JSON-normalized
 // map, and one walk resolves every $ref on the way - at an entry's bindings, an
 // operation's message, a oneOf variant, a message's bindings, the kafka
-// binding, the key, and inside the schemas (ADR-0005). What the walk cannot
-// read is an error naming the Message type, never a silent fallback.
+// binding, the key, and inside the schemas (ADR-0005). A message's traits are
+// merged into it before it is read, and its payload is read only in a JSON
+// Schema format (#81). What the walk cannot read is an error naming the
+// Message type, never a silent fallback.
 package asyncapi
 
 import (
@@ -215,36 +217,66 @@ func (c *collector) message(node any, where string) error {
 		return nil
 	}
 
-	name := where
-	if n, ok := msg["name"].(string); ok && n != "" {
-		name = n
-	} else if ref != "" {
-		name = lastToken(ref)
-	}
-
-	if msg["payload"] == nil {
-		return fmt.Errorf("message %s declares no payload", name)
-	}
-	payload, err := c.d.schema(msg["payload"])
-	if err != nil {
-		return fmt.Errorf("message %s: payload: %w", name, err)
-	}
-	mt := MessageType{Name: name, Payload: payload}
-
-	kafka, err := c.d.kafkaBinding(msg["bindings"], "message "+name)
+	declared := messageName(msg, ref, where)
+	traits, err := c.d.traits(msg, declared)
 	if err != nil {
 		return err
 	}
-	if kafka != nil && kafka["key"] != nil {
-		if _, ok := kafka["key"].(map[string]any); !ok {
-			return fmt.Errorf("message %s: bindings.kafka.key must be a schema object", name)
+	for _, trait := range traits { // 2.x: a trait overrides the message's own field
+		merged, err := c.d.mergePatch(msg, trait, "message "+declared, 0)
+		if err != nil {
+			return err
 		}
-		if mt.KeyBinding, err = c.d.schema(kafka["key"]); err != nil {
-			return fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
-		}
+		msg = merged.(map[string]any)
+	}
+	mt, err := c.d.messageType(msg, messageName(msg, ref, where))
+	if err != nil {
+		return err
 	}
 	c.types = append(c.types, mt)
 	return nil
+}
+
+// messageName names a message: its name, else its component key, else where
+// it is declared.
+func messageName(msg map[string]any, ref, where string) string {
+	if n, ok := msg["name"].(string); ok && n != "" {
+		return n
+	}
+	if ref != "" {
+		return lastToken(ref)
+	}
+	return where
+}
+
+// messageType reads a message, its traits already merged, into a Message
+// type: its payload, in a format the tool reads, and its Key binding.
+func (d *Document) messageType(msg map[string]any, name string) (MessageType, error) {
+	if msg["payload"] == nil {
+		return MessageType{}, fmt.Errorf("message %s declares no payload", name)
+	}
+	if err := checkSchemaFormat(msg, name); err != nil {
+		return MessageType{}, err
+	}
+	payload, err := d.schema(msg["payload"])
+	if err != nil {
+		return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
+	}
+	mt := MessageType{Name: name, Payload: payload}
+
+	kafka, err := d.kafkaBinding(msg["bindings"], "message "+name)
+	if err != nil {
+		return MessageType{}, err
+	}
+	if kafka != nil && kafka["key"] != nil {
+		if _, ok := kafka["key"].(map[string]any); !ok {
+			return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key must be a schema object", name)
+		}
+		if mt.KeyBinding, err = d.schema(kafka["key"]); err != nil {
+			return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
+		}
+	}
+	return mt, nil
 }
 
 // object resolves node through any $ref chain and requires an object there.
