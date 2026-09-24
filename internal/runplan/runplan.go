@@ -227,7 +227,7 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	if err != nil {
 		return &Error{Flag: "spec", Detail: "loading spec", Err: err}
 	}
-	types, err := doc.MessageTypes(*f.topic)
+	topic, err := doc.Topic(*f.topic)
 	if err != nil {
 		return &Error{Flag: "topic", Detail: "reading the spec", Err: err}
 	}
@@ -236,7 +236,8 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	// stream in both wire formats (ADR-0008 decision 4), and so do the Key
 	// reuse decisions.
 	opts.Synth = synth.New(*f.seed, f.now.now)
-	opts.MessageTypes = types
+	opts.MessageTypes = topic.MessageTypes
+	opts.TopicParameters = topic.Parameters
 	parts, err := format.Build(opts)
 	if err != nil {
 		return err

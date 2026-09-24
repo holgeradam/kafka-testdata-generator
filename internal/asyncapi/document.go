@@ -87,14 +87,39 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 	return normalized, nil
 }
 
-// MessageTypes returns every Message type the spec declares for a Kafka topic,
-// in a stable order. A component message referenced more than once is one
-// Message type.
-func (d *Document) MessageTypes(topic string) ([]MessageType, error) {
+// Topic is what the spec declares for one Kafka topic.
+type Topic struct {
+	// MessageTypes are the Message types of the Kafka topic, in a stable
+	// order. A component message referenced more than once is one.
+	MessageTypes []MessageType
+	// Parameters are the Topic parameters -topic fills in a templated 3.0
+	// address, in address order; none for a literal address.
+	Parameters []TopicParameter
+}
+
+// TopicParameter is a named placeholder in a Kafka topic's address template,
+// such as region in orders.{region}, with the value -topic fills it with.
+type TopicParameter struct {
+	Name  string
+	Value string
+	// Location is the parameter's payload location as written, e.g.
+	// $message.payload#/region, and Pointer its JSON Pointer tokens into the
+	// Payload; both empty when it declares none. The same parameter appears
+	// once per distinct location the spec entries declare for it.
+	Location string
+	Pointer  []string
+}
+
+// Topic reads what the spec declares for a Kafka topic.
+func (d *Document) Topic(name string) (*Topic, error) {
 	if d.major == 3 {
-		return d.messageTypes3(topic)
+		return d.topic3(name)
 	}
-	return d.messageTypes2(topic)
+	types, err := d.messageTypes2(name)
+	if err != nil {
+		return nil, err
+	}
+	return &Topic{MessageTypes: types}, nil
 }
 
 // collector gathers the Message types of one Kafka topic, reading each

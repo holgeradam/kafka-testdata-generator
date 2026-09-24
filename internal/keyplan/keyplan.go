@@ -226,3 +226,22 @@ func ParsePath(path string) ([]Step, error) {
 	}
 	return steps, nil
 }
+
+// Put plants value into payload at path, as Apply plants the Key: for a value
+// planted beside the Key, such as a Topic parameter's (#83). The path must
+// have been checked against the Payload schema, so a miss is a defect.
+func Put(payload any, path []Step, value any) error {
+	return plant(payload, path, value)
+}
+
+// Overlap reports whether one path leads to or into the other, so planting
+// both would have one overwrite the other.
+func Overlap(a, b []Step) bool {
+	n := min(len(a), len(b))
+	for i := range n {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

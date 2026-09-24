@@ -43,7 +43,9 @@ func (Format) Check(opts wire.Options) error {
 // a malformed schema surfaces a typed error before any pipeline work (ADR-0007
 // decision 4). The models drive generation; their raw avsc is what the
 // AvroEncoder registers. The Message schema and key binding are not consulted:
-// under AVRO the avsc governs.
+// under AVRO the avsc governs. A Topic parameter's payload location is walked
+// through the value avsc instead, and its value planted into every Payload
+// (#83).
 func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	value, err := loadAvsc(opts.AvroSchema)
 	if err != nil {
@@ -56,9 +58,14 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		}
 	}
 
+	plants, err := topicParameters(value, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	gen := avro.NewGenerator(opts.Synth)
 	parts := &wire.Parts{
-		Values:  &boundGenerator{gen: gen, model: value},
+		Values:  &boundGenerator{gen: gen, model: value, plants: plants},
 		Encoder: encoderFor(opts, value, key),
 	}
 	// A key binding declares a JSON-schema-shaped Key; generating one would
@@ -108,11 +115,47 @@ func loadAvsc(path string) (*avro.Schema, error) {
 	return avro.Parse(b)
 }
 
-// boundGenerator binds an avsc model to the generator: the value avsc for the
-// Payload, the key avsc for the Key (ADR-0007 decision 3).
-type boundGenerator struct {
-	gen   *avro.Generator
-	model *avro.Schema
+// topicParameters checks each Topic parameter's payload location against the
+// value avsc, before any record exists: the location must be guaranteed, as a
+// -keyPath must under AVRO, the type there must hold the value, and no two
+// plantings, the Key's included, may land in the same field. It returns what
+// to plant into each Payload.
+func topicParameters(value *avro.Schema, opts wire.Options) (wire.Plants, error) {
+	var plants wire.Plants
+	for _, tp := range opts.TopicParameters {
+		if tp.Pointer == nil {
+			continue
+		}
+		steps, at, err := avro.Locate(value, tp.Pointer)
+		if err != nil {
+			return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: %v", tp.Name, tp.Location, err)}
+		}
+		if err := avro.HoldsString(at, tp.Value, tp.Location); err != nil {
+			return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: %v", tp.Name, err)}
+		}
+		if plants, err = plants.Add(tp, steps, opts.KeyPath); err != nil {
+			return nil, err
+		}
+	}
+	return plants, nil
 }
 
-func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }
+// boundGenerator binds an avsc model to the generator: the value avsc for the
+// Payload, with the Topic parameter values planted into each, the key avsc
+// for the Key (ADR-0007 decision 3).
+type boundGenerator struct {
+	gen    *avro.Generator
+	model  *avro.Schema
+	plants wire.Plants
+}
+
+func (g *boundGenerator) Value() (any, error) {
+	v, err := g.gen.Value(g.model.Root)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.plants.Apply(v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}

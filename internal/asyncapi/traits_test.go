@@ -193,7 +193,7 @@ channels:
 components:
   messageTraits: {}
 `)
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, "OrderCreated", c.want)
 		})
 	}
@@ -260,7 +260,7 @@ channels:
         `+field+`
         payload: {type: record, name: OrderCreated, fields: []}
 `)
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, "payload of OrderCreated is ", ", which the tool does not read")
 		})
 	}
@@ -280,7 +280,7 @@ channels:
         schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
         payload: {type: record, name: OrderCreated, fields: []}
 `)
-	_, err := doc.MessageTypes("orders")
+	_, err := messageTypes(doc, "orders")
 	want := "payload of OrderCreated is application/vnd.apache.avro;version=1.9.0, which the tool does not read"
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
@@ -301,6 +301,6 @@ channels:
         schemaFormat: 7
         payload: {type: object}
 `)
-	_, err := doc.MessageTypes("orders")
+	_, err := messageTypes(doc, "orders")
 	wantErr(t, err, "OrderCreated", "schemaFormat must be a string")
 }

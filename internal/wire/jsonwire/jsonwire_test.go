@@ -297,3 +297,116 @@ func TestBuildChecksKeyPathInEveryType(t *testing.T) {
 		t.Errorf("err = %v, want it to name OrderUpdated only", err)
 	}
 }
+
+// regionSchema is a Payload schema of one Message type, kind name, whose
+// required region field only takes two lowercase letters.
+func regionSchema(name string) map[string]any {
+	s := kindSchema(name)
+	s["required"] = append(s["required"].([]any), "region", "meta")
+	props := s["properties"].(map[string]any)
+	props["region"] = map[string]any{"type": "string", "pattern": "^[a-z]{2}$"}
+	props["meta"] = map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"tenant": map[string]any{"type": "string"}},
+	}
+	return s
+}
+
+func regionParameter(value string) asyncapi.TopicParameter {
+	return asyncapi.TopicParameter{Name: "region", Value: value, Location: "$message.payload#/region", Pointer: []string{"region"}}
+}
+
+// TestBuildPlantsTopicParameters proves a Topic parameter's value lands at its
+// location in every Payload of every Message type (#83), and a parameter with
+// no location plants nothing.
+func TestBuildPlantsTopicParameters(t *testing.T) {
+	opts := mixOptions(3,
+		asyncapi.MessageType{Name: "OrderCreated", Payload: regionSchema("created")},
+		asyncapi.MessageType{Name: "OrderUpdated", Payload: regionSchema("updated")},
+	)
+	opts.TopicParameters = []asyncapi.TopicParameter{regionParameter("eu"), {Name: "env", Value: "prod"}}
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	seen := map[any]bool{}
+	for i := 0; i < 50; i++ {
+		v, err := parts.Values.Value()
+		if err != nil {
+			t.Fatalf("Value: %v", err)
+		}
+		p := v.(map[string]any)
+		seen[p["kind"]] = true
+		if p["region"] != "eu" {
+			t.Fatalf("record %d: region = %v, want the Topic parameter's eu", i, p["region"])
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("Message types seen = %v, want both", seen)
+	}
+}
+
+// TestBuildRejectsTopicParameters proves each Topic parameter the run cannot
+// honour is refused before a record exists, each with its own error.
+func TestBuildRejectsTopicParameters(t *testing.T) {
+	created := asyncapi.MessageType{Name: "OrderCreated", Payload: regionSchema("created")}
+	bare := asyncapi.MessageType{Name: "OrderCancelled", Payload: kindSchema("cancelled")}
+	cases := map[string]struct {
+		types   []asyncapi.MessageType
+		param   asyncapi.TopicParameter
+		keyPath string
+		flag    string
+		want    string
+	}{
+		"unguaranteed": {
+			[]asyncapi.MessageType{created}, asyncapi.TopicParameter{Name: "tenant", Value: "acme", Location: "$message.payload#/meta/tenant", Pointer: []string{"meta", "tenant"}}, "", "topic",
+			`Topic parameter tenant: location $message.payload#/meta/tenant: at "/meta/tenant": property "tenant" is not required`,
+		},
+		"missing in one Message type": {
+			[]asyncapi.MessageType{created, bare}, regionParameter("eu"), "", "topic",
+			`Topic parameter region: location $message.payload#/region: in Message type OrderCancelled: at "/region": the object has no property "region"`,
+		},
+		"value breaks the field": {
+			[]asyncapi.MessageType{created}, regionParameter("EU"), "", "topic",
+			"Topic parameter region: value EU does not conform to the Payload field at $message.payload#/region: does not match pattern",
+		},
+		"clash with -keyPath": {
+			[]asyncapi.MessageType{created}, regionParameter("eu"), "region", "keyPath",
+			"Topic parameter region: location $message.payload#/region overlaps -keyPath region; both would plant into the same field",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			for i := range c.types {
+				c.types[i].KeyBinding = map[string]any{"type": "string"}
+			}
+			opts := mixOptions(1, c.types...)
+			opts.TopicParameters = []asyncapi.TopicParameter{c.param}
+			opts.KeyPath = c.keyPath
+			_, err := Format{}.Build(opts)
+			var we *wire.Error
+			if !errors.As(err, &we) || we.Flag != c.flag {
+				t.Fatalf("err = %v, want a *wire.Error on -%s", err, c.flag)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want it to mention %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestBuildRejectsParametersPlantingTogether proves two Topic parameters whose
+// locations overlap are refused, rather than one silently overwriting the
+// other.
+func TestBuildRejectsParametersPlantingTogether(t *testing.T) {
+	opts := mixOptions(1, asyncapi.MessageType{Name: "OrderCreated", Payload: regionSchema("created")})
+	opts.TopicParameters = []asyncapi.TopicParameter{
+		regionParameter("eu"),
+		{Name: "area", Value: "us", Location: "$message.payload#/region", Pointer: []string{"region"}},
+	}
+	_, err := Format{}.Build(opts)
+	want := "Topic parameters region and area plant into the same field ($message.payload#/region and $message.payload#/region)"
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
