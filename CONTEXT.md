@@ -13,8 +13,8 @@ The Kafka topic a run produces to, exactly one per run, named by `-topic`. The A
 _Avoid_: channel, topic (alone)
 
 **Topic parameter**:
-A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (AsyncAPI 3.0). Not supported yet: a template that could name the Kafka topic stops the run.
-_Avoid_: channel parameter, address parameter
+A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (AsyncAPI 3.0). `-topic` fills it, a declared enum must hold the value, and a declared payload location receives it in every message, checked before the run starts like a Key path.
+_Avoid_: channel parameter, address parameter, variable
 
 **Message**:
 The meaningful content produced as one unit: a Key and a Payload. A run generates one message per Count, and a Kafka record carries it.

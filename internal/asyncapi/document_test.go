@@ -37,7 +37,7 @@ func keyBinding(doc *Document, topic string) (map[string]any, error) {
 }
 
 func onlyType(doc *Document, topic string) (MessageType, error) {
-	types, err := doc.MessageTypes(topic)
+	types, err := messageTypes(doc, topic)
 	if err != nil {
 		return MessageType{}, err
 	}
@@ -45,6 +45,15 @@ func onlyType(doc *Document, topic string) (MessageType, error) {
 		return MessageType{}, fmt.Errorf("Kafka topic %q has %d Message types (%s), want 1", topic, len(types), names(types))
 	}
 	return types[0], nil
+}
+
+// messageTypes reads the Message types of a Kafka topic.
+func messageTypes(doc *Document, topic string) ([]MessageType, error) {
+	t, err := doc.Topic(topic)
+	if err != nil {
+		return nil, err
+	}
+	return t.MessageTypes, nil
 }
 
 // names lists Message type names the way the tests compare them.
@@ -741,7 +750,7 @@ channels:
 	}
 	// Both entries belong to the Kafka topic, so both inline messages are
 	// its Message types, named by where they are declared (#34 decision 2).
-	types, err := doc.MessageTypes("orders")
+	types, err := messageTypes(doc, "orders")
 	if err != nil {
 		t.Fatalf("MessageTypes: %v", err)
 	}
@@ -790,7 +799,7 @@ components:
   messages:
     Order: {payload: {type: object}}
 `)
-	_, err := doc.MessageTypes("orders")
+	_, err := messageTypes(doc, "orders")
 	wantErr(t, err, "#/components/messages/Typo", "orders publish")
 }
 
@@ -816,7 +825,7 @@ components:
     OrderUpdated: {payload: {type: object}}
 `)
 	for i := 0; i < 20; i++ {
-		types, err := doc.MessageTypes("orders")
+		types, err := messageTypes(doc, "orders")
 		if err != nil {
 			t.Fatalf("MessageTypes: %v", err)
 		}
@@ -841,7 +850,7 @@ components:
   messages:
     Order: {payload: {type: object}}
 `)
-	types, err := doc.MessageTypes("orders")
+	types, err := messageTypes(doc, "orders")
 	if err != nil {
 		t.Fatalf("MessageTypes: %v", err)
 	}
@@ -905,7 +914,7 @@ channels:
         `+binding+`
         payload: {type: object}
 `)
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, "Order")
 		})
 	}
@@ -958,7 +967,7 @@ channels:
       created: {payload: {type: object}}
       cancelled: {payload: {type: object}}
 `)
-	_, err := doc.MessageTypes("orders")
+	_, err := messageTypes(doc, "orders")
 	wantErr(t, err, "spec entry orders", "messages", "AsyncAPI 3.0")
 }
 

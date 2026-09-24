@@ -40,7 +40,8 @@ func (Format) Check(opts wire.Options) error {
 // seeded stream (#74). The Key comes from the Key binding, which every Message
 // type must declare identically, since a Key identifies one Entity across them
 // (#34 decision 3), and which -keyPath therefore requires. A -keyPath is checked
-// against every Message type's Payload schema.
+// against every Message type's Payload schema, and so is each Topic
+// parameter's location, whose value is planted into every Payload (#83).
 func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	types := opts.MessageTypes
 	if len(types) == 0 {
@@ -54,10 +55,15 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		return nil, &wire.Error{Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
 	}
 
+	plants, err := topicParameters(types, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	gen := generator.New(opts.Synth)
 	payloads := make([]*boundGenerator, len(types))
 	for i, mt := range types {
-		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload}
+		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload, plants: plants[i]}
 	}
 
 	parts := &wire.Parts{
@@ -151,11 +157,53 @@ func (c checkers) Check(path []keyplan.Step) error {
 	return nil
 }
 
+// topicParameters checks each Topic parameter's payload location against
+// every Message type, before any record exists: the location must be
+// guaranteed, as a -keyPath must, the value must conform to the field's schema
+// there, and no two plantings, the Key's included, may land in the same
+// field. It returns what to plant into each Message type's Payloads.
+func topicParameters(types []asyncapi.MessageType, opts wire.Options) ([]wire.Plants, error) {
+	plants := make([]wire.Plants, len(types))
+	for _, tp := range opts.TopicParameters {
+		if tp.Pointer == nil {
+			continue
+		}
+		for i, mt := range types {
+			inType := ""
+			if len(types) > 1 {
+				inType = "in Message type " + mt.Name + ": "
+			}
+			steps, field, err := generator.Locate(mt.Payload, tp.Pointer)
+			if err != nil {
+				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: %s%v", tp.Name, tp.Location, inType, err)}
+			}
+			if err := generator.Conforms(field, tp.Value); err != nil {
+				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: value %s does not conform to the Payload field at %s: %s%v", tp.Name, tp.Value, tp.Location, inType, err)}
+			}
+			if plants[i], err = plants[i].Add(tp, steps, opts.KeyPath); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return plants, nil
+}
+
 // boundGenerator binds a JSON Schema to the generator: a Message type's
-// Payload schema, or the Key binding.
+// Payload schema, with the Topic parameter values planted into each Payload,
+// or the Key binding.
 type boundGenerator struct {
 	gen    *generator.Generator
 	schema map[string]any
+	plants wire.Plants
 }
 
-func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
+func (g *boundGenerator) Value() (any, error) {
+	v, err := g.gen.Value(g.schema)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.plants.Apply(v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}

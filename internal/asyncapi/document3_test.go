@@ -63,7 +63,7 @@ channels:
 		"bound":     `the spec entry bound names Kafka topic "orders"`,
 		"addressed": `the spec entry addressed names Kafka topic "payments"`,
 	} {
-		_, err := doc.MessageTypes(topic)
+		_, err := messageTypes(doc, topic)
 		wantErr(t, err, hint)
 	}
 }
@@ -80,7 +80,7 @@ channels:
     `+address+`
     messages: {Order: {payload: {type: object}}}
 `)
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, `Kafka topic "orders" not found`, "the spec entry orders has no address, so it names no Kafka topic")
 		})
 	}
@@ -161,7 +161,7 @@ components:
     OrderUpdated: {payload: {type: object}}
 `)
 	for i := 0; i < 20; i++ {
-		types, err := doc.MessageTypes("orders")
+		types, err := messageTypes(doc, "orders")
 		if err != nil {
 			t.Fatalf("MessageTypes: %v", err)
 		}
@@ -290,32 +290,9 @@ channels:
         name: OrderCreated
         payload: {schemaFormat: '`+format+`', schema: {type: record, name: OrderCreated, fields: []}}
 `)
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, "payload of OrderCreated is "+format+", which the tool does not read")
 		})
-	}
-}
-
-// TestV3TemplatedAddressRefused proves a channel whose address template could
-// be the Kafka topic stops the run until Topic parameters arrive, while a
-// template that cannot match stays out of the way.
-func TestV3TemplatedAddressRefused(t *testing.T) {
-	doc := loadSpec(t, head3+`
-channels:
-  orders:
-    address: 'orders.{region}'
-    messages: {created: {payload: {type: object}}}
-  payments:
-    address: payments
-    messages: {paid: {payload: {type: object}}}
-`)
-	_, err := doc.MessageTypes("orders.eu")
-	want := "the spec entry orders has a templated address (orders.{region}); Topic parameters are not supported yet"
-	if err == nil || err.Error() != want {
-		t.Errorf("err = %v, want %q", err, want)
-	}
-	if _, err := onlyType(doc, "payments"); err != nil {
-		t.Errorf("payments: %v, want the non-matching template ignored", err)
 	}
 }
 
@@ -348,7 +325,7 @@ func TestV3RejectMistakes(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			doc := loadSpec(t, head3+"channels:\n  orders:"+c.channel+"\n")
-			_, err := doc.MessageTypes("orders")
+			_, err := messageTypes(doc, "orders")
 			wantErr(t, err, c.want)
 		})
 	}

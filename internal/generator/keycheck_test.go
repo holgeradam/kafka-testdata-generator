@@ -194,3 +194,16 @@ func TestKeyCheckerTypeCompatibility(t *testing.T) {
 		})
 	}
 }
+
+// TestKeyCheckerNamesTypesWithTheirArticle pins the article: "an array", "an
+// object", "an integer", never "a array".
+func TestKeyCheckerNamesTypesWithTheirArticle(t *testing.T) {
+	err := checkPath(t, orderSchema(), stringKey(), "items.sku")
+	if err == nil || !strings.Contains(err.Error(), "the schema here is an array, not an object") {
+		t.Errorf("err = %v, want it to say an array", err)
+	}
+	err = checkPath(t, orderSchema(), stringKey(), "id.x")
+	if err == nil || !strings.Contains(err.Error(), "the schema here is a string, not an object") {
+		t.Errorf("err = %v, want it to say a string", err)
+	}
+}

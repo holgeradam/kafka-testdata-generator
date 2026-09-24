@@ -35,7 +35,7 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 	current := c.schema
 	depth := 0
 	for i, step := range path {
-		resolved, d, err := c.resolve(current, depth)
+		resolved, d, err := resolveGuaranteed(c.defs, current, depth)
 		if err != nil {
 			return pathError(path, i, err)
 		}
@@ -46,7 +46,7 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 		}
 		current = next
 	}
-	final, _, err := c.resolve(current, depth)
+	final, _, err := resolveGuaranteed(c.defs, current, depth)
 	if err != nil {
 		return pathError(path, len(path)-1, err)
 	}
@@ -56,11 +56,11 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 	return nil
 }
 
-// resolve follows $ref nodes and merges allOf, so the caller sees the schema
-// generation actually walks. It refuses alternatives, whose branch is chosen
-// per record, and a $ref chain past the depth budget, where generation truncates
-// the subtree instead of producing the field.
-func (c *KeyChecker) resolve(schema map[string]any, depth int) (map[string]any, int, error) {
+// resolveGuaranteed follows $ref nodes into defs and merges allOf, so the
+// caller sees the schema generation actually walks. It refuses alternatives,
+// whose branch is chosen per record, and a $ref chain past the depth budget,
+// where generation truncates the subtree instead of producing the field.
+func resolveGuaranteed(defs, schema map[string]any, depth int) (map[string]any, int, error) {
 	for {
 		if _, ok := schema["oneOf"]; ok {
 			return nil, depth, fmt.Errorf("the schema here is a oneOf, so the branch differs per record")
@@ -80,7 +80,7 @@ func (c *KeyChecker) resolve(schema map[string]any, depth int) (map[string]any, 
 		if !ok {
 			return schema, depth, nil
 		}
-		target, err := lookupDef(c.defs, ref)
+		target, err := lookupDef(defs, ref)
 		if err != nil {
 			return nil, depth, err
 		}
@@ -159,12 +159,18 @@ func (c *KeyChecker) holds(at map[string]any) error {
 	}
 }
 
-// describeType names what a schema node is, for error messages.
+// describeType names what a schema node is, for error messages, with its
+// article: "an array", "a string".
 func describeType(schema map[string]any) string {
-	if typ, ok := schema["type"].(string); ok {
+	typ, ok := schema["type"].(string)
+	switch {
+	case !ok:
+		return "untyped"
+	case typ == "array" || typ == "object" || typ == "integer":
+		return "an " + typ
+	default:
 		return "a " + typ
 	}
-	return "untyped"
 }
 
 // pathError names the step that failed, so the message points at the part of

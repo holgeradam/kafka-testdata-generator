@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,5 +224,92 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 	}
 	if len(parts.Warnings) != 0 {
 		t.Errorf("warnings = %q, want none without a binding", parts.Warnings)
+	}
+}
+
+const regionAvsc = `{"type":"record","name":"Order","fields":[
+	{"name":"id","type":"string"},
+	{"name":"region","type":"string"},
+	{"name":"zone","type":{"type":"enum","name":"Zone","symbols":["eu","us"]}},
+	{"name":"ref","type":{"type":"string","logicalType":"uuid"}},
+	{"name":"note","type":["null","string"]},
+	{"name":"count","type":"int"},
+	{"name":"meta","type":{"type":"record","name":"Meta","fields":[{"name":"tenant","type":"string"}]}}
+]}`
+
+func parameter(name, value string, pointer ...string) asyncapi.TopicParameter {
+	return asyncapi.TopicParameter{Name: name, Value: value, Location: "$message.payload#/" + strings.Join(pointer, "/"), Pointer: pointer}
+}
+
+// TestBuildPlantsTopicParameters proves under AVRO a Topic parameter's value
+// lands at its location in every Payload, walked through the value avsc
+// (#83): a string, an enum symbol, a uuid and a nested record field.
+func TestBuildPlantsTopicParameters(t *testing.T) {
+	opts := options(t)
+	opts.AvroSchema = writeAvsc(t, regionAvsc)
+	const uuid = "0b7e8c3a-6f2d-4a51-9c1e-2d3f4a5b6c7d"
+	opts.TopicParameters = []asyncapi.TopicParameter{
+		parameter("region", "eu", "region"),
+		parameter("zone", "us", "zone"),
+		parameter("ref", uuid, "ref"),
+		parameter("tenant", "acme", "meta", "tenant"),
+		{Name: "env", Value: "prod"},
+	}
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		v, err := parts.Values.Value()
+		if err != nil {
+			t.Fatalf("Value: %v", err)
+		}
+		p := v.(map[string]any)
+		if p["region"] != "eu" || p["zone"] != "us" || p["ref"] != uuid || p["meta"].(map[string]any)["tenant"] != "acme" {
+			t.Fatalf("record %d = %v, want every Topic parameter planted", i, p)
+		}
+	}
+}
+
+// TestBuildRejectsTopicParameters proves under AVRO each Topic parameter the
+// avsc cannot hold is refused before a record exists.
+func TestBuildRejectsTopicParameters(t *testing.T) {
+	cases := map[string]struct {
+		param   asyncapi.TopicParameter
+		keyPath string
+		flag    string
+		want    string
+	}{
+		"union": {parameter("note", "x", "note"), "", "topic",
+			`Topic parameter note: location $message.payload#/note: at "/note": the schema here is a union, so the branch differs per record and the value may be null`},
+		"missing field": {parameter("x", "x", "nope"), "", "topic",
+			`Topic parameter x: location $message.payload#/nope: at "/nope": record Order has no field "nope"`},
+		"not a string": {parameter("count", "7", "count"), "", "topic",
+			"Topic parameter count: the Payload field at $message.payload#/count is int, which cannot hold the parameter's string value"},
+		"not a symbol": {parameter("zone", "apac", "zone"), "", "topic",
+			"Topic parameter zone: value apac is not a symbol of enum Zone [eu, us]"},
+		"not a uuid": {parameter("ref", "eu", "ref"), "", "topic",
+			"Topic parameter ref: value eu is not a uuid, which the Payload field at $message.payload#/ref (string (uuid)) requires"},
+		"clash with -keyPath": {parameter("tenant", "acme", "meta", "tenant"), "meta", "keyPath",
+			"Topic parameter tenant: location $message.payload#/meta/tenant overlaps -keyPath meta; both would plant into the same field"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			opts := options(t)
+			opts.AvroSchema = writeAvsc(t, regionAvsc)
+			opts.TopicParameters = []asyncapi.TopicParameter{c.param}
+			if c.keyPath != "" {
+				opts.KeyPath = c.keyPath
+				opts.AvroKeySchema = writeAvsc(t, `{"type":"record","name":"Meta","fields":[{"name":"tenant","type":"string"}]}`)
+			}
+			_, err := Format{}.Build(opts)
+			var we *wire.Error
+			if !errors.As(err, &we) || we.Flag != c.flag {
+				t.Fatalf("err = %v, want a *wire.Error on -%s", err, c.flag)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want it to mention %q", err, c.want)
+			}
+		})
 	}
 }

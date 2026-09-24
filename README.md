@@ -267,8 +267,7 @@ not read. It supports:
   format as the message's `schemaFormat`, 3.0 as a payload `{schemaFormat, schema}`. Any other
   format, such as an Avro or Protobuf payload, stops the run naming it; for Avro, pass the avsc
   with `-format avro` instead
-- 3.0 templated addresses such as `orders.{region}` stop the run when they could name the Kafka
-  topic: Topic parameters are not supported yet
+- 3.0 templated addresses such as `orders.{region}`, with their Topic parameters (below)
 - `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
   binding, the Key schema and the payload schema, as JSON Pointers (`~1`, `~0` and
   percent-escapes decode)
@@ -287,6 +286,44 @@ not read. It supports:
 - Object constraints: `required` fields
 - Enum values and const
 - `allOf`, `oneOf`, `anyOf` composition
+
+### Topic Parameters
+
+A 3.0 address can be a template with **Topic parameters**, such as `region` in
+`orders.{region}`, for a family of Kafka topics. `-topic` fills them: `-topic orders.eu` finds
+the entry and gives `region` the value `eu`. A parameter declaring an `enum` must hold the value,
+and one declaring a payload `location` has the value planted into every record, in every Message
+type:
+
+```yaml
+channels:
+  regional:
+    address: 'orders.{region}'
+    parameters:
+      region:
+        enum: [eu, us]                        # -topic orders.apac stops the run
+        location: '$message.payload#/region'  # every record carries region: "eu"
+    messages:
+      created: {$ref: '#/components/messages/OrderCreated'}
+```
+
+```bash
+kafka-testdata-generator -spec regional.yaml -topic orders.eu -dry-run
+```
+
+Before any record is generated, the location is checked as `-keyPath` is: generation must put a
+field there in every record (required at every step, no `oneOf`/`anyOf` on the way), and the value
+must conform to that field's schema - its `pattern`, `enum`, `format`, `maxLength` and so on - so
+every record still conforms. Under `-format avro` the location is walked through the value avsc
+instead: record fields only, ending in a `string`, a `uuid` or an `enum` holding the value. Every
+mistake stops the run with its own error:
+
+- a value outside the parameter's `enum`, or one the field there does not accept
+- a location that is not guaranteed in some Message type, or that overlaps `-keyPath` or another
+  parameter's location
+- a header location (`$message.header#/...`): the tool generates no Kafka record headers
+- a `-topic` that fills templates in different ways, such as `orders.eu` against both
+  `orders.{region}` and `{env}.eu`, or against a template and a literal `orders.eu` address
 
 ### Supported Pattern Syntax
 

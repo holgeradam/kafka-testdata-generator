@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-08-23). Decisions 2 and 4 amended by ADR-0008 (2026-09-16).
+Accepted (2026-08-23). Decisions 2 and 4 amended by ADR-0008 (2026-09-16). Decision 3 amended (2026-09-24, issue #83).
 
 ## Context
 
@@ -39,3 +39,7 @@ Numeric bounds intersect (`max(minimums)`, `min(maxima)`), `required` unions, `p
 - Sandcastle #2 closes properly; silently-violating output classes are structurally eliminated.
 - Determinism claims match observable behaviour; reproducible runs need `-seed` plus `-now`.
 - Sequencing: lands after #12 (which moves normalization out of the generator); #13 (recursive depth walker) builds on the resulting `(any, error)` signature to avoid rework.
+
+## Amendment (2026-09-24, issue #83)
+
+Decision 3's validator is no longer test-only. A Topic parameter's value comes from `-topic`, not from generation, so nothing guarantees it conforms to the Payload field it is planted into. It is validated once, at startup, against that field's schema, format assertion included, and a mismatch stops the run naming the broken constraint. The validator therefore ships in the binary, behind one production wrapper (`generator.Conforms`), so swapping it still costs one file; the test helpers stay as they were. Decision 1 holds: no validation runs in the generation path, where Conformance still holds by construction. The dependency risk now reaches users, which is accepted for a maintained validator used only at startup.

@@ -8,6 +8,7 @@ package wire
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
@@ -50,6 +51,11 @@ type Options struct {
 	// they are used is the format's business: JSON mixes them, AVRO follows
 	// its avsc instead.
 	MessageTypes []asyncapi.MessageType
+	// TopicParameters are the values -topic fills a templated address with.
+	// Each one with a payload location is planted into every Payload, in
+	// either format, after the format has checked that the location is
+	// guaranteed and holds the value (#83).
+	TopicParameters []asyncapi.TopicParameter
 }
 
 // Parts is a run as its Wire format wires it.
@@ -67,6 +73,42 @@ type Parts struct {
 	// Warnings are diagnostics for the caller to print, such as a spec
 	// declaration the format ignores.
 	Warnings []string
+}
+
+// Plants are the Topic parameter values planted into each Payload, and where
+// (#83). A format builds them at Build, once each location has passed its
+// checks against the schema that governs the Payload.
+type Plants []Plant
+
+// Plant is one Topic parameter's value and the path it is planted along.
+type Plant struct {
+	Parameter asyncapi.TopicParameter
+	Path      []keyplan.Step
+}
+
+// Add appends a parameter's planting, refusing one whose path overlaps
+// -keyPath or an earlier planting: one would overwrite the other.
+func (ps Plants) Add(tp asyncapi.TopicParameter, path []keyplan.Step, keyPath string) (Plants, error) {
+	// A malformed -keyPath is reported by the Key plan; it overlaps nothing.
+	if steps, err := keyplan.ParsePath(keyPath); err == nil && keyplan.Overlap(path, steps) {
+		return nil, &Error{Flag: "keyPath", Detail: fmt.Sprintf("Topic parameter %s: location %s overlaps -keyPath %s; both would plant into the same field", tp.Name, tp.Location, keyPath)}
+	}
+	for _, other := range ps {
+		if keyplan.Overlap(path, other.Path) {
+			return nil, &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameters %s and %s plant into the same field (%s and %s)", other.Parameter.Name, tp.Name, other.Parameter.Location, tp.Location)}
+		}
+	}
+	return append(ps, Plant{Parameter: tp, Path: path}), nil
+}
+
+// Apply plants every value into payload.
+func (ps Plants) Apply(payload any) error {
+	for _, p := range ps {
+		if err := keyplan.Put(payload, p.Path, p.Parameter.Value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Error reports a run a Wire format rejects. Flag names the option at fault

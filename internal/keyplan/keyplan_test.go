@@ -173,3 +173,45 @@ func TestApplyMissingPathErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestPutPlantsAtPath proves Put writes a value where the path leads, for a
+// planted value other than the Key, such as a Topic parameter's.
+func TestPutPlantsAtPath(t *testing.T) {
+	payload := map[string]any{"meta": map[string]any{"region": "xx"}, "items": []any{map[string]any{"sku": "a"}}}
+	for path, value := range map[string]string{"meta.region": "eu", "items[0].sku": "b"} {
+		steps, err := ParsePath(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := Put(payload, steps, value); err != nil {
+			t.Fatalf("Put(%s): %v", path, err)
+		}
+	}
+	if payload["meta"].(map[string]any)["region"] != "eu" || payload["items"].([]any)[0].(map[string]any)["sku"] != "b" {
+		t.Errorf("payload = %v, want both values planted", payload)
+	}
+}
+
+// TestOverlap proves two paths overlap when one leads into or to the other,
+// so planting both would have one overwrite the other.
+func TestOverlap(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"region", "region", true},
+		{"meta", "meta.region", true},
+		{"meta.region", "meta", true},
+		{"items[0]", "items[0].sku", true},
+		{"meta.region", "meta.tenant", false},
+		{"items[0].sku", "items[1].sku", false},
+		{"region", "regions", false},
+	}
+	for _, c := range cases {
+		a, _ := ParsePath(c.a)
+		b, _ := ParsePath(c.b)
+		if got := Overlap(a, b); got != c.want {
+			t.Errorf("Overlap(%s, %s) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
