@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-09-25, issue #90, decisions of #84). Amends ADR-0007 decisions 3 and 6.
+Accepted (2026-09-25, issues #90 and #91, decisions of #84). Amends ADR-0007 decisions 3 and 6.
 
 ## Context
 
@@ -39,6 +39,15 @@ between schema languages.
    reached a second time becomes a reference by its full name, and a `$ref` cycle is refused,
    since Avro expresses recursion by name. The expanded avsc registers under `<topic>-value`,
    its Key binding under `<topic>-key`, exactly as the files do.
+7. **Several Avro Message types register as a union** (#91, #84 decisions 4-6). They are mixed
+   per record, as JSON mode mixes, and TopicNameStrategy keeps one subject per Kafka topic, so
+   `<topic>-value` holds a union: each record registers under its full name, and the union
+   lists the records by name with a schema reference to each. A named type several Message
+   types define identically registers once under its full name, before the records, which
+   reference it; defined differently, it stops the run. References name the version the
+   registry holds each subject at. Every record encodes against the union and is framed with
+   its ID; Dry run renders the record alone. To reach the Encoder, the Pipeline's Payload
+   generator now returns each Payload with the index of its Message type.
 
 ## Consequences
 
@@ -46,6 +55,8 @@ between schema languages.
   `-registry`.
 - The Run plan no longer picks the adapter by the `-format` value alone; it infers it from the
   spec and the flags, then hands the adapter the spec's Message types for its `Check`.
-- Several Avro Message types on one Kafka topic are refused until #91 registers them as a union.
+- Shared named types that refer to each other cannot be separate subjects, and stop the run;
+  so does a shared named type without a namespace used inside a namespaced record, which Avro
+  cannot name.
 - Error ordering changed for broken invocations: a spec that fails to load is now reported
   before a Wire format flag rule.

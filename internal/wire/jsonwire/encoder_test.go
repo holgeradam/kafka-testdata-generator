@@ -21,7 +21,7 @@ func TestJsonEncoderPayloadBytesAreJsonMarshal(t *testing.T) {
 	}
 
 	enc := JsonEncoder{}
-	_, payloadBytes, err := enc.Encode(nil, payload)
+	_, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: payload})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestJsonEncoderKeyPlainScalar(t *testing.T) {
 	enc := JsonEncoder{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			keyBytes, _, err := enc.Encode(tc.key, map[string]any{"x": 1})
+			keyBytes, _, err := enc.Encode(tc.key, pipeline.Generated{Payload: map[string]any{"x": 1}})
 			if err != nil {
 				t.Fatalf("Encode: %v", err)
 			}
@@ -71,7 +71,7 @@ func TestJsonEncoderKeyPlainScalar(t *testing.T) {
 // but the encoder must also handle it gracefully).
 func TestJsonEncoderNilKeyReturnsNilKeyBytes(t *testing.T) {
 	enc := JsonEncoder{}
-	keyBytes, payloadBytes, err := enc.Encode(nil, map[string]any{"x": 1})
+	keyBytes, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: map[string]any{"x": 1}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 	payload := map[string]any{"orderId": "abc-123"}
 	enc := JsonEncoder{}
 
-	keyBytes, payloadBytes, err := enc.Encode("abc-123", payload)
+	keyBytes, payloadBytes, err := enc.Encode("abc-123", pipeline.Generated{Payload: payload})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 // catches it; this test verifies the interface is referenced at runtime.
 func TestEncoderDeletionGuard(t *testing.T) {
 	var enc pipeline.Encoder = JsonEncoder{}
-	key, payload, err := enc.Encode("k", map[string]any{"v": 1})
+	key, payload, err := enc.Encode("k", pipeline.Generated{Payload: map[string]any{"v": 1}})
 	if err != nil {
 		t.Fatal(err)
 	}

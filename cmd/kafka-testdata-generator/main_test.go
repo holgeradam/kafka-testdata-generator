@@ -848,6 +848,59 @@ components:
 	}
 }
 
+// TestScenarioAvroMix is #91 end to end: a 3.0 spec declaring two Avro
+// Message types runs AVRO with no AVRO flags, and its Dry run shows records
+// of both, each in the Avro JSON encoding of its own record, without the
+// union's wrapper.
+func TestScenarioAvroMix(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `asyncapi: 3.0.0
+info: {title: Orders, version: '1'}
+channels:
+  orders:
+    address: orders
+    messages:
+      created:
+        name: OrderCreated
+        payload:
+          schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+          schema: {type: record, name: OrderCreated, namespace: com.acme, fields: [{name: kind, type: {type: enum, name: Created, symbols: [CREATED]}}, {name: billing, type: {$ref: '#/components/schemas/Address'}}]}
+      paid:
+        name: OrderPaid
+        payload:
+          schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+          schema: {type: record, name: OrderPaid, namespace: com.acme, fields: [{name: kind, type: {type: enum, name: Paid, symbols: [PAID]}}, {name: billing, type: {$ref: '#/components/schemas/Address'}}, {name: amount, type: double}]}
+components:
+  schemas:
+    Address: {type: record, name: Address, fields: [{name: city, type: string}]}
+`)
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders", "-dry-run", "-count", "20", "-seed", "3").Output()
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	kinds := map[string]int{}
+	for i, line := range filterJSONLines(string(out)) {
+		var p map[string]any
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+		kind := fmt.Sprint(p["kind"])
+		kinds[kind]++
+		if _, wrapped := p["com.acme.OrderPaid"]; wrapped {
+			t.Fatalf("record %d is wrapped in the union: %s", i, line)
+		}
+		if _, ok := p["billing"].(map[string]any); !ok {
+			t.Errorf("record %d: billing %v, want the shared Address record", i, p["billing"])
+		}
+		if _, paid := p["amount"]; paid != (kind == "PAID") {
+			t.Errorf("record %d: kind %s with fields %v, want each record in its own Message type's shape", i, kind, p)
+		}
+	}
+	if kinds["CREATED"] == 0 || kinds["PAID"] == 0 {
+		t.Errorf("Message types in the Dry run = %v, want both", kinds)
+	}
+}
+
 // testBinary is built once per package run: the scenarios below exercise the
 // real process, but they all exercise the same build.
 var testBinary string

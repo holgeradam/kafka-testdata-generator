@@ -122,40 +122,23 @@ type mix struct {
 	types []*boundGenerator
 }
 
-func (m *mix) Value() (any, error) {
-	if len(m.types) == 1 {
-		return m.types[0].Value()
+func (m *mix) Generate() (pipeline.Generated, error) {
+	i := 0
+	if len(m.types) > 1 {
+		i = m.synth.Pick(len(m.types))
 	}
-	return m.types[m.synth.Pick(len(m.types))].Value()
+	v, err := m.types[i].Value()
+	return pipeline.Generated{Type: i, Payload: v}, err
 }
 
 // everyType checks a key path against each Message type's Payload schema,
 // naming the Message type a rejection comes from.
 func everyType(types []asyncapi.MessageType, keyBinding map[string]any) keyplan.Checker {
-	c := make(checkers, len(types))
+	c := make(wire.EveryType, len(types))
 	for i, mt := range types {
-		c[i] = namedChecker{name: mt.Name, checker: generator.NewKeyChecker(mt.Payload, keyBinding)}
+		c[i] = wire.NamedChecker{Name: mt.Name, Checker: generator.NewKeyChecker(mt.Payload, keyBinding)}
 	}
 	return c
-}
-
-type namedChecker struct {
-	name    string
-	checker keyplan.Checker
-}
-
-type checkers []namedChecker
-
-func (c checkers) Check(path []keyplan.Step) error {
-	for _, nc := range c {
-		if err := nc.checker.Check(path); err != nil {
-			if len(c) == 1 {
-				return err
-			}
-			return fmt.Errorf("in Message type %s: %w", nc.name, err)
-		}
-	}
-	return nil
 }
 
 // topicParameters checks each Topic parameter's payload location against

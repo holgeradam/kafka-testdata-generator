@@ -7,8 +7,8 @@ package pipeline
 // Key and Payload byte encoding. See ADR-0007.
 type Encoder interface {
 	// Encode turns a generated record into wire-format bytes. key is the
-	// record's Key (nil when the run has no key schema); payload is the
-	// generated record as an in-memory value. Returns the encoded Key bytes
-	// (nil when key is nil) and Payload bytes.
-	Encode(key any, payload any) (keyBytes []byte, payloadBytes []byte, err error)
+	// record's Key (nil when the run has no key schema); generated is the
+	// Payload as an in-memory value, with the Message type it is of. Returns
+	// the encoded Key bytes (nil when key is nil) and Payload bytes.
+	Encode(key any, generated Generated) (keyBytes []byte, payloadBytes []byte, err error)
 }

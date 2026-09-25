@@ -62,8 +62,8 @@ type Options struct {
 
 // Parts is a run as its Wire format wires it.
 type Parts struct {
-	// Values generates each Payload.
-	Values pipeline.ValueGenerator
+	// Values generates each Payload, with the Message type it is of.
+	Values pipeline.PayloadGenerator
 	// KeyGen generates each Key; nil means records carry a null Key.
 	KeyGen keyplan.Generator
 	// Checker validates -keyPath against the Payload schema; nil when the run
@@ -138,3 +138,26 @@ func (e *Error) Error() string {
 
 // Unwrap exposes the cause for errors.Is/As.
 func (e *Error) Unwrap() error { return e.Err }
+
+// EveryType checks a key path against each Message type's own checker,
+// naming the Message type a rejection comes from when there are several: a
+// path must hold in every Message type a record may be of.
+type EveryType []NamedChecker
+
+// NamedChecker is one Message type's key path checker.
+type NamedChecker struct {
+	Name    string
+	Checker keyplan.Checker
+}
+
+func (c EveryType) Check(path []keyplan.Step) error {
+	for _, nc := range c {
+		if err := nc.Checker.Check(path); err != nil {
+			if len(c) == 1 {
+				return err
+			}
+			return fmt.Errorf("in Message type %s: %w", nc.Name, err)
+		}
+	}
+	return nil
+}

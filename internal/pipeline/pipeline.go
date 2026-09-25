@@ -22,13 +22,24 @@ type Sink interface {
 	Close() error
 }
 
-// ValueGenerator is the seam between the Pipeline and payload generation. The
-// Wire format binds the schema that governs it, so each Value is a random
-// Payload honouring that schema, or a typed error when the schema holds a
-// construct that cannot be honoured (ADR-0006). The Pipeline knows no schema of
-// any language; tests substitute a fake so they never load one or touch an RNG.
-type ValueGenerator interface {
-	Value() (any, error)
+// PayloadGenerator is the seam between the Pipeline and payload generation. The
+// Wire format binds the schemas that govern it, so each Generate is a random
+// Payload honouring the schema of the Message type it picked, or a typed error
+// when the schema holds a construct that cannot be honoured (ADR-0006). The
+// Pipeline knows no schema of any language; tests substitute a fake so they
+// never load one or touch an RNG.
+type PayloadGenerator interface {
+	Generate() (Generated, error)
+}
+
+// Generated is one generated Payload and the Message type it is of: an index
+// into the Kafka topic's Message types, in the order the Wire format holds
+// them. The Pipeline carries it from the PayloadGenerator to the Encoder, so
+// a Wire format that encodes each Message type differently knows which one a
+// record is (#91). With one Message type it is always 0.
+type Generated struct {
+	Type    int
+	Payload any
 }
 
 // KeyPlan is the seam between the Pipeline and the Key of a run: it generates
@@ -43,7 +54,7 @@ type KeyPlan interface {
 
 // Config carries the fixed inputs of a run.
 type Config struct {
-	Generator ValueGenerator
+	Generator PayloadGenerator
 	Count     int
 	RateLimit time.Duration
 	// KeyPlan, when set, produces the Key of each record; nil means a null Key.
@@ -100,7 +111,7 @@ loop:
 		default:
 		}
 
-		payload, err := p.cfg.Generator.Value()
+		generated, err := p.cfg.Generator.Generate()
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}
@@ -111,14 +122,14 @@ loop:
 		// true of every record, not just this one.
 		var key any
 		if p.cfg.KeyPlan != nil {
-			key, err = p.cfg.KeyPlan.Apply(payload)
+			key, err = p.cfg.KeyPlan.Apply(generated.Payload)
 			if err != nil {
 				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 			}
 		}
 		total++
 
-		keyBytes, data, err := p.cfg.Encoder.Encode(key, payload)
+		keyBytes, data, err := p.cfg.Encoder.Encode(key, generated)
 		if err != nil {
 			failed++
 			continue

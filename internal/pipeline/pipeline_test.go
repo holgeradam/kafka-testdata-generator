@@ -16,8 +16,8 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
-// fakeGenerator is a controlled ValueGenerator: it returns a fixed Payload
-// (and optional error) for every Value call, so pipeline tests exercise Pipeline
+// fakeGenerator is a controlled PayloadGenerator: it returns a fixed Payload
+// (and optional error) for every Generate call, so pipeline tests exercise Pipeline
 // mechanics without loading a schema or driving an RNG. Tests that need real
 // generation semantics (key-binding synthesis, schema-error aborts) bind a
 // schema to *generator.Generator with boundGenerator instead.
@@ -26,8 +26,8 @@ type fakeGenerator struct {
 	err     error
 }
 
-func (f *fakeGenerator) Value() (any, error) {
-	return f.payload, f.err
+func (f *fakeGenerator) Generate() (Generated, error) {
+	return Generated{Payload: f.payload}, f.err
 }
 
 // fakeEncoder is the Encoder seam's test adapter: the Payload as JSON and the
@@ -35,12 +35,12 @@ func (f *fakeGenerator) Value() (any, error) {
 // in internal/wire and are tested there.
 type fakeEncoder struct{}
 
-func (fakeEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
+func (fakeEncoder) Encode(key any, generated Generated) ([]byte, []byte, error) {
 	var keyBytes []byte
 	if key != nil {
 		keyBytes = []byte(fmt.Sprint(key))
 	}
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := json.Marshal(generated.Payload)
 	return keyBytes, payloadBytes, err
 }
 
@@ -418,3 +418,8 @@ type boundGenerator struct {
 }
 
 func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
+
+func (g *boundGenerator) Generate() (Generated, error) {
+	v, err := g.Value()
+	return Generated{Payload: v}, err
+}

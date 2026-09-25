@@ -105,12 +105,13 @@ func namedType(n map[string]any) (string, bool) {
 
 // namespaceOf is the namespace a named type's definition sits in, which its
 // nested unqualified names inherit: the qualifier of a dotted name, else its
-// own namespace, else the enclosing one.
+// own namespace, else the enclosing one. An empty namespace inherits too, as
+// the codec that parses the avsc reads it.
 func namespaceOf(name string, n map[string]any, enclosing string) string {
 	if i := strings.LastIndex(name, "."); i >= 0 {
 		return name[:i]
 	}
-	if ns, ok := n["namespace"].(string); ok {
+	if ns, ok := n["namespace"].(string); ok && ns != "" {
 		return ns
 	}
 	return enclosing

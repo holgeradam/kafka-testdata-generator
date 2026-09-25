@@ -54,7 +54,7 @@ func TestBuildGeneratesFromValueAvsc(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	v, err := parts.Values.Value()
+	v, err := generate(parts)
 	if err != nil {
 		t.Fatalf("Value: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestCheck(t *testing.T) {
 		{"spec avsc and value avsc", "avro-schema", wire.Options{MessageTypes: avroTypes("A"), AvroSchema: "v.avsc", DryRun: true}},
 		{"spec key and key avsc", "avro-key-schema", wire.Options{MessageTypes: keyedAvroTypes("A"), AvroKeySchema: "k.avsc", DryRun: true}},
 		{"spec avsc, key path without a key", "keyPath", wire.Options{MessageTypes: avroTypes("A"), KeyPath: "id", DryRun: true}},
-		{"several spec avscs", "topic", wire.Options{MessageTypes: avroTypes("A", "B"), DryRun: true}},
+		{"several spec avscs", "", wire.Options{MessageTypes: avroTypes("A", "B"), DryRun: true}},
 		{"registry binding", "topic", wire.Options{MessageTypes: []asyncapi.MessageType{{Name: "A", Payload: map[string]any{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}, AvroSchema: "v.avsc", DryRun: true}},
 	}
 	for _, tc := range cases {
@@ -270,7 +270,7 @@ func TestBuildPlantsTopicParameters(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	for i := 0; i < 30; i++ {
-		v, err := parts.Values.Value()
+		v, err := generate(parts)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -340,4 +340,10 @@ func keyedAvroTypes(names ...string) []asyncapi.MessageType {
 		types[i].KeyAvsc = []byte(`"string"`)
 	}
 	return types
+}
+
+// generate draws one Payload from the parts' generator.
+func generate(parts *wire.Parts) (any, error) {
+	g, err := parts.Values.Generate()
+	return g.Payload, err
 }

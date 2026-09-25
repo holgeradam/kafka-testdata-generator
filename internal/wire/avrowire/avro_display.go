@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 // AvroDisplayEncoder is the Dry-run AVRO adapter on the Encoder seam: it
@@ -12,7 +13,8 @@ import (
 // (ADR-0007 decision 7). One adapter per concern keeps the framing/registry
 // AvroEncoder solely for producing, where registry interaction belongs.
 type AvroDisplayEncoder struct {
-	value *avro.Schema
+	// values are the value avsc models, one per Message type.
+	values []*avro.Schema
 	// key is the key avsc model, nil when records carry a null Key.
 	key *avro.Schema
 }
@@ -22,14 +24,21 @@ type AvroDisplayEncoder struct {
 // avsc. It requires no registry URL and makes no network calls; the models
 // alone drive the rendering.
 func NewAvroDisplayEncoder(value, key *avro.Schema) *AvroDisplayEncoder {
-	return &AvroDisplayEncoder{value: value, key: key}
+	return newAvroDisplayEncoder([]*avro.Schema{value}, key)
+}
+
+// newAvroDisplayEncoder renders each Payload against its own Message type's
+// value avsc: a record of a union shows alone, without the union's wrapper.
+func newAvroDisplayEncoder(values []*avro.Schema, key *avro.Schema) *AvroDisplayEncoder {
+	return &AvroDisplayEncoder{values: values, key: key}
 }
 
 // Encode renders the payload and the key as the canonical Avro JSON encoding
 // (the readable spec-defined text form of a datum), each against its own avsc
 // (#64). As for the AvroEncoder, a Key exists exactly when a key avsc does; a
 // mismatch is a programming error, rejected rather than shown.
-func (e *AvroDisplayEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
+func (e *AvroDisplayEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
+	payload := generated.Payload
 	var keyBytes []byte
 	switch {
 	case e.key == nil && key != nil:
@@ -42,7 +51,7 @@ func (e *AvroDisplayEncoder) Encode(key any, payload any) ([]byte, []byte, error
 			return nil, nil, fmt.Errorf("avro: rendering key: %w", err)
 		}
 	}
-	payloadBytes, err := avro.RenderJSON(e.value.Root, payload)
+	payloadBytes, err := avro.RenderJSON(e.values[generated.Type].Root, payload)
 	if err != nil {
 		return nil, nil, err
 	}
