@@ -267,7 +267,8 @@ not read. It supports:
   format as the message's `schemaFormat`, 3.0 as a payload `{schemaFormat, schema}`. Any other
   format, such as an Avro or Protobuf payload, stops the run naming it; for Avro, pass the avsc
   with `-format avro` instead
-- 3.0 templated addresses such as `orders.{region}`, with their Topic parameters (below)
+- Templated Kafka topics such as `orders.{region}`, with their Topic parameters (below): a 3.0
+  address, or a 2.x spec entry key
 - `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
   binding, the Key schema and the payload schema, as JSON Pointers (`~1`, `~0` and
   percent-escapes decode)
@@ -289,11 +290,11 @@ not read. It supports:
 
 ### Topic Parameters
 
-A 3.0 address can be a template with **Topic parameters**, such as `region` in
-`orders.{region}`, for a family of Kafka topics. `-topic` fills them: `-topic orders.eu` finds
-the entry and gives `region` the value `eu`. A parameter declaring an `enum` must hold the value,
-and one declaring a payload `location` has the value planted into every record, in every Message
-type:
+A 3.0 address, or a 2.x spec entry key, can be a template with **Topic parameters**, such as
+`region` in `orders.{region}`, for a family of Kafka topics. `-topic` fills them: `-topic
+orders.eu` finds the entry and gives `region` the value `eu`. A 3.0 parameter declaring an `enum`
+must hold the value, and a parameter declaring a payload `location` has the value planted into
+every record, in every Message type:
 
 ```yaml
 channels:
@@ -311,6 +312,23 @@ channels:
 kafka-testdata-generator -spec regional.yaml -topic orders.eu -dry-run
 ```
 
+In 2.x the template is the spec entry key, and a parameter declares a `schema` instead of an
+`enum`. The value must conform to the whole schema (`enum`, `pattern`, `maxLength` and so on), and
+since a Topic parameter is a string, a schema that does not allow a string stops the run. A spec
+entry that declares `bindings.kafka.topic` stands for that Kafka topic, taken literally, in both
+versions, so its key is not a template:
+
+```yaml
+channels:
+  orders.{region}:
+    parameters:
+      region:
+        schema: {type: string, enum: [eu, us]}  # -topic orders.apac stops the run
+        location: '$message.payload#/region'    # every record carries region: "eu"
+    publish:
+      message: {$ref: '#/components/messages/OrderCreated'}
+```
+
 Before any record is generated, the location is checked as `-keyPath` is: generation must put a
 field there in every record (required at every step, no `oneOf`/`anyOf` on the way), and the value
 must conform to that field's schema - its `pattern`, `enum`, `format`, `maxLength` and so on - so
@@ -318,12 +336,14 @@ every record still conforms. Under `-format avro` the location is walked through
 instead: record fields only, ending in a `string`, a `uuid` or an `enum` holding the value. Every
 mistake stops the run with its own error:
 
-- a value outside the parameter's `enum`, or one the field there does not accept
+- a value outside the parameter's `enum`, one its 2.x `schema` does not accept, or one the field
+  there does not accept
+- a 2.x parameter `schema` that does not allow a string, such as `type: integer`
 - a location that is not guaranteed in some Message type, or that overlaps `-keyPath` or another
   parameter's location
 - a header location (`$message.header#/...`): the tool generates no Kafka record headers
 - a `-topic` that fills templates in different ways, such as `orders.eu` against both
-  `orders.{region}` and `{env}.eu`, or against a template and a literal `orders.eu` address
+  `orders.{region}` and `{env}.eu`, or against a template and a literal `orders.eu` address or key
 
 ### Supported Pattern Syntax
 

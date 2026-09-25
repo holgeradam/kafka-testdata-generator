@@ -93,7 +93,8 @@ type Topic struct {
 	// order. A component message referenced more than once is one.
 	MessageTypes []MessageType
 	// Parameters are the Topic parameters -topic fills in a templated 3.0
-	// address, in address order; none for a literal address.
+	// address or 2.x spec entry key, in template order; none for a literal
+	// one.
 	Parameters []TopicParameter
 }
 
@@ -115,11 +116,7 @@ func (d *Document) Topic(name string) (*Topic, error) {
 	if d.major == 3 {
 		return d.topic3(name)
 	}
-	types, err := d.messageTypes2(name)
-	if err != nil {
-		return nil, err
-	}
-	return &Topic{MessageTypes: types}, nil
+	return d.topic2(name)
 }
 
 // collector gathers the Message types of one Kafka topic, reading each

@@ -148,6 +148,63 @@ channels:
 	}
 }
 
+// TestScenarioTopicParameters2 is #88 end to end: -topic fills a templated
+// 2.x spec entry key, and the Topic parameter's value is planted in every
+// record of every Message type; a value the parameter's schema refuses, or a
+// parameter schema that is not a string, stops the run before a record exists.
+func TestScenarioTopicParameters2(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `asyncapi: 2.6.0
+info: {title: Orders, version: '1'}
+channels:
+  orders.{region}:
+    parameters:
+      region: {schema: {type: string, enum: [eu, us]}, location: '$message.payload#/region'}
+    publish:
+      message:
+        oneOf:
+          - name: OrderCreated
+            payload: {type: object, required: [kind, region], properties: {kind: {const: created}, region: {type: string, pattern: '^[a-z]{2}$'}}}
+          - name: OrderUpdated
+            payload: {type: object, required: [kind, region], properties: {kind: {const: updated}, region: {type: string}}}
+  users.{userId}:
+    parameters:
+      userId: {schema: {type: integer}}
+    publish: {message: {payload: {type: object}}}
+`)
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders.eu", "-dry-run", "-count", "20", "-seed", "1").Output()
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	kinds := map[string]bool{}
+	for i, line := range filterJSONLines(string(out)) {
+		var p map[string]any
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+		kinds[fmt.Sprint(p["kind"])] = true
+		if p["region"] != "eu" {
+			t.Errorf("record %d: region = %v, want eu", i, p["region"])
+		}
+	}
+	if len(kinds) != 2 {
+		t.Errorf("Message types = %v, want both", kinds)
+	}
+
+	for topic, want := range map[string]string{
+		"orders.apac": `Kafka topic "orders.apac": region value apac does not conform to the parameter's schema`,
+		"users.42":    "parameter userId: its schema does not allow a string, and a Topic parameter is a string",
+	} {
+		out, err := exec.Command(bin, "-spec", spec, "-topic", topic, "-dry-run", "-count", "1").CombinedOutput()
+		if err == nil {
+			t.Fatalf("%s: expected the run to stop, got:\n%s", topic, out)
+		}
+		if !strings.Contains(string(out), want) {
+			t.Errorf("%s: output lacks %q:\n%s", topic, want, out)
+		}
+	}
+}
+
 func TestScenarioPiping(t *testing.T) {
 	bin := buildBinary(t)
 	spec := filepath.Join("..", "..", "examples", "order.asyncapi.yaml")
