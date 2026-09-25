@@ -160,7 +160,8 @@ func TestRunWritesToGivenWriters(t *testing.T) {
 
 // TestRunUsageOnlyForFlagRules proves the usage block accompanies a rule about
 // the flags themselves, and not a rejected spec, avsc or key path, whose error
-// already says what is wrong.
+// already says what is wrong - a spec refusal built from text alone included
+// (#101).
 func TestRunUsageOnlyForFlagRules(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -171,6 +172,48 @@ func TestRunUsageOnlyForFlagRules(t *testing.T) {
 		{"renamed flag", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-key", "orderId"}, true},
 		{"unknown flag", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-bogus"}, true},
 		{"missing spec file", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-topic", "orders"}, false},
+		{"-format json beside -avro-schema", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-format", "json", "-avro-schema", "v.avsc"}, true},
+		{"-registry in a JSON run", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-registry", "http://localhost:8081"}, true},
+		{"Topic parameter outside its enum", []string{"-spec", writeSpec(t, `
+asyncapi: 3.0.0
+info: {title: T, version: '1'}
+channels:
+  regional:
+    address: 'orders.{region}'
+    parameters: {region: {enum: [eu]}}
+    messages: {created: {payload: {type: object}}}
+`), "-topic", "orders.us", "-dry-run"}, false},
+		{"different Key bindings", []string{"-spec", writeSpec(t, `
+asyncapi: 2.6.0
+info: {title: T, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - {name: A, bindings: {kafka: {key: {type: string}}}, payload: {type: object}}
+          - {name: B, payload: {type: object}}
+`), "-topic", "orders", "-dry-run"}, false},
+		{"mixed payload formats", []string{"-spec", writeSpec(t, `
+asyncapi: 2.6.0
+info: {title: T, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - {name: A, schemaFormat: 'application/vnd.apache.avro;version=1.9.0', payload: {type: record, name: A, fields: []}}
+          - {name: B, payload: {type: object}}
+`), "-topic", "orders", "-dry-run"}, false},
+		{"header location without headers", []string{"-spec", writeSpec(t, `
+asyncapi: 3.0.0
+info: {title: T, version: '1'}
+channels:
+  tenants:
+    address: 'orders.{tenant}'
+    parameters: {tenant: {location: '$message.header#/tenant'}}
+    messages: {created: {payload: {type: object}}}
+`), "-topic", "orders.acme", "-dry-run"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
