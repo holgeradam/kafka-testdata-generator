@@ -17,7 +17,7 @@ A named placeholder in a Kafka topic's address template, such as `region` in `or
 _Avoid_: channel parameter, address parameter, variable
 
 **Message**:
-The meaningful content produced as one unit: a Key and a Payload. A run generates one message per Count, and a Kafka record carries it.
+The meaningful content produced as one unit: a Key, Headers and a Payload. A run generates one message per Count, and a Kafka record carries it.
 _Avoid_: event, record
 
 **Kafka record**:
@@ -59,8 +59,12 @@ _Avoid_: aggregate, object
 **Key path**:
 Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every message and the type there can hold the Key; both are checked before the run starts, against whichever schema language governs the Payload.
 
+**Headers**:
+The named values a Message type's `headers` schema describes, a JSON Schema object in either Wire format: each property is one Kafka record header. Each record gets the Headers of its own Message type, generated from the seeded stream after its Payload; a Message type without `headers` gives none. Every value is encoded plain-scalar, as a JSON Key is, a null as a null header, in name order. Under AVRO from `-avro-schema` the records are of no Message type in the spec, so its headers are ignored with a warning.
+_Avoid_: properties, metadata, attributes
+
 **Dry run**:
-Mode where the tool generates messages and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its messages readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats, in the same encoding the Payload is shown in: plain-scalar in JSON mode, the Avro JSON encoding of the key avsc under AVRO (a string Key therefore appears quoted).
+Mode where the tool generates messages and prints them to stdout without producing to Kafka. Kafka and registry-related flags are disregarded with a warning. Each Encoder renders its messages readably for the active Wire format; AVRO Dry run renders from the avsc without contacting a registry. When a Key is configured, its value is echoed to stderr ahead of the stats, in the same encoding the Payload is shown in: plain-scalar in JSON mode, the Avro JSON encoding of the key avsc under AVRO (a string Key therefore appears quoted). A record's Headers follow its Key as `Headers: {...}`, a JSON object of each header's text.
 _Avoid_: console mode, stdout mode
 
 **Run plan**:
@@ -80,7 +84,7 @@ The seeded, clock-aware source of every leaf value and random decision in a run,
 _Avoid_: faker, value source, random generator
 
 **Encoder**:
-The Wire-format seam that turns a generated message (Key + Payload) into the bytes of a Kafka record. One adapter exists per format: JsonEncoder for JSON mode (its Encode serves both Dry run and produce), and under AVRO two - AvroEncoder for producing, and AvroDisplayEncoder for Dry run. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<topic>-value` - or, for several Avro Message types, each record under its full name and their union under `<topic>-value`, referencing them - and, when a key avsc is supplied, the key avsc under `<topic>-key`, then frames payloads and keys with the registry-assigned schema IDs. AvroDisplayEncoder renders the Avro JSON encoding from the local avsc of each record's Message type and never touches a registry. The Pipeline never sees format conventions.
+The Wire-format seam that turns a generated message's Key and Payload into the bytes of a Kafka record. Headers do not pass through it: every Wire format encodes them alike, plain-scalar, when they are generated. One adapter exists per format: JsonEncoder for JSON mode (its Encode serves both Dry run and produce), and under AVRO two - AvroEncoder for producing, and AvroDisplayEncoder for Dry run. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<topic>-value` - or, for several Avro Message types, each record under its full name and their union under `<topic>-value`, referencing them - and, when a key avsc is supplied, the key avsc under `<topic>-key`, then frames payloads and keys with the registry-assigned schema IDs. AvroDisplayEncoder renders the Avro JSON encoding from the local avsc of each record's Message type and never touches a registry. The Pipeline never sees format conventions.
 _Avoid_: serializer, marshaler, codec
 
 **Wire format**:
@@ -96,7 +100,7 @@ The in-memory form of an avsc produced by `avro.Parse` in `internal/avro`: share
 _Avoid_: parsed schema, avro schema model, generation model
 
 **Output sink**:
-The destination seam where generated bytes go: stdout as NDJSON in Dry run, a Kafka topic otherwise. Adapters sit behind one small interface; tests may substitute fakes.
+The destination seam where generated bytes go - Key, Headers and Payload: stdout as NDJSON in Dry run, a Kafka topic otherwise. Adapters sit behind one small interface; tests may substitute fakes.
 _Avoid_: destination, target, backend
 
 **Count**:

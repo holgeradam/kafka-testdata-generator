@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -23,11 +24,12 @@ import (
 // schema to *generator.Generator with boundGenerator instead.
 type fakeGenerator struct {
 	payload any
+	headers []Header
 	err     error
 }
 
 func (f *fakeGenerator) Generate() (Generated, error) {
-	return Generated{Payload: f.payload}, f.err
+	return Generated{Payload: f.payload, Headers: f.headers}, f.err
 }
 
 // fakeEncoder is the Encoder seam's test adapter: the Payload as JSON and the
@@ -422,4 +424,20 @@ func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
 func (g *boundGenerator) Generate() (Generated, error) {
 	v, err := g.Value()
 	return Generated{Payload: v}, err
+}
+
+// TestRunCarriesHeaders proves the Headers a Wire format generated reach the
+// sink with their record, untouched by the Encoder (#92).
+func TestRunCarriesHeaders(t *testing.T) {
+	headers := []Header{{Name: "tenant", Value: []byte("acme")}}
+	sink := &fakeSink{}
+	p := New(Config{Generator: &fakeGenerator{payload: map[string]any{"id": "a"}, headers: headers}, Count: 2, Encoder: fakeEncoder{}}, sink)
+	if _, err := p.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i, o := range sink.recorded {
+		if !reflect.DeepEqual(o.Headers, headers) {
+			t.Errorf("record %d: Headers = %v, want %v", i, o.Headers, headers)
+		}
+	}
 }

@@ -209,7 +209,7 @@ func (d *Document) parameters(m match, topic string, check valueCheck) ([]TopicP
 
 // payloadLocation reads a parameter's location, a runtime expression. A
 // payload location gives the JSON Pointer tokens into the Payload; a header
-// location stops the run, since the tool generates no Kafka record headers.
+// location stops the run: planting into Headers is not supported yet.
 func payloadLocation(p map[string]any, name, where string) (string, []string, error) {
 	if p["location"] == nil {
 		return "", nil, nil
@@ -221,7 +221,7 @@ func payloadLocation(p map[string]any, name, where string) (string, []string, er
 	const payload = "$message.payload"
 	switch {
 	case strings.HasPrefix(location, "$message.header"):
-		return "", nil, fmt.Errorf("%s: parameter %s lives in message headers, which the tool does not generate", where, name)
+		return "", nil, fmt.Errorf("%s: parameter %s lives in message headers, where the tool does not plant Topic parameters yet", where, name)
 	case location == payload || location == payload+"#":
 		return "", nil, fmt.Errorf("%s: parameter %s: location %s names the whole Payload, not a field in it", where, name, location)
 	case !strings.HasPrefix(location, payload+"#/"):

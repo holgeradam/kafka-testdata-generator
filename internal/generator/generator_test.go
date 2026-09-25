@@ -217,3 +217,20 @@ func TestPatternErrorCarriesPath(t *testing.T) {
 		t.Errorf("got {Pattern %q, Construct %q, Path %q}, want {a.c, ., $.code}", pe.Pattern, pe.Construct, pe.Path)
 	}
 }
+
+// TestNullType proves type null generates null, the one value it allows,
+// wherever it stands: a Payload field or a null header (#92).
+func TestNullType(t *testing.T) {
+	gen := New(synth.New(42, fixedNow()))
+	v, err := gen.Value(map[string]any{"type": "object", "required": []any{"trace"}, "properties": map[string]any{"trace": map[string]any{"type": "null"}}})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	obj := v.(map[string]any)
+	if got, ok := obj["trace"]; !ok || got != nil {
+		t.Errorf("trace = %v (present %v), want a null field", got, ok)
+	}
+	if err := Conforms(map[string]any{"type": "object", "properties": map[string]any{"trace": map[string]any{"type": "null"}}}, obj); err != nil {
+		t.Errorf("the value does not conform: %v", err)
+	}
+}

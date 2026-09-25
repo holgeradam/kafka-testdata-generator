@@ -1,9 +1,12 @@
 package jsonwire
 
 import (
+	"reflect"
+
 	"context"
 	"errors"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"strings"
 	"testing"
 	"time"
@@ -414,4 +417,41 @@ func TestBuildRejectsParametersPlantingTogether(t *testing.T) {
 func generate(parts *wire.Parts) (any, error) {
 	g, err := parts.Values.Generate()
 	return g.Payload, err
+}
+
+// tenantHeaders is a headers schema with one constant header, tenant=name.
+func tenantHeaders(name string) map[string]any {
+	return map[string]any{"type": "object", "required": []any{"tenant"}, "properties": map[string]any{"tenant": map[string]any{"const": name}}}
+}
+
+// TestBuildGeneratesHeaders proves each record carries the Headers of its own
+// Message type, and none when its type declares none (#92).
+func TestBuildGeneratesHeaders(t *testing.T) {
+	opts := options()
+	opts.MessageTypes = []asyncapi.MessageType{
+		{Name: "OrderCreated", Payload: kindSchema("created"), Headers: tenantHeaders("acme")},
+		{Name: "OrderPaid", Payload: kindSchema("paid")},
+	}
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	seen := map[int]bool{}
+	for i := 0; i < 50; i++ {
+		g, err := parts.Values.Generate()
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		seen[g.Type] = true
+		var want []pipeline.Header
+		if g.Type == 0 {
+			want = []pipeline.Header{{Name: "tenant", Value: []byte("acme")}}
+		}
+		if !reflect.DeepEqual(g.Headers, want) {
+			t.Fatalf("record %d of type %d: headers %v, want %v", i, g.Type, g.Headers, want)
+		}
+	}
+	if len(seen) != 2 {
+		t.Errorf("Message types = %v, want both", seen)
+	}
 }

@@ -15,7 +15,6 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -135,8 +134,13 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		payloads[i] = &boundGenerator{gen: gen, model: v, plants: plants[i]}
 	}
 	parts := &wire.Parts{
-		Values:  &mix{synth: opts.Synth, types: payloads},
+		Values:  &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: wire.NewHeaderSource(opts.Synth, spec)},
 		Encoder: encoderFor(opts, values, u, key),
+	}
+	// Records from -avro-schema are of no Message type in the spec, so no
+	// Message type's headers apply to them: they are ignored, out loud.
+	if len(spec) == 0 && slices.ContainsFunc(opts.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Headers != nil }) {
+		parts.Warnings = append(parts.Warnings, "Warning: headers are ignored under -avro-schema: its records are of no Message type in the spec")
 	}
 	// A JSON Schema payload's key binding declares a JSON-schema-shaped Key;
 	// generating one would silently violate the avsc key contract, so it is
@@ -341,19 +345,11 @@ func (g *boundGenerator) Value() (any, error) {
 	return v, nil
 }
 
-// mix generates each Payload from one Message type picked from the seeded
-// stream, as JSON mode's mix does. A single Message type draws no pick, so
-// its output is exactly what generating from it alone gives.
-type mix struct {
-	synth *synth.Synthesizer
-	types []*boundGenerator
-}
-
-func (m *mix) Generate() (pipeline.Generated, error) {
-	i := 0
-	if len(m.types) > 1 {
-		i = m.synth.Pick(len(m.types))
+// sources are the Message types' Payload generators, for the mix.
+func sources(payloads []*boundGenerator) []wire.ValueSource {
+	out := make([]wire.ValueSource, len(payloads))
+	for i, p := range payloads {
+		out[i] = p
 	}
-	v, err := m.types[i].Value()
-	return pipeline.Generated{Type: i, Payload: v}, err
+	return out
 }

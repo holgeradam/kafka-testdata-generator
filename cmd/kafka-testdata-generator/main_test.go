@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
+
 	"encoding/json"
 	"fmt"
+	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -136,7 +140,7 @@ channels:
 
 	for topic, want := range map[string]string{
 		"orders.apac":  `Kafka topic "orders.apac": region value apac is not in the parameter's enum [eu, us]`,
-		"tenants.acme": "parameter tenant lives in message headers, which the tool does not generate",
+		"tenants.acme": "parameter tenant lives in message headers, where the tool does not plant Topic parameters yet",
 	} {
 		out, err := exec.Command(bin, "-spec", spec, "-topic", topic, "-dry-run", "-count", "1").CombinedOutput()
 		if err == nil {
@@ -898,6 +902,108 @@ components:
 	}
 	if kinds["CREATED"] == 0 || kinds["PAID"] == 0 {
 		t.Errorf("Message types in the Dry run = %v, want both", kinds)
+	}
+}
+
+// headersSpec declares Headers on one of its two Message types (#92).
+const headersSpec = `asyncapi: 3.0.0
+info: {title: Orders, version: '1'}
+channels:
+  orders:
+    address: orders
+    messages:
+      created:
+        name: OrderCreated
+        headers:
+          type: object
+          required: [tenant, attempt]
+          properties:
+            tenant: {type: string, enum: [acme]}
+            attempt: {type: integer, minimum: 1, maximum: 3}
+        payload: {type: object, required: [kind], properties: {kind: {const: created}}}
+      paid:
+        name: OrderPaid
+        payload: {type: object, required: [kind], properties: {kind: {const: paid}}}
+`
+
+// TestScenarioHeadersDryRun is #92 end to end in a Dry run: each record of a
+// Message type declaring headers is preceded on stderr by its Headers, in
+// name order, and stdout keeps the Payload lines alone.
+func TestScenarioHeadersDryRun(t *testing.T) {
+	bin := buildBinary(t)
+	cmd := exec.Command(bin, "-spec", writeTempSpec(t, headersSpec), "-topic", "orders", "-dry-run", "-count", "20", "-seed", "4")
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	headerLine := regexp.MustCompile(`^Headers: \{"attempt":"[123]","tenant":"acme"\}$`)
+	var echoes int
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if strings.HasPrefix(line, "Headers: ") {
+			echoes++
+			if !headerLine.MatchString(line) {
+				t.Errorf("header echo %q, want attempt and tenant in name order", line)
+			}
+		}
+	}
+	created := strings.Count(stdout.String(), `"created"`)
+	if created == 0 || echoes != created {
+		t.Errorf("%d header echoes for %d OrderCreated records, want one each\nstderr: %s", echoes, created, stderr.String())
+	}
+	if lines := filterJSONLines(stdout.String()); len(lines) != 20 || strings.Contains(stdout.String(), "Headers") {
+		t.Errorf("stdout must hold the 20 Payload lines alone:\n%s", stdout.String())
+	}
+}
+
+// TestScenarioHeadersProduced is #92 end to end when producing: the binary
+// produces to a Kafka broker - an in-process one speaking the Kafka protocol -
+// and each OrderCreated record read back carries its Headers.
+func TestScenarioHeadersProduced(t *testing.T) {
+	bin := buildBinary(t)
+	cluster, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "orders"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cluster.Close()
+	broker := cluster.ListenAddrs()[0]
+	out, err := exec.Command(bin, "-spec", writeTempSpec(t, headersSpec), "-topic", "orders", "-broker", broker, "-count", "10", "-seed", "4", "-rate", "0s").CombinedOutput()
+	if err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+
+	consumer, err := kgo.NewClient(kgo.SeedBrokers(broker), kgo.ConsumeTopics("orders"), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var records []*kgo.Record
+	for len(records) < 10 && ctx.Err() == nil {
+		records = append(records, consumer.PollFetches(ctx).Records()...)
+	}
+	if len(records) != 10 {
+		t.Fatalf("read %d records, want 10", len(records))
+	}
+	createdSeen := 0
+	for i, r := range records {
+		created := strings.Contains(string(r.Value), `"created"`)
+		if created {
+			createdSeen++
+		}
+		if !created {
+			if len(r.Headers) != 0 {
+				t.Errorf("record %d (OrderPaid): headers %v, want none", i, r.Headers)
+			}
+			continue
+		}
+		if len(r.Headers) != 2 || r.Headers[0].Key != "attempt" || r.Headers[1].Key != "tenant" || string(r.Headers[1].Value) != "acme" {
+			t.Errorf("record %d (OrderCreated): headers %v, want attempt and tenant=acme", i, r.Headers)
+		}
+	}
+	if createdSeen == 0 {
+		t.Error("no OrderCreated record was produced, so no headers were checked")
 	}
 }
 
