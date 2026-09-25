@@ -134,12 +134,22 @@ func (p *Producer) Ping(ctx context.Context) error {
 	return p.client.Ping(ctx)
 }
 
-// Send produces a single message to the given topic with the provided key and value.
-func (p *Producer) Send(ctx context.Context, topic string, key, value []byte) error {
+// Header is one Kafka record header; a nil Value is a null header.
+type Header struct {
+	Key   string
+	Value []byte
+}
+
+// Send produces a single message to the given topic with the provided key,
+// value and headers, the headers in order.
+func (p *Producer) Send(ctx context.Context, topic string, key, value []byte, headers ...Header) error {
 	record := &kgo.Record{
 		Topic: topic,
 		Key:   key,
 		Value: value,
+	}
+	for _, h := range headers {
+		record.Headers = append(record.Headers, kgo.RecordHeader{Key: h.Key, Value: h.Value})
 	}
 
 	results := p.client.ProduceSync(ctx, record)

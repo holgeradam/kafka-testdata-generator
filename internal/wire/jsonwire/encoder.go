@@ -3,10 +3,9 @@ package jsonwire
 import (
 	"encoding/json"
 	"fmt"
-	"math"
-	"strconv"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // JsonEncoder encodes records as JSON (NDJSON-compatible). The Payload is
@@ -32,33 +31,13 @@ func (e JsonEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []by
 }
 
 // plainScalarKey renders a Key by JSON mode's plain-scalar contract
-// (CONTEXT.md Key): a string as UTF-8, a number as decimal text, and a
-// structured value as JSON - never a JSON-wrapped scalar. A nil Key yields nil
-// bytes, so the record carries a null Key. AVRO shows its Key in the Avro JSON
-// encoding of the key avsc instead.
+// (CONTEXT.md Key), which Headers follow too. A nil Key yields nil bytes, so
+// the record carries a null Key. AVRO shows its Key in the Avro JSON encoding
+// of the key avsc instead.
 func plainScalarKey(key any) ([]byte, error) {
-	switch v := key.(type) {
-	case nil:
-		return nil, nil
-	case string:
-		return []byte(v), nil
-	case float64:
-		// The JSON generator produces numbers as float64; any other numeric
-		// type falls through to JSON, which renders integers as decimal text.
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return nil, fmt.Errorf("key: cannot encode non-finite number %v", v)
-		}
-		return []byte(strconv.FormatFloat(v, 'f', -1, 64)), nil
-	case bool:
-		return []byte(strconv.FormatBool(v)), nil
-	case []byte:
-		return v, nil
-	default:
-		// Objects, arrays, and any other structured value become JSON.
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("key: %w", err)
-		}
-		return b, nil
+	b, err := wire.PlainScalar(key)
+	if err != nil {
+		return nil, fmt.Errorf("key: %w", err)
 	}
+	return b, nil
 }

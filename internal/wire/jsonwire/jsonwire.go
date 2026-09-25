@@ -13,7 +13,6 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -68,7 +67,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	}
 
 	parts := &wire.Parts{
-		Values: &mix{synth: opts.Synth, types: payloads},
+		Values: &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: wire.NewHeaderSource(opts.Synth, types)},
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
 			return JsonEncoder{}, nil
 		},
@@ -112,23 +111,6 @@ func sharedKeyBinding(types []asyncapi.MessageType) (map[string]any, error) {
 		}
 	}
 	return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
-}
-
-// mix generates each Payload from one Message type picked from the seeded
-// stream. A single Message type draws no pick, so its output is exactly what
-// generating from it alone gives.
-type mix struct {
-	synth *synth.Synthesizer
-	types []*boundGenerator
-}
-
-func (m *mix) Generate() (pipeline.Generated, error) {
-	i := 0
-	if len(m.types) > 1 {
-		i = m.synth.Pick(len(m.types))
-	}
-	v, err := m.types[i].Value()
-	return pipeline.Generated{Type: i, Payload: v}, err
 }
 
 // everyType checks a key path against each Message type's Payload schema,
@@ -190,4 +172,13 @@ func (g *boundGenerator) Value() (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// sources are the Message types' Payload generators, for the mix.
+func sources(payloads []*boundGenerator) []wire.ValueSource {
+	out := make([]wire.ValueSource, len(payloads))
+	for i, p := range payloads {
+		out[i] = p
+	}
+	return out
 }

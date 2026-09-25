@@ -314,7 +314,8 @@ not read. It supports:
   percent-escapes decode)
 - Recursive schemas (a `$ref` cycle), generated within a depth budget
 - Nested JSON Schema objects and arrays
-- All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`
+- All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`,
+  `null`
 - All 19 string formats JSON Schema 2020-12 defines: `date-time`, `date`, `time`,
   `duration`, `email`, `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`,
   `uri`, `uri-reference`, `iri`, `iri-reference`, `uuid`, `uri-template`,
@@ -327,6 +328,40 @@ not read. It supports:
 - Object constraints: `required` fields
 - Enum values and const
 - `allOf`, `oneOf`, `anyOf` composition
+
+### Headers
+
+A message's `headers` schema, a JSON Schema object, generates **Headers** for every record of
+that Message type, in JSON and AVRO mode alike (2.x `message.headers`, including from a trait,
+or 3.0 `headers`, a Schema or a JSON Schema Multi Format Schema). Each property becomes one Kafka
+record header, its value encoded plain-scalar as a JSON Key is - a string as UTF-8, a number as
+decimal text, a boolean as `true`/`false`, an object or array as JSON text, `null` as a null
+header - in name order:
+
+```yaml
+messages:
+  created:
+    headers:
+      type: object
+      required: [tenant, attempt]
+      properties:
+        tenant: {type: string, enum: [acme, globex]}
+        attempt: {type: integer, minimum: 1, maximum: 3}
+    payload: {$ref: '#/components/schemas/OrderCreated'}
+```
+
+A Dry run shows each record's Headers on stderr after its Key, stdout keeping the Payload lines
+alone:
+
+```
+Headers: {"attempt":"2","tenant":"acme"}
+{"orderId":"..."}
+```
+
+A Message type without `headers` gives records without headers. Headers that are not an object,
+or in a format other than JSON Schema, stop the run naming the Message type. Under AVRO from
+`-avro-schema` the records are of no Message type in the spec, so its headers are ignored with a
+warning.
 
 ### Topic Parameters
 
@@ -381,7 +416,8 @@ mistake stops the run with its own error:
 - a 2.x parameter `schema` that does not allow a string, such as `type: integer`
 - a location that is not guaranteed in some Message type, or that overlaps `-keyPath` or another
   parameter's location
-- a header location (`$message.header#/...`): the tool generates no Kafka record headers
+- a header location (`$message.header#/...`): the tool does not plant Topic parameters into
+  Headers yet
 - a `-topic` that fills templates in different ways, such as `orders.eu` against both
   `orders.{region}` and `{env}.eu`, or against a template and a literal `orders.eu` address or key
 

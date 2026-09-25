@@ -273,3 +273,35 @@ func mustPath(t *testing.T, path string) []keyplan.Step {
 	}
 	return steps
 }
+
+// TestBuildGeneratesHeadersUnderAvro proves an Avro Message type's Headers
+// come from its JSON Schema headers, as in JSON mode (#85 decision 1), and
+// that a spec's headers are ignored, out loud, under -avro-schema, whose
+// records are of no Message type in the spec.
+func TestBuildGeneratesHeadersUnderAvro(t *testing.T) {
+	opts := mixOptions(1)
+	opts.MessageTypes[1].Headers = map[string]any{"type": "object", "required": []any{"tenant"}, "properties": map[string]any{"tenant": map[string]any{"const": "acme"}}}
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		g, _ := parts.Values.Generate()
+		if got := len(g.Headers); got != g.Type {
+			t.Fatalf("record %d of type %d: %d headers, want OrderPaid's alone to have one", i, g.Type, got)
+		}
+	}
+
+	file := options(t)
+	file.MessageTypes[0].Headers = opts.MessageTypes[1].Headers
+	parts, err = Format{}.Build(file)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if g, _ := parts.Values.Generate(); g.Headers != nil {
+		t.Errorf("headers = %v, want none under -avro-schema", g.Headers)
+	}
+	if !strings.Contains(strings.Join(parts.Warnings, "\n"), "headers are ignored under -avro-schema") {
+		t.Errorf("warnings = %v, want the ignored headers reported", parts.Warnings)
+	}
+}

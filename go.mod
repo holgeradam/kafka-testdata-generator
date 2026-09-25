@@ -6,6 +6,7 @@ require (
 	github.com/confluentinc/confluent-avro-go/v2 v2.32.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/twmb/franz-go v1.21.6
+	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
 	gopkg.in/yaml.v3 v3.0.1
 )
 

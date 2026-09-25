@@ -149,6 +149,8 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 		return g.number(schema)
 	case "boolean":
 		return g.synth.Chance(50), nil
+	case "null":
+		return nil, nil
 	default:
 		return nil, &UnsupportedSchemaError{Keyword: "type", Path: path, Detail: fmt.Sprintf("unsupported type %q", typ)}
 	}

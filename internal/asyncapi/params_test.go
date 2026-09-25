@@ -184,7 +184,7 @@ channels:
 func TestTopicParameterRejectMistakes(t *testing.T) {
 	cases := map[string]struct{ parameters, want string }{
 		"header location": {`{tenant: {location: '$message.header#/tenant'}}`,
-			"parameter tenant lives in message headers, which the tool does not generate"},
+			"parameter tenant lives in message headers, where the tool does not plant Topic parameters yet"},
 		"whole payload": {`{tenant: {location: '$message.payload'}}`,
 			"parameter tenant: location $message.payload names the whole Payload, not a field in it"},
 		"root pointer": {`{tenant: {location: '$message.payload#'}}`,

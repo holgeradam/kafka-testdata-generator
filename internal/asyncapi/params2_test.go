@@ -173,7 +173,7 @@ channels:
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}
 	_, err := doc.Topic("tenants.acme")
-	wantErr(t, err, "parameter tenant lives in message headers, which the tool does not generate")
+	wantErr(t, err, "parameter tenant lives in message headers, where the tool does not plant Topic parameters yet")
 }
 
 // TestTopicParameter2RejectMistakes proves a malformed 2.x parameter stops

@@ -55,6 +55,10 @@ type MessageType struct {
 	// Registry is what the Kafka message binding declares about the schema
 	// registry, for the AVRO Wire format to judge (#84 decision 8).
 	Registry RegistryBinding
+	// Headers is the JSON Schema of the message's headers, an object whose
+	// properties are the Kafka record headers (#85); nil when none are
+	// declared.
+	Headers map[string]any
 }
 
 // RegistryBinding holds the schema-registry fields of a Kafka message binding
@@ -215,6 +219,9 @@ func (d *Document) messageType(msg map[string]any, name string, payloadNode, for
 	if kafka != nil {
 		mt.Registry = RegistryBinding{text(kafka["schemaIdLocation"]), text(kafka["schemaIdPayloadEncoding"]), text(kafka["schemaLookupStrategy"])}
 	}
+	if mt.Headers, err = d.headers(msg, name); err != nil {
+		return MessageType{}, err
+	}
 
 	if pf == avroSchema {
 		if mt.Avsc, err = d.avsc(payloadNode); err != nil {
@@ -240,6 +247,41 @@ func (d *Document) messageType(msg map[string]any, name string, payloadNode, for
 		}
 	}
 	return mt, nil
+}
+
+// headers reads a message's headers schema, which both versions require to
+// be an object: each of its properties is one Kafka record header (#85). A
+// 3.0 message may declare it as a Multi Format Schema, which must be JSON
+// Schema; in 2.x, schemaFormat speaks of the payload only.
+func (d *Document) headers(msg map[string]any, name string) (map[string]any, error) {
+	node := msg["headers"]
+	if node == nil {
+		return nil, nil
+	}
+	if d.major == 3 {
+		resolved, err := d.object(node, "message "+name+": headers")
+		if err != nil {
+			return nil, err
+		}
+		if format, multi := resolved["schemaFormat"]; multi {
+			if resolved["schema"] == nil {
+				return nil, fmt.Errorf("message %s: headers declare a schemaFormat but no schema", name)
+			}
+			f, _ := format.(string)
+			if pf, ok := readsSchemaFormat(f, d.major); !ok || pf != jsonSchema {
+				return nil, fmt.Errorf("headers of %s are %v; the tool reads headers in JSON Schema only", name, format)
+			}
+			node = resolved["schema"]
+		}
+	}
+	schema, err := d.schema(node)
+	if err != nil {
+		return nil, fmt.Errorf("message %s: headers: %w", name, err)
+	}
+	if schema["type"] != "object" {
+		return nil, fmt.Errorf("message %s: headers must be a schema of type object, whose properties are the Kafka record headers", name)
+	}
+	return schema, nil
 }
 
 // text is a declared scalar as written, "" when absent.

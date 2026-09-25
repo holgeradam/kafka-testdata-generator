@@ -18,9 +18,14 @@ func NewKafkaSink(topic string, producer *producer.Producer) *KafkaSink {
 	return &KafkaSink{topic: topic, producer: producer}
 }
 
-// Send produces one record with the Outgoing's Key and Payload as value.
+// Send produces one record with the Outgoing's Key, its Payload as value, and
+// its Headers.
 func (s *KafkaSink) Send(ctx context.Context, o Outgoing) error {
-	return s.producer.Send(ctx, s.topic, o.Key, o.Payload)
+	headers := make([]producer.Header, len(o.Headers))
+	for i, h := range o.Headers {
+		headers[i] = producer.Header{Key: h.Name, Value: h.Value}
+	}
+	return s.producer.Send(ctx, s.topic, o.Key, o.Payload, headers...)
 }
 
 // Close closes the underlying producer.
