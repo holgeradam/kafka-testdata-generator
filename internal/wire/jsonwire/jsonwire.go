@@ -27,10 +27,10 @@ func (Format) Name() string { return "json" }
 // Wire format avro.
 func (Format) Check(opts wire.Options) error {
 	if opts.AvroKeySchema != "" {
-		return &wire.Error{Flag: "avro-key-schema", Detail: "-avro-key-schema needs the avro Wire format: pass -avro-schema, or use a spec with Avro payloads"}
+		return &wire.Error{Usage: true, Flag: "avro-key-schema", Detail: "-avro-key-schema needs the avro Wire format: pass -avro-schema, or use a spec with Avro payloads"}
 	}
 	if opts.RegistryURL != "" {
-		return &wire.Error{Flag: "registry", Detail: "-registry is only valid with the avro Wire format"}
+		return &wire.Error{Usage: true, Flag: "registry", Detail: "-registry is only valid with the avro Wire format"}
 	}
 	return nil
 }
@@ -52,7 +52,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		return nil, err
 	}
 	if opts.KeyPath != "" && keyBinding == nil {
-		return nil, &wire.Error{Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
+		return nil, &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
 	}
 
 	plants, err := topicParameters(types, opts)

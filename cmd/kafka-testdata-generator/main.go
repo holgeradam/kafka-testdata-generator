@@ -47,7 +47,7 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		// A rule about the flags themselves is worth a reminder of the flag
 		// surface; a rejected spec, avsc or key path is not.
 		var pe *runplan.Error
-		if errors.As(err, &pe) && pe.Err == nil {
+		if errors.As(err, &pe) && pe.Usage {
 			runplan.Usage(stderr, name)
 		}
 		return 1

@@ -121,6 +121,11 @@ type Error struct {
 	Flag   string
 	Detail string
 	Err    error
+	// Usage marks a rule about the flags themselves - a missing, renamed or
+	// conflicting flag - for which the flag surface is worth a reminder. A
+	// refusal of what the spec or an avsc declares leaves it false: its
+	// message already says what is wrong (#101).
+	Usage bool
 }
 
 func (e *Error) Error() string {

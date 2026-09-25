@@ -153,33 +153,33 @@ func Plan(args []string) (*Run, error) {
 		}
 		// An unknown or unparsable flag is a rule about the flags themselves,
 		// so it carries no cause.
-		return nil, &Error{Detail: err.Error()}
+		return nil, &Error{Usage: true, Detail: err.Error()}
 	}
 	if !f.isSet("seed") {
 		*f.seed = time.Now().UnixNano()
 	}
 
 	if *f.specPath == "" {
-		return nil, &Error{Flag: "spec", Detail: "-spec is required"}
+		return nil, &Error{Usage: true, Flag: "spec", Detail: "-spec is required"}
 	}
 	// -channel named the spec's channels: entry; -topic names the Kafka topic,
 	// which the entry may bind under another key (bindings.kafka.topic). An old
 	// invocation stops with guidance, as -key does.
 	if *f.renamedChannel != "" {
-		return nil, &Error{Flag: "channel", Detail: "-channel was renamed to -topic: it names the Kafka topic to produce to, which the spec's entry may declare under another key through bindings.kafka.topic. Use -topic."}
+		return nil, &Error{Usage: true, Flag: "channel", Detail: "-channel was renamed to -topic: it names the Kafka topic to produce to, which the spec's entry may declare under another key through bindings.kafka.topic. Use -topic."}
 	}
 	if *f.topic == "" {
-		return nil, &Error{Flag: "topic", Detail: "-topic is required"}
+		return nil, &Error{Usage: true, Flag: "topic", Detail: "-topic is required"}
 	}
 	if *f.recordsPerKey < 1 {
-		return nil, &Error{Flag: "records-per-key", Detail: "-records-per-key must be at least 1"}
+		return nil, &Error{Usage: true, Flag: "records-per-key", Detail: "-records-per-key must be at least 1"}
 	}
 
 	// -key extracted a field from the Payload; -keyPath plants the generated
 	// Key into it (ADR-0009). The meaning changed, so an old invocation stops
 	// with guidance rather than the flag package's bare "not defined".
 	if *f.renamedKey != "" {
-		return nil, &Error{Flag: "key", Detail: "-key was renamed to -keyPath and changed meaning: the Key is generated from the key schema and planted into the payload at that path, never extracted from it. Use -keyPath, together with a key schema (bindings.kafka.key in JSON mode, -avro-key-schema under -format avro)."}
+		return nil, &Error{Usage: true, Flag: "key", Detail: "-key was renamed to -keyPath and changed meaning: the Key is generated from the key schema and planted into the payload at that path, never extracted from it. Use -keyPath, together with a key schema (bindings.kafka.key in JSON mode, -avro-key-schema under -format avro)."}
 	}
 
 	run := &Run{
@@ -247,12 +247,12 @@ func wireFormat(f *flags, topic string, types []asyncapi.MessageType) (string, e
 		return "", &Error{Flag: "topic", Detail: fmt.Sprintf("Kafka topic %q mixes payload formats: Avro (%s) and JSON Schema (%s); a Kafka topic is produced in one Wire format", topic, strings.Join(avroTypes, ", "), strings.Join(jsonTypes, ", "))}
 	case len(avroTypes) > 0:
 		if declared == "json" {
-			return "", &Error{Flag: "format", Detail: fmt.Sprintf("payload of %s is Avro, so the Wire format is avro; drop -format json", avroTypes[0])}
+			return "", &Error{Usage: true, Flag: "format", Detail: fmt.Sprintf("payload of %s is Avro, so the Wire format is avro; drop -format json", avroTypes[0])}
 		}
 		return "avro", nil
 	case *f.avroSchema != "":
 		if declared == "json" {
-			return "", &Error{Flag: "format", Detail: "-avro-schema makes the Wire format avro; drop -format json"}
+			return "", &Error{Usage: true, Flag: "format", Detail: "-avro-schema makes the Wire format avro; drop -format json"}
 		}
 		return "avro", nil
 	case declared != "":
@@ -290,7 +290,7 @@ func (r *Run) build(f *flags, format wire.Format, opts wire.Options) error {
 	// With -records-per-key above 1 its Keys identify Entities that recur
 	// across records, which needs a Key schema to generate them from.
 	if *f.recordsPerKey > 1 && parts.KeyGen == nil {
-		return &Error{Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec, or pass -avro-key-schema under AVRO, so there is a Key to reuse"}
+		return &Error{Usage: true, Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec, or pass -avro-key-schema under AVRO, so there is a Key to reuse"}
 	}
 	var keyPlan pipeline.KeyPlan
 	if parts.KeyGen != nil {

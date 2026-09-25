@@ -35,22 +35,22 @@ func (Format) Check(opts wire.Options) error {
 	spec := specAvro(opts.MessageTypes)
 	switch {
 	case len(spec) > 0 && opts.AvroSchema != "":
-		return &wire.Error{Flag: "avro-schema", Detail: fmt.Sprintf("the spec declares the Payload's avsc (payload of %s is Avro) and -avro-schema gives another; drop -avro-schema, so the run has one source of truth", spec[0].Name)}
+		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: fmt.Sprintf("the spec declares the Payload's avsc (payload of %s is Avro) and -avro-schema gives another; drop -avro-schema, so the run has one source of truth", spec[0].Name)}
 	case len(spec) == 0 && opts.AvroSchema == "":
-		return &wire.Error{Flag: "avro-schema", Detail: "-avro-schema is required with -format avro when the spec's payloads are JSON Schema"}
+		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: "-avro-schema is required with -format avro when the spec's payloads are JSON Schema"}
 	}
 	keyed := slices.IndexFunc(spec, func(mt asyncapi.MessageType) bool { return mt.KeyAvsc != nil })
 	if keyed >= 0 && opts.AvroKeySchema != "" {
-		return &wire.Error{Flag: "avro-key-schema", Detail: fmt.Sprintf("the spec declares the Key's avsc (bindings.kafka.key of %s) and -avro-key-schema gives another; drop -avro-key-schema, so the run has one source of truth", spec[keyed].Name)}
+		return &wire.Error{Usage: true, Flag: "avro-key-schema", Detail: fmt.Sprintf("the spec declares the Key's avsc (bindings.kafka.key of %s) and -avro-key-schema gives another; drop -avro-key-schema, so the run has one source of truth", spec[keyed].Name)}
 	}
 	if opts.KeyPath != "" && opts.AvroKeySchema == "" && keyed < 0 {
-		return &wire.Error{Flag: "keyPath", Detail: "-keyPath requires a key avsc: -avro-key-schema, or a Key binding beside the spec's Avro payload, so there is a Key to plant"}
+		return &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key avsc: -avro-key-schema, or a Key binding beside the spec's Avro payload, so there is a Key to plant"}
 	}
 	// Producing AVRO data needs Confluent framing (magic byte + registry
 	// schema ID, ADR-0007 decision 2), and registration of the value avsc is
 	// how that ID comes to exist. Dry run never touches a registry.
 	if !opts.DryRun && opts.RegistryURL == "" {
-		return &wire.Error{Flag: "registry", Detail: "-registry is required to produce with the avro Wire format"}
+		return &wire.Error{Usage: true, Flag: "registry", Detail: "-registry is required to produce with the avro Wire format"}
 	}
 	for _, mt := range opts.MessageTypes {
 		if err := checkRegistry(mt); err != nil {
