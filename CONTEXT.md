@@ -13,7 +13,7 @@ The Kafka topic a run produces to, exactly one per run, named by `-topic`. The A
 _Avoid_: channel, topic (alone)
 
 **Topic parameter**:
-A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (a 3.0 address, or a 2.x spec entry key without a Kafka binding). `-topic` fills it, the value must satisfy the parameter's declaration (a 3.0 enum, a 2.x schema, which must allow a string), and a declared payload location receives it in every message, checked before the run starts like a Key path.
+A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (a 3.0 address, or a 2.x spec entry key without a Kafka binding). `-topic` fills it, the value must satisfy the parameter's declaration (a 3.0 enum, a 2.x schema, which must allow a string), and a declared payload or header location receives it in every message's Payload or Headers, checked before the run starts like a Key path.
 _Avoid_: channel parameter, address parameter, variable
 
 **Message**:

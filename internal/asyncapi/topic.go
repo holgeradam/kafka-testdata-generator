@@ -169,7 +169,7 @@ func fill(address, topic string) [][]paramValue {
 
 // parameters reads the Topic parameters of one bound spec entry: each value
 // -topic filled, checked by check against the declared parameter, with its
-// payload location when it declares one.
+// payload or header location when it declares one.
 func (d *Document) parameters(m match, topic string, check valueCheck) ([]TopicParameter, error) {
 	if len(m.values) == 0 {
 		return nil, nil
@@ -198,7 +198,7 @@ func (d *Document) parameters(m match, topic string, check valueCheck) ([]TopicP
 			if err := check(d, p, v, where, topic); err != nil {
 				return nil, err
 			}
-			if tp.Location, tp.Pointer, err = payloadLocation(p, v.name, where); err != nil {
+			if tp.Location, tp.Pointer, tp.InHeaders, err = location(p, v.name, where); err != nil {
 				return nil, err
 			}
 		}
@@ -207,31 +207,36 @@ func (d *Document) parameters(m match, topic string, check valueCheck) ([]TopicP
 	return out, nil
 }
 
-// payloadLocation reads a parameter's location, a runtime expression. A
-// payload location gives the JSON Pointer tokens into the Payload; a header
-// location stops the run: planting into Headers is not supported yet.
-func payloadLocation(p map[string]any, name, where string) (string, []string, error) {
+// location reads a parameter's location, a runtime expression: a payload
+// location gives the JSON Pointer tokens into the Payload, a header location
+// those into the Headers (#93), which inHeaders tells apart.
+func location(p map[string]any, name, where string) (loc string, pointer []string, inHeaders bool, err error) {
 	if p["location"] == nil {
-		return "", nil, nil
+		return "", nil, false, nil
 	}
-	location, ok := p["location"].(string)
+	loc, ok := p["location"].(string)
 	if !ok {
-		return "", nil, fmt.Errorf("%s: parameter %s: location must be a string", where, name)
+		return "", nil, false, fmt.Errorf("%s: parameter %s: location must be a string", where, name)
 	}
-	const payload = "$message.payload"
-	switch {
-	case strings.HasPrefix(location, "$message.header"):
-		return "", nil, fmt.Errorf("%s: parameter %s lives in message headers, where the tool does not plant Topic parameters yet", where, name)
-	case location == payload || location == payload+"#":
-		return "", nil, fmt.Errorf("%s: parameter %s: location %s names the whole Payload, not a field in it", where, name, location)
-	case !strings.HasPrefix(location, payload+"#/"):
-		return "", nil, fmt.Errorf("%s: parameter %s: location %s is not a $message.payload#/... runtime expression", where, name, location)
+	for _, place := range []struct {
+		prefix, whole, part string
+		headers             bool
+	}{
+		{"$message.payload", "the whole Payload", "a field in it", false},
+		{"$message.header", "the whole Headers", "a header in them", true},
+	} {
+		switch {
+		case loc == place.prefix || loc == place.prefix+"#":
+			return "", nil, false, fmt.Errorf("%s: parameter %s: location %s names %s, not %s", where, name, loc, place.whole, place.part)
+		case strings.HasPrefix(loc, place.prefix+"#/"):
+			tokens := strings.Split(strings.TrimPrefix(loc, place.prefix+"#/"), "/")
+			for i, t := range tokens {
+				tokens[i] = unescapeToken(t)
+			}
+			return loc, tokens, place.headers, nil
+		}
 	}
-	tokens := strings.Split(strings.TrimPrefix(location, payload+"#/"), "/")
-	for i, t := range tokens {
-		tokens[i] = unescapeToken(t)
-	}
-	return location, tokens, nil
+	return "", nil, false, fmt.Errorf("%s: parameter %s: location %s is not a $message.payload#/... or $message.header#/... runtime expression", where, name, loc)
 }
 
 // mergeParameters adds a spec entry's Topic parameters to those already found:

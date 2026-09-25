@@ -133,8 +133,12 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	for i, v := range values {
 		payloads[i] = &boundGenerator{gen: gen, model: v, plants: plants[i]}
 	}
+	headers, err := wire.NewHeaderSource(opts.Synth, spec, opts.TopicParameters)
+	if err != nil {
+		return nil, err
+	}
 	parts := &wire.Parts{
-		Values:  &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: wire.NewHeaderSource(opts.Synth, spec)},
+		Values:  &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: headers},
 		Encoder: encoderFor(opts, values, u, key),
 	}
 	// Records from -avro-schema are of no Message type in the spec, so no
@@ -302,7 +306,7 @@ func loadAvsc(path string) (*avro.Schema, error) {
 func topicParameters(values []*avro.Schema, names []string, opts wire.Options) ([]wire.Plants, error) {
 	plants := make([]wire.Plants, len(values))
 	for _, tp := range opts.TopicParameters {
-		if tp.Pointer == nil {
+		if tp.Pointer == nil || tp.InHeaders {
 			continue
 		}
 		for i, value := range values {

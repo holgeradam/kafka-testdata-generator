@@ -408,16 +408,28 @@ Before any record is generated, the location is checked as `-keyPath` is: genera
 field there in every record (required at every step, no `oneOf`/`anyOf` on the way), and the value
 must conform to that field's schema - its `pattern`, `enum`, `format`, `maxLength` and so on - so
 every record still conforms. Under AVRO the location is walked through the value avsc
-instead: record fields only, ending in a `string`, a `uuid` or an `enum` holding the value. Every
-mistake stops the run with its own error:
+instead: record fields only, ending in a `string`, a `uuid` or an `enum` holding the value.
+
+A header location, `$message.header#/tenant`, plants the value into every record's Headers
+instead (see Headers), in JSON and AVRO mode alike: it is checked the same way against each
+Message type's `headers` schema, which every Message type must then declare. Headers are no
+place for the Key, so a header location never clashes with `-keyPath`:
+
+```yaml
+parameters:
+  tenant: {location: '$message.header#/tenant'}   # every record carries the header tenant=acme
+```
+
+Every mistake stops the run with its own error:
 
 - a value outside the parameter's `enum`, one its 2.x `schema` does not accept, or one the field
   there does not accept
 - a 2.x parameter `schema` that does not allow a string, such as `type: integer`
 - a location that is not guaranteed in some Message type, or that overlaps `-keyPath` or another
   parameter's location
-- a header location (`$message.header#/...`): the tool does not plant Topic parameters into
-  Headers yet
+- a header location in a Message type that declares no `headers`, or under `-avro-schema`, whose
+  records are of no Message type in the spec
+- a location naming the whole Payload or Headers (`$message.payload`, `$message.header#`)
 - a `-topic` that fills templates in different ways, such as `orders.eu` against both
   `orders.{region}` and `{env}.eu`, or against a template and a literal `orders.eu` address or key
 
