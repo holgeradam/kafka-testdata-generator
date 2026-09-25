@@ -128,12 +128,14 @@ type Topic struct {
 type TopicParameter struct {
 	Name  string
 	Value string
-	// Location is the parameter's payload location as written, e.g.
+	// Location is the parameter's location as written, e.g.
 	// $message.payload#/region, and Pointer its JSON Pointer tokens into the
-	// Payload; both empty when it declares none. The same parameter appears
-	// once per distinct location the spec entries declare for it.
-	Location string
-	Pointer  []string
+	// Payload, or into the Headers when InHeaders ($message.header#/tenant,
+	// #93); all empty when it declares none. The same parameter appears once
+	// per distinct location the spec entries declare for it.
+	Location  string
+	Pointer   []string
+	InHeaders bool
 }
 
 // Topic reads what the spec declares for a Kafka topic.

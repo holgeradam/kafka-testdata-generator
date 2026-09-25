@@ -183,14 +183,16 @@ channels:
 // honour stops it with its own error.
 func TestTopicParameterRejectMistakes(t *testing.T) {
 	cases := map[string]struct{ parameters, want string }{
-		"header location": {`{tenant: {location: '$message.header#/tenant'}}`,
-			"parameter tenant lives in message headers, where the tool does not plant Topic parameters yet"},
+		"whole headers": {`{tenant: {location: '$message.header'}}`,
+			"parameter tenant: location $message.header names the whole Headers, not a header in them"},
+		"root header pointer": {`{tenant: {location: '$message.header#'}}`,
+			"parameter tenant: location $message.header# names the whole Headers, not a header in them"},
 		"whole payload": {`{tenant: {location: '$message.payload'}}`,
 			"parameter tenant: location $message.payload names the whole Payload, not a field in it"},
 		"root pointer": {`{tenant: {location: '$message.payload#'}}`,
 			"parameter tenant: location $message.payload# names the whole Payload, not a field in it"},
 		"not an expression": {`{tenant: {location: 'payload.tenant'}}`,
-			"parameter tenant: location payload.tenant is not a $message.payload#/... runtime expression"},
+			"parameter tenant: location payload.tenant is not a $message.payload#/... or $message.header#/... runtime expression"},
 		"location not a string": {`{tenant: {location: 7}}`, "parameter tenant: location must be a string"},
 		"enum not a list":       {`{tenant: {enum: acme}}`, "parameter tenant: enum must be a list of strings"},
 		"parameter not object":  {`{tenant: acme}`, "parameters.tenant: must be an object"},
@@ -226,4 +228,22 @@ channels:
     messages: {paid: {payload: {type: object}}}
 `)
 	readTopic(t, doc, "payments")
+}
+
+// TestTopicParameterHeaderLocation proves a header location reads as a JSON
+// Pointer into the Headers, escapes decoded (#93).
+func TestTopicParameterHeaderLocation(t *testing.T) {
+	doc := loadSpec(t, head3+`
+channels:
+  regional:
+    address: 'orders.{tenant}'
+    parameters:
+      tenant: {location: '$message.header#/x~1tenant'}
+    messages: {created: {payload: {type: object}}}
+`)
+	got := readTopic(t, doc, "orders.acme").Parameters
+	want := []TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/x~1tenant", Pointer: []string{"x/tenant"}, InHeaders: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parameters = %+v, want %+v", got, want)
+	}
 }

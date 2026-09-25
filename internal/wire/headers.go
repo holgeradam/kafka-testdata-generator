@@ -51,23 +51,74 @@ type HeaderSource struct {
 	gen     *generator.Generator
 	types   []asyncapi.MessageType
 	schemas []map[string]any
+	// plants are the Topic parameter values planted into each Message
+	// type's Headers (#93).
+	plants []Plants
 }
 
 // NewHeaderSource returns the Headers source for the Message types, in the
 // order the Wire format holds them, or nil when none declares headers: such a
 // run draws nothing for Headers from the seeded stream, so its records are
 // what they were before Headers existed.
-func NewHeaderSource(s *synth.Synthesizer, types []asyncapi.MessageType) *HeaderSource {
+//
+// Each Topic parameter with a header location is checked against every
+// Message type's headers schema before any record exists, as a payload
+// location is against the Payload's (#83): the location must be guaranteed,
+// the value must conform to the header's schema there, and no two plantings
+// may land in the same header. Headers are no place for the Key, so -keyPath
+// never clashes with them.
+func NewHeaderSource(s *synth.Synthesizer, types []asyncapi.MessageType, params []asyncapi.TopicParameter) (*HeaderSource, error) {
 	schemas := make([]map[string]any, len(types))
 	declared := false
 	for i, mt := range types {
 		schemas[i] = mt.Headers
 		declared = declared || mt.Headers != nil
 	}
-	if !declared {
-		return nil
+	plants, err := headerPlants(types, params)
+	if err != nil {
+		return nil, err
 	}
-	return &HeaderSource{gen: generator.New(s), types: types, schemas: schemas}
+	if !declared {
+		return nil, nil
+	}
+	return &HeaderSource{gen: generator.New(s), types: types, schemas: schemas, plants: plants}, nil
+}
+
+// headerPlants checks each header location against every Message type and
+// returns what to plant into each type's Headers.
+func headerPlants(types []asyncapi.MessageType, params []asyncapi.TopicParameter) ([]Plants, error) {
+	plants := make([]Plants, len(types))
+	for _, tp := range params {
+		if !tp.InHeaders {
+			continue
+		}
+		refuse := func(format string, args ...any) error {
+			return &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: ", tp.Name) + fmt.Sprintf(format, args...)}
+		}
+		if len(types) == 0 {
+			return nil, refuse("location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Location)
+		}
+		for i, mt := range types {
+			inType := ""
+			if len(types) > 1 {
+				inType = "in Message type " + mt.Name + ": "
+			}
+			if mt.Headers == nil {
+				return nil, refuse("location %s: %s%s declares no headers", tp.Location, inType, mt.Name)
+			}
+			steps, field, err := generator.Locate(mt.Headers, tp.Pointer)
+			if err != nil {
+				return nil, refuse("location %s: %s%v", tp.Location, inType, err)
+			}
+			if err := generator.Conforms(field, tp.Value); err != nil {
+				return nil, refuse("value %s does not conform to the header at %s: %s%v", tp.Value, tp.Location, inType, err)
+			}
+			if plants[i], err = plants[i].Add(tp, steps, ""); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return plants, nil
 }
 
 // Generate returns the encoded Headers of a record of Message type i: none
@@ -78,6 +129,9 @@ func (h *HeaderSource) Generate(i int) ([]pipeline.Header, error) {
 	}
 	v, err := h.gen.Value(h.schemas[i])
 	if err != nil {
+		return nil, fmt.Errorf("headers of %s: %w", h.types[i].Name, err)
+	}
+	if err := h.plants[i].Apply(v); err != nil {
 		return nil, fmt.Errorf("headers of %s: %w", h.types[i].Name, err)
 	}
 	values, _ := v.(map[string]any)

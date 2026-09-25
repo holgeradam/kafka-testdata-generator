@@ -66,8 +66,12 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload, plants: plants[i]}
 	}
 
+	headers, err := wire.NewHeaderSource(opts.Synth, types, opts.TopicParameters)
+	if err != nil {
+		return nil, err
+	}
 	parts := &wire.Parts{
-		Values: &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: wire.NewHeaderSource(opts.Synth, types)},
+		Values: &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: headers},
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
 			return JsonEncoder{}, nil
 		},
@@ -131,7 +135,7 @@ func everyType(types []asyncapi.MessageType, keyBinding map[string]any) keyplan.
 func topicParameters(types []asyncapi.MessageType, opts wire.Options) ([]wire.Plants, error) {
 	plants := make([]wire.Plants, len(types))
 	for _, tp := range opts.TopicParameters {
-		if tp.Pointer == nil {
+		if tp.Pointer == nil || tp.InHeaders {
 			continue
 		}
 		for i, mt := range types {

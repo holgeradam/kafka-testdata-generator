@@ -153,8 +153,8 @@ channels:
 }
 
 // TestTopicParameter2Location proves a 2.x parameter's location is read as a
-// 3.0 one's: a payload location gives a JSON Pointer, and a header location
-// stops the run.
+// 3.0 one's: a payload location gives a JSON Pointer into the Payload, and a
+// header location one into the Headers (#93).
 func TestTopicParameter2Location(t *testing.T) {
 	doc := loadSpec(t, head2+`
 channels:
@@ -164,7 +164,7 @@ channels:
     publish: {message: {name: created, payload: {type: object}}}
   tenants.{tenant}:
     parameters:
-      tenant: {location: '$message.header#/tenant'}
+      tenant: {location: '$message.header#/meta/tenant'}
     publish: {message: {name: joined, payload: {type: object}}}
 `)
 	got := readTopic(t, doc, "orders.eu").Parameters
@@ -172,8 +172,11 @@ channels:
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}
-	_, err := doc.Topic("tenants.acme")
-	wantErr(t, err, "parameter tenant lives in message headers, where the tool does not plant Topic parameters yet")
+	got = readTopic(t, doc, "tenants.acme").Parameters
+	want = []TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/meta/tenant", Pointer: []string{"meta", "tenant"}, InHeaders: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("parameters = %+v, want %+v", got, want)
+	}
 }
 
 // TestTopicParameter2RejectMistakes proves a malformed 2.x parameter stops

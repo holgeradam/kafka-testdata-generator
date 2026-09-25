@@ -96,7 +96,8 @@ func TestScenarioV3ExampleMatchesV2(t *testing.T) {
 // TestScenarioTopicParameters is #83 end to end: -topic fills a templated 3.0
 // address, and the Topic parameter's value is planted in every record of
 // every Message type; a value outside the parameter's enum, or a header
-// location, stops the run before a record exists.
+// location in a Message type without headers, stops the run before a record
+// exists.
 func TestScenarioTopicParameters(t *testing.T) {
 	bin := buildBinary(t)
 	spec := writeTempSpec(t, `asyncapi: 3.0.0
@@ -140,7 +141,7 @@ channels:
 
 	for topic, want := range map[string]string{
 		"orders.apac":  `Kafka topic "orders.apac": region value apac is not in the parameter's enum [eu, us]`,
-		"tenants.acme": "parameter tenant lives in message headers, where the tool does not plant Topic parameters yet",
+		"tenants.acme": "Topic parameter tenant: location $message.header#/tenant: created declares no headers",
 	} {
 		out, err := exec.Command(bin, "-spec", spec, "-topic", topic, "-dry-run", "-count", "1").CombinedOutput()
 		if err == nil {
@@ -1004,6 +1005,104 @@ func TestScenarioHeadersProduced(t *testing.T) {
 	}
 	if createdSeen == 0 {
 		t.Error("no OrderCreated record was produced, so no headers were checked")
+	}
+}
+
+// TestScenarioHeaderTopicParameters is #93 end to end: -topic fills a
+// Topic parameter whose location is in the Headers, in a 3.0 and a 2.x spec,
+// in JSON and AVRO mode, and every record's Headers carry the value, in a Dry
+// run and when produced; a value the header's schema refuses stops the run.
+func TestScenarioHeaderTopicParameters(t *testing.T) {
+	bin := buildBinary(t)
+	const headers = `{type: object, required: [tenant, attempt], properties: {tenant: {type: string, pattern: '^[a-z]+$'}, attempt: {type: integer, minimum: 1, maximum: 3}}}`
+	specs := map[string]string{
+		"3.0 json": `asyncapi: 3.0.0
+info: {title: Tenants, version: '1'}
+channels:
+  tenants:
+    address: 'orders.{tenant}'
+    parameters: {tenant: {location: '$message.header#/tenant'}}
+    messages:
+      created: {name: OrderCreated, headers: ` + headers + `, payload: {type: object, required: [kind], properties: {kind: {const: created}}}}
+      paid: {name: OrderPaid, headers: ` + headers + `, payload: {type: object, required: [kind], properties: {kind: {const: paid}}}}
+`,
+		"2.x json": `asyncapi: 2.6.0
+info: {title: Tenants, version: '1'}
+channels:
+  orders.{tenant}:
+    parameters: {tenant: {schema: {type: string}, location: '$message.header#/tenant'}}
+    publish: {message: {name: OrderCreated, headers: ` + headers + `, payload: {type: object, required: [kind], properties: {kind: {const: created}}}}}
+`,
+		"3.0 avro": `asyncapi: 3.0.0
+info: {title: Tenants, version: '1'}
+channels:
+  tenants:
+    address: 'orders.{tenant}'
+    parameters: {tenant: {location: '$message.header#/tenant'}}
+    messages:
+      created:
+        name: OrderCreated
+        headers: ` + headers + `
+        payload: {schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: {type: record, name: OrderCreated, fields: [{name: kind, type: string}]}}
+`,
+	}
+	echo := regexp.MustCompile(`^Headers: \{"attempt":"[123]","tenant":"acme"\}$`)
+	for name, spec := range specs {
+		t.Run(name, func(t *testing.T) {
+			path := writeTempSpec(t, spec)
+			cmd := exec.Command(bin, "-spec", path, "-topic", "orders.acme", "-dry-run", "-count", "10", "-seed", "6")
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("run: %v\n%s", err, stderr.String())
+			}
+			var echoes int
+			for _, line := range strings.Split(stderr.String(), "\n") {
+				if strings.HasPrefix(line, "Headers: ") {
+					echoes++
+					if !echo.MatchString(line) {
+						t.Errorf("header echo %q, want tenant=acme planted", line)
+					}
+				}
+			}
+			if echoes != 10 {
+				t.Errorf("%d header echoes, want one per record\nstderr: %s", echoes, stderr.String())
+			}
+
+			out, err := exec.Command(bin, "-spec", path, "-topic", "orders.ACME", "-dry-run", "-count", "1").CombinedOutput()
+			if err == nil || !strings.Contains(string(out), "Topic parameter tenant: value ACME does not conform to the header at $message.header#/tenant") {
+				t.Errorf("orders.ACME: err %v, output:\n%s\nwant the value refused by the header's pattern", err, out)
+			}
+		})
+	}
+
+	cluster, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "orders.acme"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cluster.Close()
+	broker := cluster.ListenAddrs()[0]
+	if out, err := exec.Command(bin, "-spec", writeTempSpec(t, specs["3.0 json"]), "-topic", "orders.acme", "-broker", broker, "-count", "5", "-rate", "0s").CombinedOutput(); err != nil {
+		t.Fatalf("produce: %v\n%s", err, out)
+	}
+	consumer, err := kgo.NewClient(kgo.SeedBrokers(broker), kgo.ConsumeTopics("orders.acme"), kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var records []*kgo.Record
+	for len(records) < 5 && ctx.Err() == nil {
+		records = append(records, consumer.PollFetches(ctx).Records()...)
+	}
+	if len(records) != 5 {
+		t.Fatalf("read %d records, want 5", len(records))
+	}
+	for i, r := range records {
+		if len(r.Headers) != 2 || r.Headers[1].Key != "tenant" || string(r.Headers[1].Value) != "acme" {
+			t.Errorf("record %d: headers %v, want tenant=acme planted", i, r.Headers)
+		}
 	}
 }
 
