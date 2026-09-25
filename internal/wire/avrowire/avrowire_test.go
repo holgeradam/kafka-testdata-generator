@@ -174,8 +174,10 @@ func TestBuildEncoderPerMode(t *testing.T) {
 	}
 }
 
-// TestCheck proves the AVRO flag rules hold before any file is read: a value
-// avsc always, a key avsc for -keyPath, and a registry only when producing.
+// TestCheck proves the AVRO flag rules, judged against the spec: one value
+// avsc, from the spec or -avro-schema; one key avsc, from the spec's Key
+// binding or -avro-key-schema, for -keyPath; a registry only when producing;
+// one Avro Message type until #91; and registry bindings the tool honours.
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		name, flag string
@@ -187,6 +189,14 @@ func TestCheck(t *testing.T) {
 		{"no value avsc", "avro-schema", wire.Options{DryRun: true}},
 		{"key path without key avsc", "keyPath", wire.Options{AvroSchema: "v.avsc", KeyPath: "id", DryRun: true}},
 		{"produce without registry", "registry", wire.Options{AvroSchema: "v.avsc"}},
+		{"spec avsc", "", wire.Options{MessageTypes: avroTypes("A"), DryRun: true}},
+		{"spec key planted", "", wire.Options{MessageTypes: keyedAvroTypes("A"), KeyPath: "id", DryRun: true}},
+		{"spec avsc, key avsc planted", "", wire.Options{MessageTypes: avroTypes("A"), AvroKeySchema: "k.avsc", KeyPath: "id", DryRun: true}},
+		{"spec avsc and value avsc", "avro-schema", wire.Options{MessageTypes: avroTypes("A"), AvroSchema: "v.avsc", DryRun: true}},
+		{"spec key and key avsc", "avro-key-schema", wire.Options{MessageTypes: keyedAvroTypes("A"), AvroKeySchema: "k.avsc", DryRun: true}},
+		{"spec avsc, key path without a key", "keyPath", wire.Options{MessageTypes: avroTypes("A"), KeyPath: "id", DryRun: true}},
+		{"several spec avscs", "topic", wire.Options{MessageTypes: avroTypes("A", "B"), DryRun: true}},
+		{"registry binding", "topic", wire.Options{MessageTypes: []asyncapi.MessageType{{Name: "A", Payload: map[string]any{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}, AvroSchema: "v.avsc", DryRun: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -312,4 +322,22 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 			}
 		})
 	}
+}
+
+// avroTypes are Message types whose payloads are Avro, one per name.
+func avroTypes(names ...string) []asyncapi.MessageType {
+	var types []asyncapi.MessageType
+	for _, n := range names {
+		types = append(types, asyncapi.MessageType{Name: n, Avsc: []byte(`{"type":"record","name":"` + n + `","fields":[{"name":"id","type":"string"}]}`)})
+	}
+	return types
+}
+
+// keyedAvroTypes are avroTypes with an Avro Key binding.
+func keyedAvroTypes(names ...string) []asyncapi.MessageType {
+	types := avroTypes(names...)
+	for i := range types {
+		types[i].KeyAvsc = []byte(`"string"`)
+	}
+	return types
 }

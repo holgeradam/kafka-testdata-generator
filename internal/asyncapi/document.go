@@ -38,10 +38,31 @@ type MessageType struct {
 	// Name is the message's name, else its component key, else where it is
 	// declared, e.g. "orders publish oneOf[1]".
 	Name string
-	// Payload is the JSON Schema the Payload honours.
+	// Payload is the JSON Schema the Payload honours; nil when the payload is
+	// Avro, and Avsc holds it.
 	Payload map[string]any
-	// KeyBinding is the bindings.kafka.key schema, nil when none is declared.
+	// KeyBinding is the bindings.kafka.key schema, nil when none is declared
+	// or the payload is Avro.
 	KeyBinding map[string]any
+	// Avsc is the Payload's avsc when the message declares an Avro
+	// schemaFormat (#84), as JSON with its $refs expanded; nil for a JSON
+	// Schema payload.
+	Avsc []byte
+	// KeyAvsc is bindings.kafka.key read as an avsc beside an Avro payload
+	// (#84 decision 7); nil when none is declared or the payload is JSON
+	// Schema.
+	KeyAvsc []byte
+	// Registry is what the Kafka message binding declares about the schema
+	// registry, for the AVRO Wire format to judge (#84 decision 8).
+	Registry RegistryBinding
+}
+
+// RegistryBinding holds the schema-registry fields of a Kafka message binding
+// as written, a number as its decimal text; each empty when absent.
+type RegistryBinding struct {
+	SchemaIDLocation        string
+	SchemaIDPayloadEncoding string
+	SchemaLookupStrategy    string
 }
 
 // Load reads and parses an AsyncAPI 2.x or 3.x specification from a YAML or
@@ -176,23 +197,39 @@ func messageName(msg map[string]any, ref, fallback string) string {
 
 // messageType reads a message, its traits already merged, into a Message
 // type: its payload schema, which the front end found with its schemaFormat
-// (nil when none is declared), and its Key binding.
+// (nil when none is declared), its Key binding, read in the payload's format,
+// and the binding's registry fields.
 func (d *Document) messageType(msg map[string]any, name string, payloadNode, format any) (MessageType, error) {
 	if payloadNode == nil {
 		return MessageType{}, fmt.Errorf("message %s declares no payload", name)
 	}
-	if err := d.checkSchemaFormat(format, name); err != nil {
+	pf, err := d.payloadFormatOf(format, name)
+	if err != nil {
 		return MessageType{}, err
 	}
-	payload, err := d.schema(payloadNode)
-	if err != nil {
-		return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
-	}
-	mt := MessageType{Name: name, Payload: payload}
-
 	kafka, err := d.kafkaBinding(msg["bindings"], "message "+name)
 	if err != nil {
 		return MessageType{}, err
+	}
+	mt := MessageType{Name: name}
+	if kafka != nil {
+		mt.Registry = RegistryBinding{text(kafka["schemaIdLocation"]), text(kafka["schemaIdPayloadEncoding"]), text(kafka["schemaLookupStrategy"])}
+	}
+
+	if pf == avroSchema {
+		if mt.Avsc, err = d.avsc(payloadNode); err != nil {
+			return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
+		}
+		if kafka != nil && kafka["key"] != nil {
+			if mt.KeyAvsc, err = d.avsc(kafka["key"]); err != nil {
+				return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
+			}
+		}
+		return mt, nil
+	}
+
+	if mt.Payload, err = d.schema(payloadNode); err != nil {
+		return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
 	}
 	if kafka != nil && kafka["key"] != nil {
 		if _, ok := kafka["key"].(map[string]any); !ok {
@@ -203,6 +240,14 @@ func (d *Document) messageType(msg map[string]any, name string, payloadNode, for
 		}
 	}
 	return mt, nil
+}
+
+// text is a declared scalar as written, "" when absent.
+func text(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 // object resolves node through any $ref chain and requires an object there.

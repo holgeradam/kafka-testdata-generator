@@ -348,10 +348,10 @@ channels:
 		{"avro key reuse without a key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-records-per-key", "2"}, "records-per-key", "requires a key schema", nil},
 		{"renamed key flag", []string{"-spec", spec, "-topic", "orders", "-key", "orderId"}, "key", "-key was renamed to -keyPath", nil},
 		{"avro without value avsc", []string{"-spec", spec, "-topic", "orders", "-format", "avro"}, "avro-schema", "-avro-schema is required with -format avro", nil},
-		{"avro key path without key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires -avro-key-schema", nil},
+		{"avro key path without key avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-keyPath", "id"}, "keyPath", "-keyPath requires a key avsc", nil},
 		{"avro produce without registry", []string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value}, "registry", "-registry is required", nil},
-		{"avro flags under json", []string{"-spec", spec, "-topic", "orders", "-avro-schema", value}, "avro-schema", "only valid with -format avro", nil},
-		{"registry under json", []string{"-spec", spec, "-topic", "orders", "-registry", "http://localhost:8081"}, "registry", "-registry is only valid with -format avro", nil},
+		{"avro flags under json", []string{"-spec", spec, "-topic", "orders", "-format", "json", "-avro-schema", value}, "format", "drop -format json", nil},
+		{"registry under json", []string{"-spec", spec, "-topic", "orders", "-registry", "http://localhost:8081"}, "registry", "-registry is only valid with the avro Wire format", nil},
 		{"key path without key schema", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "-keyPath requires a key schema", nil},
 		{"spec file missing", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-topic", "orders"}, "spec", "", nil},
 		{"Kafka topic missing from spec", []string{"-spec", spec, "-topic", "nope", "-dry-run"}, "topic", "", nil},
@@ -522,7 +522,7 @@ func TestUsageStatesEachDefaultOnceAndTruly(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"  -acks level\n    \tAcks level: 1 (leader) or all (all in-sync replicas) (default 1)\n",
-		"  -format name\n    \tOutput wire format name: json or avro (default json)\n",
+		"  -format name\n    \tWire format name: json or avro (default: avro when the spec's payloads are Avro or -avro-schema is given, else json)\n",
 		"  -now time\n    \tClock for date fields, as an RFC3339 time (default: the current time)\n",
 		"  -seed int\n    \tRandom seed for reproducibility (default: random)\n",
 	} {

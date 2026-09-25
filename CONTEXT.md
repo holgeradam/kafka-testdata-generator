@@ -29,7 +29,7 @@ A kind of message the spec declares for a Kafka topic, e.g. OrderCreated or Orde
 _Avoid_: event type, message schema, message (alone)
 
 **Message schema**:
-A JSON Schema embedded in the AsyncAPI spec as the payload of a Message type. Defines the structure and constraints of generated test data.
+The payload schema a Message type declares in the AsyncAPI spec, in either format the tool reads: JSON Schema, or Avro (an avsc, declared through `schemaFormat`). Defines the structure and constraints of generated test data.
 _Avoid_: payload schema
 
 **Payload**:
@@ -45,7 +45,7 @@ The key of a message, paired with its Payload. It is generated from the **Key sc
 _Avoid_: partition key
 
 **Key schema**:
-The schema that governs Key generation, supplied per Wire format: `message.bindings.kafka.key` in JSON mode, the key avsc (`-avro-key-schema`) under AVRO. It describes the Key alone; nothing in it says which Payload field the Key corresponds to.
+The schema that governs Key generation, supplied per Wire format: `message.bindings.kafka.key` in JSON mode, the key avsc under AVRO (the spec's Key binding beside Avro payloads, else `-avro-key-schema`). It describes the Key alone; nothing in it says which Payload field the Key corresponds to.
 _Avoid_: key binding (JSON-only term), key avsc (AVRO-only term)
 
 **Key plan**:
@@ -84,11 +84,11 @@ The Wire-format seam that turns a generated message (Key + Payload) into the byt
 _Avoid_: serializer, marshaler, codec
 
 **Wire format**:
-The byte shape of produced Kafka records and how messages render for Dry run. Today JSON (NDJSON); AVRO uses the Confluent wire format (magic byte + big-endian schema ID + Avro binary) and registers schemas in a registry. Each Wire format is one adapter that owns everything format-specific about a run: the rules about its own flags, which schema governs generation of the Payload (see Conformance) and of the Key, and the Encoders for produce and Dry run. The Run plan only picks the adapter by name.
+The byte shape of produced Kafka records and how messages render for Dry run. Today JSON (NDJSON); AVRO uses the Confluent wire format (magic byte + big-endian schema ID + Avro binary) and registers schemas in a registry. Each Wire format is one adapter that owns everything format-specific about a run: the rules about its own flags, which schema governs generation of the Payload (see Conformance) and of the Key, and the Encoders for produce and Dry run. The Run plan infers the Wire format from where the Payload's schema comes from: Avro payloads in the spec, or `-avro-schema`, mean AVRO, anything else JSON; `-format` only confirms it (ADR-0011).
 _Avoid_: format, encoding, output format
 
 **avsc**:
-An explicit Apache Avro schema (JSON) supplied by the user for AVRO mode. It is always provided explicitly, never derived from the Message schema. In AVRO mode the avsc - a value avsc for the Payload and a key avsc for the Key - governs generation (see Conformance).
+An Apache Avro schema (JSON): an Avro Message schema or Key binding in the spec, or a file passed as `-avro-schema` or `-avro-key-schema`. It is always stated explicitly, never derived from a JSON Schema. In AVRO mode the avsc - a value avsc for the Payload and a key avsc for the Key - governs generation (see Conformance).
 _Avoid_: avro schema (only when unambiguous), Avro serialization schema
 
 **Avro model**:

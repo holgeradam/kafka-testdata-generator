@@ -784,6 +784,70 @@ func TestScenarioAvroKeySchemaDryRunGeneratesKey(t *testing.T) {
 	}
 }
 
+// TestScenarioAvroFromSpec is #90 end to end: a 3.0 spec declaring its
+// Payload and Key in Avro runs AVRO with no AVRO flags. The Dry run shows
+// Avro JSON records and Keys, the Key planted at -keyPath, and matches, byte
+// for byte, the run given the same avsc files through -avro-schema and
+// -avro-key-schema.
+func TestScenarioAvroFromSpec(t *testing.T) {
+	bin := buildBinary(t)
+	const value = `{"type":"record","name":"OrderCreated","namespace":"com.acme","fields":[{"name":"orderId","type":{"type":"string","logicalType":"uuid"}},{"name":"status","type":{"type":"enum","name":"Status","symbols":["NEW","PAID"]}},{"name":"total","type":"double"}]}`
+	const key = `{"type":"string","logicalType":"uuid"}`
+	spec := writeTempSpec(t, `asyncapi: 3.0.0
+info: {title: Orders, version: '1'}
+channels:
+  orders:
+    address: orders.created
+    messages:
+      created:
+        name: OrderCreated
+        bindings: {kafka: {key: {$ref: '#/components/schemas/OrderKey'}}}
+        payload:
+          schemaFormat: 'application/vnd.apache.avro+json;version=1.9.0'
+          schema: {$ref: '#/components/schemas/OrderCreated'}
+components:
+  schemas:
+    OrderKey: `+key+`
+    OrderCreated: `+value+`
+`)
+	run := func(args ...string) (string, string) {
+		t.Helper()
+		cmd := exec.Command(bin, append([]string{"-topic", "orders.created", "-dry-run", "-count", "5", "-seed", "9", "-now", "2026-01-02T03:04:05Z", "-keyPath", "orderId"}, args...)...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%v: %v\nstderr: %s", args, err, stderr.String())
+		}
+		return stdout.String(), stderr.String()
+	}
+
+	stdout, stderr := run("-spec", spec)
+	keys := avroKeys(t, stderr)
+	lines := filterJSONLines(stdout)
+	if len(lines) != 5 || len(keys) != 5 {
+		t.Fatalf("want 5 records and 5 Keys, got:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	for i, line := range lines {
+		var p map[string]any
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+		if p["status"] != "NEW" && p["status"] != "PAID" {
+			t.Errorf("record %d: status %v, want a symbol of the spec's enum", i, p["status"])
+		}
+		if p["orderId"] != keys[i] {
+			t.Errorf("record %d: orderId %v, Key %v; want the Key planted", i, p["orderId"], keys[i])
+		}
+	}
+
+	files := [][]string{{"-avro-schema", writeTempAvsc(t, "value.avsc", value)}, {"-avro-key-schema", writeTempAvsc(t, "key.avsc", key)}}
+	fromFiles, fromFilesErr := run(append(append([]string{"-spec", filepath.Join("..", "..", "examples", "order.asyncapi.yaml")}, files[0]...), files[1]...)...)
+	withoutStats := regexp.MustCompile(`(?m)^Stats .*$`)
+	if fromFiles != stdout || withoutStats.ReplaceAllString(fromFilesErr, "") != withoutStats.ReplaceAllString(stderr, "") {
+		t.Errorf("the spec's avsc and the same avsc as files differ:\nspec:\n%s%s\nfiles:\n%s%s", stdout, stderr, fromFiles, fromFilesErr)
+	}
+}
+
 // testBinary is built once per package run: the scenarios below exercise the
 // real process, but they all exercise the same build.
 var testBinary string

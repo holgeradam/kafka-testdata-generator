@@ -275,7 +275,6 @@ components:
 // tool does not read stops the run naming the format and the Message type.
 func TestV3MultiFormatSchemaRefused(t *testing.T) {
 	for name, format := range map[string]string{
-		"avro":         "application/vnd.apache.avro;version=1.9.0",
 		"protobuf":     "application/vnd.google.protobuf;version=3",
 		"raml":         "application/raml+yaml;version=1.0",
 		"asyncapi 2.x": "application/vnd.aai.asyncapi+json;version=2.6.0",

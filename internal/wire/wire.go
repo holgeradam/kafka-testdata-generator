@@ -20,18 +20,19 @@ import (
 type Format interface {
 	// Name is the -format value that selects the adapter.
 	Name() string
-	// Check applies the format's rules about its flags. It runs before any
-	// file is read, so only the flag fields of opts are set.
+	// Check applies the format's rules about its flags, judged against what
+	// the spec declares. It runs once the spec is read and before the
+	// format's own files are, so every field of opts but Synth is set.
 	Check(opts Options) error
-	// Build reads the format's own files and wires the run from them, with
-	// the spec's fields of opts set too. It performs no network I/O: the
-	// Encoder it returns connects when called.
+	// Build reads the format's own files and wires the run from them and
+	// the spec. It performs no network I/O: the Encoder it returns connects
+	// when called.
 	Build(opts Options) (*Parts, error)
 }
 
-// Options is what a run hands its Wire format: the relevant flags, then, from
-// Build on, the Synthesizer shared by Payload and Key and what the AsyncAPI
-// spec declares for the Kafka topic.
+// Options is what a run hands its Wire format: the relevant flags, what the
+// AsyncAPI spec declares for the Kafka topic, and, at Build, the Synthesizer
+// shared by Payload and Key.
 type Options struct {
 	// DryRun is a property of the run; each format decides what it means.
 	DryRun bool
@@ -47,9 +48,10 @@ type Options struct {
 	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
 	Synth *synth.Synthesizer
 	// MessageTypes are the Message types the spec declares for the Kafka
-	// topic, each with a self-contained Payload schema and Key binding. How
-	// they are used is the format's business: JSON mixes them, AVRO follows
-	// its avsc instead.
+	// topic, each with a self-contained Payload schema and Key binding, all
+	// in one payload format. How they are used is the format's business:
+	// JSON mixes them, AVRO reads its avsc from them when they are Avro, and
+	// follows -avro-schema instead when they are not.
 	MessageTypes []asyncapi.MessageType
 	// TopicParameters are the values -topic fills a templated address with.
 	// Each one with a payload location is planted into every Payload, in
