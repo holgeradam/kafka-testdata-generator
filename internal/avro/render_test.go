@@ -525,3 +525,20 @@ func TestRenderConformanceProperty(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderRecordFieldOrder proves a record renders its fields in the order
+// the avsc declares them, nested records included (#96), rather than sorted.
+func TestRenderRecordFieldOrder(t *testing.T) {
+	model := mustParse(t, `{"type":"record","name":"O","fields":[
+		{"name":"zeta","type":"string"},
+		{"name":"inner","type":{"type":"record","name":"I","fields":[{"name":"y","type":"int"},{"name":"x","type":"int"}]}},
+		{"name":"alpha","type":["null","I"]}]}`)
+	value := map[string]any{"alpha": map[string]any{"I": map[string]any{"x": int32(1), "y": int32(2)}}, "inner": map[string]any{"x": int32(3), "y": int32(4)}, "zeta": "z"}
+	got, err := RenderJSON(model.Root, value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"zeta":"z","inner":{"y":4,"x":3},"alpha":{"y":2,"x":1}}`; string(got) != want {
+		t.Errorf("rendered %s, want %s", got, want)
+	}
+}

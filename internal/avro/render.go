@@ -3,6 +3,7 @@ package avro
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"math"
 	"reflect"
 	"strings"
@@ -180,7 +181,9 @@ func renderRecord(rec *Record, v any) (any, error) {
 	if !ok {
 		return nil, &RenderError{Detail: fmt.Sprintf("record %s value is %T, want map[string]any", rec.FullName(), v)}
 	}
-	out := make(map[string]any, len(rec.Fields))
+	// Fields render in the order the avsc declares them (#96), as the Avro
+	// JSON encoding lists them.
+	var out ordered.Object
 	for _, f := range rec.Fields {
 		fv, ok := m[f.Name]
 		if !ok {
@@ -190,7 +193,7 @@ func renderRecord(rec *Record, v any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		out[f.Name] = rv
+		out.Add(f.Name, rv)
 	}
 	return out, nil
 }

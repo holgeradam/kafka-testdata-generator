@@ -2,6 +2,7 @@ package wire
 
 import (
 	"errors"
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,11 +13,11 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
-// TestEncodeHeaders proves each property becomes one Kafka record header,
-// sorted by name, its value plain-scalar as a JSON Key is, null as a null
-// header (#85 decision 2).
+// TestEncodeHeaders proves each property becomes one Kafka record header, its
+// value plain-scalar as a JSON Key is, null as a null header (#85 decision
+// 2); without a recorded order they come by name.
 func TestEncodeHeaders(t *testing.T) {
-	got, err := EncodeHeaders(map[string]any{
+	got, err := EncodeHeaders(nil, map[string]any{
 		"tenant":  "acme",
 		"attempt": float64(3),
 		"ratio":   0.5,
@@ -155,5 +156,25 @@ func TestHeaderSourceRefusesPlantings(t *testing.T) {
 				t.Errorf("err = %v, want a topic error mentioning %q", err, c.want)
 			}
 		})
+	}
+}
+
+// TestHeadersFollowDeclaredOrder proves Headers come in the order the headers
+// schema declares its properties, an object header's JSON text in its own
+// declared order (#96); a schema without a recorded order keeps name order.
+func TestHeadersFollowDeclaredOrder(t *testing.T) {
+	s := synth.New(1, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	schema := map[string]any{"type": "object", "required": []any{"zone", "origin", "attempt"}, "properties": map[string]any{
+		"zone":    map[string]any{"const": "eu"},
+		"origin":  map[string]any{"type": "object", "required": []any{"z", "a"}, "properties": map[string]any{"z": map[string]any{"const": 1}, "a": map[string]any{"const": 2}}, generator.OrderKeyword: []any{"z", "a"}},
+		"attempt": map[string]any{"const": 3},
+	}, generator.OrderKeyword: []any{"zone", "origin", "attempt"}}
+	got, err := mustHeaderSource(t, s, []asyncapi.MessageType{{Name: "A", Headers: schema}}).Generate(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pipeline.Header{{Name: "zone", Value: []byte("eu")}, {Name: "origin", Value: []byte(`{"z":1,"a":2}`)}, {Name: "attempt", Value: []byte("3")}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("headers = %s, want %s", got, want)
 	}
 }

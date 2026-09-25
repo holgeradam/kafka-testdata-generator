@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 )
 
 // avsc reads an Avro schema the spec declares, a payload or a Key binding
@@ -41,6 +43,9 @@ func (x *avscExpander) node(n any, stack []string, namespace string) (any, error
 		}
 		out := make(map[string]any, len(n))
 		for k, v := range n {
+			if k == generator.OrderKeyword {
+				continue // a JSON Schema reading aid, never part of an avsc
+			}
 			e, err := x.node(v, stack, namespace)
 			if err != nil {
 				return nil, err

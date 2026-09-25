@@ -928,8 +928,9 @@ channels:
 `
 
 // TestScenarioHeadersDryRun is #92 end to end in a Dry run: each record of a
-// Message type declaring headers is preceded on stderr by its Headers, in
-// name order, and stdout keeps the Payload lines alone.
+// Message type declaring headers is preceded on stderr by its Headers, in the
+// order the spec declares them (#96), and stdout keeps the Payload lines
+// alone.
 func TestScenarioHeadersDryRun(t *testing.T) {
 	bin := buildBinary(t)
 	cmd := exec.Command(bin, "-spec", writeTempSpec(t, headersSpec), "-topic", "orders", "-dry-run", "-count", "20", "-seed", "4")
@@ -938,13 +939,13 @@ func TestScenarioHeadersDryRun(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
-	headerLine := regexp.MustCompile(`^Headers: \{"attempt":"[123]","tenant":"acme"\}$`)
+	headerLine := regexp.MustCompile(`^Headers: \{"tenant":"acme","attempt":"[123]"\}$`)
 	var echoes int
 	for _, line := range strings.Split(stderr.String(), "\n") {
 		if strings.HasPrefix(line, "Headers: ") {
 			echoes++
 			if !headerLine.MatchString(line) {
-				t.Errorf("header echo %q, want attempt and tenant in name order", line)
+				t.Errorf("header echo %q, want tenant and attempt in the order the spec declares them", line)
 			}
 		}
 	}
@@ -999,8 +1000,8 @@ func TestScenarioHeadersProduced(t *testing.T) {
 			}
 			continue
 		}
-		if len(r.Headers) != 2 || r.Headers[0].Key != "attempt" || r.Headers[1].Key != "tenant" || string(r.Headers[1].Value) != "acme" {
-			t.Errorf("record %d (OrderCreated): headers %v, want attempt and tenant=acme", i, r.Headers)
+		if len(r.Headers) != 2 || r.Headers[0].Key != "tenant" || string(r.Headers[0].Value) != "acme" || r.Headers[1].Key != "attempt" {
+			t.Errorf("record %d (OrderCreated): headers %v, want tenant=acme, then attempt", i, r.Headers)
 		}
 	}
 	if createdSeen == 0 {
@@ -1046,7 +1047,7 @@ channels:
         payload: {schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: {type: record, name: OrderCreated, fields: [{name: kind, type: string}]}}
 `,
 	}
-	echo := regexp.MustCompile(`^Headers: \{"attempt":"[123]","tenant":"acme"\}$`)
+	echo := regexp.MustCompile(`^Headers: \{"tenant":"acme","attempt":"[123]"\}$`)
 	for name, spec := range specs {
 		t.Run(name, func(t *testing.T) {
 			path := writeTempSpec(t, spec)
@@ -1100,9 +1101,60 @@ channels:
 		t.Fatalf("read %d records, want 5", len(records))
 	}
 	for i, r := range records {
-		if len(r.Headers) != 2 || r.Headers[1].Key != "tenant" || string(r.Headers[1].Value) != "acme" {
+		if len(r.Headers) != 2 || r.Headers[0].Key != "tenant" || string(r.Headers[0].Value) != "acme" {
 			t.Errorf("record %d: headers %v, want tenant=acme planted", i, r.Headers)
 		}
+	}
+}
+
+// TestScenarioFieldOrder is #96 end to end: records read in the order their
+// schema declares their fields - a JSON Payload by its properties, nested,
+// through a $ref and an allOf, a JSON Key likewise, and an AVRO Dry run by
+// the avsc's fields - rather than sorted by name.
+func TestScenarioFieldOrder(t *testing.T) {
+	bin := buildBinary(t)
+	spec := writeTempSpec(t, `asyncapi: 3.0.0
+info: {title: Orders, version: '1'}
+channels:
+  orders:
+    address: orders
+    messages:
+      created:
+        bindings: {kafka: {key: {type: object, required: [tenant, id], properties: {tenant: {const: acme}, id: {const: k1}}}}}
+        payload:
+          type: object
+          required: [zeta, billing, extra, alpha]
+          properties:
+            zeta: {const: z}
+            billing: {$ref: '#/components/schemas/Address'}
+            extra: {allOf: [{type: object, required: [y], properties: {y: {const: 1}}}, {type: object, required: [x], properties: {x: {const: 2}}}]}
+            alpha: {const: a}
+components:
+  schemas:
+    Address: {type: object, required: [street, city], properties: {street: {const: s}, city: {const: c}}}
+`)
+	cmd := exec.Command(bin, "-spec", spec, "-topic", "orders", "-dry-run", "-count", "2")
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run: %v\n%s", err, stderr.String())
+	}
+	for _, line := range filterJSONLines(stdout.String()) {
+		if want := `{"zeta":"z","billing":{"street":"s","city":"c"},"extra":{"y":1,"x":2},"alpha":"a"}`; line != want {
+			t.Errorf("payload %s, want %s", line, want)
+		}
+	}
+	if !strings.Contains(stderr.String(), `Key: {"tenant":"acme","id":"k1"}`) {
+		t.Errorf("stderr %s, want the Key in declared order", stderr.String())
+	}
+
+	avsc := writeTempAvsc(t, "value.avsc", `{"type":"record","name":"O","fields":[{"name":"zeta","type":{"type":"enum","name":"Z","symbols":["Z"]}},{"name":"alpha","type":{"type":"enum","name":"A","symbols":["A"]}}]}`)
+	out, err := exec.Command(bin, "-spec", spec, "-topic", "orders", "-dry-run", "-count", "1", "-avro-schema", avsc).Output()
+	if err != nil {
+		t.Fatalf("avro run: %v\n%s", err, out)
+	}
+	if lines := filterJSONLines(string(out)); len(lines) != 1 || lines[0] != `{"zeta":"Z","alpha":"A"}` {
+		t.Errorf("AVRO Dry run %q, want the avsc's field order", lines)
 	}
 }
 

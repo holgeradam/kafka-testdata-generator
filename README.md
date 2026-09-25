@@ -11,6 +11,10 @@ A CLI tool that reads an AsyncAPI specification, generates random test data conf
 - Produces Confluent-framed Avro via a Schema Registry, from Avro payloads in the spec or an
   explicit value avsc
 - Dry-run mode for console output without Kafka
+- Records read like their schema: fields come in the order the schema declares them - a JSON
+  Schema's `properties` as the spec writes them (through `$ref`s, `allOf`, `oneOf` and
+  `anyOf`), an avsc's `fields` - in Payloads, object Keys and Headers alike. Undeclared keys and
+  map entries follow, sorted
 - Deterministic generation with seed control
 - Rate limiting for controlled test data production
 
@@ -336,7 +340,7 @@ that Message type, in JSON and AVRO mode alike (2.x `message.headers`, including
 or 3.0 `headers`, a Schema or a JSON Schema Multi Format Schema). Each property becomes one Kafka
 record header, its value encoded plain-scalar as a JSON Key is - a string as UTF-8, a number as
 decimal text, a boolean as `true`/`false`, an object or array as JSON text, `null` as a null
-header - in name order:
+header - in the order the schema declares them:
 
 ```yaml
 messages:
@@ -354,7 +358,7 @@ A Dry run shows each record's Headers on stderr after its Key, stdout keeping th
 alone:
 
 ```
-Headers: {"attempt":"2","tenant":"acme"}
+Headers: {"tenant":"acme","attempt":"2"}
 {"orderId":"..."}
 ```
 

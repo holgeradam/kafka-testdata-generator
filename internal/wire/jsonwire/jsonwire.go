@@ -61,6 +61,10 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	}
 
 	gen := generator.New(opts.Synth)
+	schemas := make([]map[string]any, len(types))
+	for i, mt := range types {
+		schemas[i] = mt.Payload
+	}
 	payloads := make([]*boundGenerator, len(types))
 	for i, mt := range types {
 		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload, plants: plants[i]}
@@ -73,7 +77,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	parts := &wire.Parts{
 		Values: &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: headers},
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
-			return JsonEncoder{}, nil
+			return JsonEncoder{Payloads: schemas, Key: keyBinding}, nil
 		},
 	}
 	if keyBinding != nil {
