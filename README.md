@@ -129,7 +129,14 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
   inside the avsc are expanded, a named type referenced again becomes a reference by its full
   name, and a `$ref` cycle is refused (Avro expresses recursion by name).
 - A Kafka topic has one payload format: Message types mixing Avro and JSON Schema stop the run.
-  One Avro Message type per Kafka topic is supported for now.
+  Several Avro Message types are mixed per record, as in JSON mode, and register as a union
+  (TopicNameStrategy): each record registers under its full name, a named type they define
+  identically (say `com.acme.Address`) registers once under its full name and is referenced,
+  and `<topic>-value` holds the union of the records' names, referencing each. Every record is
+  framed with the union's ID. A named type defined differently in two Message types stops the
+  run naming both. The Message types must declare the same Key binding, or none, and
+  `-keyPath` and Topic parameter locations must hold in each. Dry run shows each record alone,
+  without the union's wrapper.
 - The Kafka message binding's registry fields must match the Confluent framing:
   `schemaIdLocation: payload`, `schemaIdPayloadEncoding: confluent` (or `4`), and
   `schemaLookupStrategy: TopicNameStrategy` (or `TopicIdStrategy`); anything else stops the run.

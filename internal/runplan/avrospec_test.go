@@ -102,17 +102,6 @@ channels:
           - {name: OrderUpdated, payload: {type: object}}
           - {name: OrderPaid, schemaFormat: 'application/vnd.apache.avro;version=1.9.0', payload: {type: record, name: OrderPaid, fields: []}}
 `)
-	several := write(t, "several.yaml", `
-asyncapi: '2.6.0'
-info: {title: Several, version: '1.0.0'}
-channels:
-  orders:
-    publish:
-      message:
-        oneOf:
-          - {name: OrderCreated, schemaFormat: 'application/vnd.apache.avro;version=1.9.0', payload: {type: record, name: OrderCreated, fields: []}}
-          - {name: OrderPaid, schemaFormat: 'application/vnd.apache.avro;version=1.9.0', payload: {type: record, name: OrderPaid, fields: []}}
-`)
 	brokenAvsc := write(t, "broken.yaml", `
 asyncapi: '2.6.0'
 info: {title: Broken, version: '1.0.0'}
@@ -141,7 +130,6 @@ channels:
 		{"-keyPath without a key avsc", []string{"-spec", avroPayloads, "-keyPath", "id"}, "keyPath", "-keyPath requires a key avsc: -avro-key-schema, or a Key binding beside the spec's Avro payload", nil},
 		{"producing without a registry", []string{"-spec", avroPayloads, "-produce"}, "registry", "-registry is required to produce with the avro Wire format", nil},
 		{"mixed payload formats", []string{"-spec", mixed}, "topic", `Kafka topic "orders" mixes payload formats: Avro (OrderCreated, OrderPaid) and JSON Schema (OrderUpdated); a Kafka topic is produced in one Wire format`, nil},
-		{"several Avro Message types", []string{"-spec", several}, "topic", "several Avro Message types (OrderCreated, OrderPaid) are not supported yet", nil},
 		{"malformed spec avsc", []string{"-spec", brokenAvsc}, "topic", "payload of OrderCreated", new(*avro.ParseError)},
 		{"key path not in the spec avsc", []string{"-spec", keyed, "-keyPath", "missing"}, "keyPath", "no field", new(*keyplan.PathError)},
 	}
@@ -274,7 +262,7 @@ channels:
 	}
 	payload := func(r *Run) map[string]any {
 		t.Helper()
-		v, err := r.Config.Generator.Value()
+		v, err := generate(r)
 		if err != nil {
 			t.Fatalf("generating: %v", err)
 		}
@@ -354,5 +342,51 @@ func TestNewEncoderRegistersSpecAvsc(t *testing.T) {
 	}
 	if !reflect.DeepEqual(registered, want) {
 		t.Errorf("registered %v, want %v", registered, want)
+	}
+}
+
+// TestPlanMixesAvroTypes proves a spec with several Avro Message types plans
+// an AVRO run mixing them (#91), and that -keyPath must hold in each.
+func TestPlanMixesAvroTypes(t *testing.T) {
+	spec := write(t, "several.yaml", `
+asyncapi: '2.6.0'
+info: {title: Several, version: '1.0.0'}
+channels:
+  orders:
+    publish:
+      message:
+        oneOf:
+          - name: OrderCreated
+            schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+            bindings: {kafka: {key: string}}
+            payload: {type: record, name: OrderCreated, fields: [{name: id, type: string}]}
+          - name: OrderPaid
+            schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+            bindings: {kafka: {key: string}}
+            payload: {type: record, name: OrderPaid, fields: [{name: amount, type: double}]}
+`)
+	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-seed", "2"})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if r.Format != "avro" {
+		t.Errorf("Format = %q, want avro", r.Format)
+	}
+	seen := map[int]bool{}
+	for i := 0; i < 50; i++ {
+		g, err := r.Config.Generator.Generate()
+		if err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+		seen[g.Type] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("Message types generated = %v, want both", seen)
+	}
+
+	_, err = Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-keyPath", "id"})
+	var pe *Error
+	if !errors.As(err, &pe) || pe.Flag != "keyPath" || !strings.Contains(err.Error(), "in Message type OrderPaid") {
+		t.Errorf("err = %v, want -keyPath refused in Message type OrderPaid", err)
 	}
 }

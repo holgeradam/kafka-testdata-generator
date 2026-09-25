@@ -52,7 +52,7 @@ func TestBuildGeneratesFromMessageSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	v, err := parts.Values.Value()
+	v, err := generate(parts)
 	if err != nil {
 		t.Fatalf("Value: %v", err)
 	}
@@ -179,7 +179,7 @@ func kinds(t *testing.T, opts wire.Options, n int) []string {
 	}
 	out := make([]string, n)
 	for i := range out {
-		v, err := parts.Values.Value()
+		v, err := generate(parts)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -222,7 +222,7 @@ func TestBuildSingleTypeDrawsNothingExtra(t *testing.T) {
 	}
 	direct := generator.New(synth.New(3, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)))
 	for i := 0; i < 5; i++ {
-		got, _ := parts.Values.Value()
+		got, _ := generate(parts)
 		want, _ := direct.Value(orderSchema())
 		if fmt.Sprint(got) != fmt.Sprint(want) {
 			t.Fatalf("record %d: %v, want %v as generated without a mix", i, got, want)
@@ -330,7 +330,7 @@ func TestBuildPlantsTopicParameters(t *testing.T) {
 	}
 	seen := map[any]bool{}
 	for i := 0; i < 50; i++ {
-		v, err := parts.Values.Value()
+		v, err := generate(parts)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -408,4 +408,10 @@ func TestBuildRejectsParametersPlantingTogether(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
 	}
+}
+
+// generate draws one Payload from the parts' generator.
+func generate(parts *wire.Parts) (any, error) {
+	g, err := parts.Values.Generate()
+	return g.Payload, err
 }

@@ -237,3 +237,35 @@ channels:
 		t.Errorf("Registry = %+v, want %+v", mt.Registry, want)
 	}
 }
+
+// TestAvroEmptyNamespaceInherits proves an empty namespace inherits the
+// enclosing one, as the codec that parses the avsc reads it, so a named type
+// reached again is named by the full name the codec gives it.
+func TestAvroEmptyNamespaceInherits(t *testing.T) {
+	doc := loadSpec(t, head2+`
+channels:
+  orders:
+    publish:
+      message:
+        name: OrderCreated
+        schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
+        payload:
+          type: record
+          name: OrderCreated
+          namespace: com.acme
+          fields:
+            - {name: a, type: {$ref: '#/components/schemas/Tag'}}
+            - {name: b, type: {$ref: '#/components/schemas/Tag'}}
+components:
+  schemas:
+    Tag: {type: enum, name: Tag, namespace: '', symbols: [X]}
+`)
+	mt, err := onlyType(doc, "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := avscOf(t, mt.Avsc).(map[string]any)["fields"].([]any)
+	if got := fields[1].(map[string]any)["type"]; got != "com.acme.Tag" {
+		t.Errorf("second Tag = %v, want com.acme.Tag, the codec's full name for it", got)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	codec "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 // confluentMagicByte is the leading byte of every Confluent-framed record
@@ -60,6 +61,9 @@ type AvroEncoder struct {
 	// <topic>-key subject.
 	keySchema codec.Schema
 	keyID     int
+	// branches are the full names of the union's records, by Message type,
+	// when several Avro Message types register as a union; nil otherwise.
+	branches []string
 }
 
 // NewAvroEncoder registers the exact value avsc under <topic>-value and, when
@@ -99,6 +103,73 @@ func NewAvroEncoder(ctx context.Context, registryURL, topic string, value, key *
 	return enc, nil
 }
 
+// NewAvroUnionEncoder registers several Avro Message types as a union under
+// <topic>-value (#84 decision 4): each subject of plan under its full name,
+// shared named types first, each referencing the subjects it names at the
+// version the registry holds them at; then the union of the records' names
+// under <topic>-value, referencing each record. The key avsc, when non-nil,
+// registers under <topic>-key. Every record is then encoded against the union
+// and framed with the union's ID.
+func NewAvroUnionEncoder(ctx context.Context, registryURL, topic string, union *avro.Schema, plan *unionPlan, key *avro.Schema) (*AvroEncoder, error) {
+	client, err := registry.NewClient(registryURL)
+	if err != nil {
+		return nil, &RegistryError{URL: registryURL, Err: err}
+	}
+	enc := &AvroEncoder{
+		api:      codec.Config{}.Freeze(),
+		schema:   union.Codec(),
+		branches: plan.Branches,
+	}
+
+	versions := map[string]int{}
+	references := func(names []string) []registry.SchemaReference {
+		refs := make([]registry.SchemaReference, len(names))
+		for i, n := range names {
+			refs[i] = registry.SchemaReference{Name: n, Subject: n, Version: versions[n]}
+		}
+		return refs
+	}
+	for _, s := range plan.Subjects {
+		id, _, err := client.CreateSchema(ctx, s.Name, s.Schema, references(s.References)...)
+		if err != nil {
+			return nil, &RegistryError{URL: registryURL, Err: err}
+		}
+		if versions[s.Name], err = versionOf(ctx, client, s.Name, id); err != nil {
+			return nil, &RegistryError{URL: registryURL, Err: err}
+		}
+	}
+	if enc.id, _, err = client.CreateSchema(ctx, topic+"-value", plan.Value, references(plan.Branches)...); err != nil {
+		return nil, &RegistryError{URL: registryURL, Err: err}
+	}
+	if key != nil {
+		enc.keySchema = key.Codec()
+		if enc.keyID, _, err = client.CreateSchema(ctx, topic+"-key", string(key.Raw())); err != nil {
+			return nil, &RegistryError{URL: registryURL, Err: err}
+		}
+	}
+	return enc, nil
+}
+
+// versionOf finds the version under which subject holds the schema with ID
+// id, newest first: a reference names a subject at a version, and
+// registration answers only the ID.
+func versionOf(ctx context.Context, client *registry.Client, subject string, id int) (int, error) {
+	versions, err := client.GetVersions(ctx, subject)
+	if err != nil {
+		return 0, err
+	}
+	for i := len(versions) - 1; i >= 0; i-- {
+		info, err := client.GetSchemaInfo(ctx, subject, versions[i])
+		if err != nil {
+			return 0, err
+		}
+		if info.ID == id {
+			return versions[i], nil
+		}
+	}
+	return 0, fmt.Errorf("subject %s lists no version with schema ID %d", subject, id)
+}
+
 // Encode turns generated values into Confluent wire bytes. The Key contract
 // (issue #24) is strict: a key is only ever emitted when a key avsc is
 // registered, and it is then framed under the key schema's own registry ID so a
@@ -106,7 +177,8 @@ func NewAvroEncoder(ctx context.Context, registryURL, topic string, value, key *
 // registered key avsc without a generated key, is a programming error - rejected
 // rather than silently dropping data or sending a null key where the schema
 // contract promises one.
-func (e *AvroEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
+func (e *AvroEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
+	payload := generated.Payload
 	if e.keySchema == nil {
 		if key != nil {
 			return nil, nil, fmt.Errorf("avro: a message key was provided but no key avsc is registered (-avro-key-schema)")
@@ -124,6 +196,10 @@ func (e *AvroEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
 		keyBytes = frameConfluent(e.keyID, keyBody)
 	}
 
+	if e.branches != nil {
+		// A union's generic value names its branch: the record's full name.
+		payload = map[string]any{e.branches[generated.Type]: payload}
+	}
 	body, err := e.api.Marshal(e.schema, payload)
 	if err != nil {
 		return nil, nil, fmt.Errorf("avro: encoding payload %T: %w", payload, err)

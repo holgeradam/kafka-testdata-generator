@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 // JsonEncoder encodes records as JSON (NDJSON-compatible). The Payload is
@@ -15,13 +17,14 @@ import (
 type JsonEncoder struct{}
 
 // Encode marshals the payload to JSON and the key to plain-scalar bytes. When
-// key is nil the returned keyBytes is nil (the pipeline skips sending).
-func (e JsonEncoder) Encode(key any, payload any) ([]byte, []byte, error) {
+// key is nil the returned keyBytes is nil (the pipeline skips sending). Every
+// Message type encodes the same way, so the type is not consulted.
+func (e JsonEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
 	keyBytes, err := plainScalarKey(key)
 	if err != nil {
 		return nil, nil, err
 	}
-	payloadBytes, err := json.Marshal(payload)
+	payloadBytes, err := json.Marshal(generated.Payload)
 	if err != nil {
 		return nil, nil, err
 	}

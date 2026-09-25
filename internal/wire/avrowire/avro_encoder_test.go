@@ -96,7 +96,7 @@ func TestAvroEncoderRegistersExplicitAvsc(t *testing.T) {
 		t.Errorf("registered schema != explicit avsc:\n  got  %s\n  want %s", payload.Schema, avsc)
 	}
 
-	_, payloadBytes, err := enc.Encode(nil, map[string]any{"id": "abc", "qty": int32(1)})
+	_, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: map[string]any{"id": "abc", "qty": int32(1)}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestAvroEncoderKeyContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAvroEncoder: %v", err)
 	}
-	nilKey, _, err := enc.Encode(nil, map[string]any{"id": "a"})
+	nilKey, _, err := enc.Encode(nil, pipeline.Generated{Payload: map[string]any{"id": "a"}})
 	if err != nil {
 		t.Fatalf("Encode nil key: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestAvroEncoderKeyContract(t *testing.T) {
 	}
 
 	// No key avsc but a key value would silently lose data: reject it.
-	if _, _, err := enc.Encode("cust-1", map[string]any{"id": "a"}); err == nil {
+	if _, _, err := enc.Encode("cust-1", pipeline.Generated{Payload: map[string]any{"id": "a"}}); err == nil {
 		t.Fatal("expected an error when a key is given but no key schema is registered")
 	}
 
@@ -149,7 +149,7 @@ func TestAvroEncoderKeyContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAvroEncoder with key avsc: %v", err)
 	}
-	kbytes, _, err := keyed.Encode("cust-1", map[string]any{"id": "a"})
+	kbytes, _, err := keyed.Encode("cust-1", pipeline.Generated{Payload: map[string]any{"id": "a"}})
 	if err != nil {
 		t.Fatalf("Encode keyed: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestAvroEncoderKeyContract(t *testing.T) {
 
 	// A key schema configured but no key value: reject, never emit a null key
 	// where the schema contract promises a generated key.
-	if _, _, err := keyed.Encode(nil, map[string]any{"id": "a"}); err == nil {
+	if _, _, err := keyed.Encode(nil, pipeline.Generated{Payload: map[string]any{"id": "a"}}); err == nil {
 		t.Fatal("expected an error when a key schema is configured but no key value arrives")
 	}
 }
@@ -300,7 +300,7 @@ func TestAvroEncoderConformanceProperty(t *testing.T) {
 				if err != nil {
 					t.Fatalf("seed %d: generation failed: %v", seed, err)
 				}
-				_, wire, err := enc.Encode(nil, value)
+				_, wire, err := enc.Encode(nil, pipeline.Generated{Payload: value})
 				if err != nil {
 					t.Fatalf("seed %d: Encode failed: %v (value %#v)", seed, err, value)
 				}
@@ -351,7 +351,7 @@ func TestAvroEncoderRegistersKeySubject(t *testing.T) {
 		t.Errorf("registered key schema != explicit key avsc:\n  got  %s\n  want %s", body.Schema, keyAvsc)
 	}
 
-	kbytes, pbytes, err := enc.Encode(map[string]any{"id": "k", "seq": int64(1)}, map[string]any{"id": "v"})
+	kbytes, pbytes, err := enc.Encode(map[string]any{"id": "k", "seq": int64(1)}, pipeline.Generated{Payload: map[string]any{"id": "v"}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestAvroEncoderKeyConformanceProperty(t *testing.T) {
 				if err != nil {
 					t.Fatalf("seed %d: key generation failed: %v", seed, err)
 				}
-				kbytes, _, err := enc.Encode(key, map[string]any{"id": "v"})
+				kbytes, _, err := enc.Encode(key, pipeline.Generated{Payload: map[string]any{"id": "v"}})
 				if err != nil {
 					t.Fatalf("seed %d: Encode failed: %v (key %#v)", seed, err, key)
 				}
@@ -475,7 +475,7 @@ func TestAvroEncoderFramesPlantedKey(t *testing.T) {
 		if err != nil {
 			t.Fatalf("record %d: Apply failed: %v", i, err)
 		}
-		keyWire, valueWire, err := enc.Encode(key, payload)
+		keyWire, valueWire, err := enc.Encode(key, pipeline.Generated{Payload: payload})
 		if err != nil {
 			t.Fatalf("record %d: Encode failed: %v", i, err)
 		}

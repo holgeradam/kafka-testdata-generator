@@ -99,7 +99,7 @@ func TestPlanAccepts(t *testing.T) {
 			name: "two Message types mix",
 			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"},
 			check: func(t *testing.T, r *Run) {
-				if _, err := r.Config.Generator.Value(); err != nil {
+				if _, err := generate(r); err != nil {
 					t.Errorf("generating from the mix: %v", err)
 				}
 			},
@@ -108,7 +108,7 @@ func TestPlanAccepts(t *testing.T) {
 			name: "avro ignores the Message types",
 			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
 			check: func(t *testing.T, r *Run) {
-				v, err := r.Config.Generator.Value()
+				v, err := generate(r)
 				if err != nil {
 					t.Fatalf("generating: %v", err)
 				}
@@ -400,11 +400,11 @@ func TestPlanIsDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	a, err := first.Config.Generator.Value()
+	a, err := generate(first)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	b, err := second.Config.Generator.Value()
+	b, err := generate(second)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -543,4 +543,10 @@ func TestPlanHelp(t *testing.T) {
 			t.Errorf("Plan(%s) error = %v, want flag.ErrHelp", arg, err)
 		}
 	}
+}
+
+// generate draws one Payload from the plan's generator.
+func generate(r *Run) (any, error) {
+	g, err := r.Config.Generator.Generate()
+	return g.Payload, err
 }
