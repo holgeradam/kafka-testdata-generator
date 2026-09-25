@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
@@ -103,14 +104,14 @@ func newFlags() *flags {
 		now:           newNowFlag(),
 		acks:          newAcksFlag(),
 		format:        newFormatFlag(),
-		avroSchema:    fs.String("avro-schema", "", "Path to value avsc file (required with -format avro)"),
-		avroKeySchema: fs.String("avro-key-schema", "", "Path to key avsc file (the AVRO key schema)"),
-		registryURL:   fs.String("registry", "", "Confluent Schema Registry base URL (required with -format avro when producing)"),
+		avroSchema:    fs.String("avro-schema", "", "Path to value avsc file, for a spec whose payloads are JSON Schema; makes the run AVRO"),
+		avroKeySchema: fs.String("avro-key-schema", "", "Path to key avsc file (the AVRO key schema), unless the spec declares an Avro Key binding"),
+		registryURL:   fs.String("registry", "", "Confluent Schema Registry base URL (required to produce AVRO)"),
 	}
 	// A back-quoted word names the value in help, in place of "value".
 	fs.Var(f.now, "now", "Clock for date fields, as an RFC3339 `time` (default: the current time)")
 	fs.Var(f.acks, "acks", "Acks `level`: 1 (leader) or all (all in-sync replicas)")
-	fs.Var(f.format, "format", "Output wire format `name`: json or avro")
+	fs.Var(f.format, "format", "Wire format `name`: json or avro (default: avro when the spec's payloads are Avro or -avro-schema is given, else json)")
 	return f
 }
 
@@ -141,7 +142,8 @@ func Usage(w io.Writer, name string) {
 
 // Plan validates args and builds the run they describe, or returns the first
 // rule they break. It performs no network I/O: only argv, the spec file and the
-// avsc files are read. -h and -help return flag.ErrHelp, a request for Usage
+// avsc files are read. The Wire format's rules run once the spec is read, since
+// the spec's payloads decide the Wire format. -h and -help return flag.ErrHelp, a request for Usage
 // rather than a rule broken.
 func Plan(args []string) (*Run, error) {
 	f := newFlags()
@@ -184,31 +186,79 @@ func Plan(args []string) (*Run, error) {
 		DryRun:      *f.dryRun,
 		Broker:      *f.broker,
 		Acks:        f.acks.acks,
-		Format:      f.format.format,
 		Topic:       *f.topic,
 		RegistryURL: *f.registryURL,
 	}
 
-	// The format owns the rules about its flags; they hold before any file
-	// is read.
+	doc, err := asyncapi.Load(*f.specPath)
+	if err != nil {
+		return nil, &Error{Flag: "spec", Detail: "loading spec", Err: err}
+	}
+	topic, err := doc.Topic(*f.topic)
+	if err != nil {
+		return nil, &Error{Flag: "topic", Detail: "reading the spec", Err: err}
+	}
+
+	// The Wire format follows from the spec and the flags; the format then
+	// owns the rules about its flags, which it judges against the spec.
+	if run.Format, err = wireFormat(f, run.Topic, topic.MessageTypes); err != nil {
+		return nil, err
+	}
 	format := formats[run.Format]
 	opts := wire.Options{
-		DryRun:        run.DryRun,
-		Topic:         run.Topic,
-		KeyPath:       *f.keyPath,
-		RegistryURL:   run.RegistryURL,
-		AvroSchema:    *f.avroSchema,
-		AvroKeySchema: *f.avroKeySchema,
+		DryRun:          run.DryRun,
+		Topic:           run.Topic,
+		KeyPath:         *f.keyPath,
+		RegistryURL:     run.RegistryURL,
+		AvroSchema:      *f.avroSchema,
+		AvroKeySchema:   *f.avroKeySchema,
+		MessageTypes:    topic.MessageTypes,
+		TopicParameters: topic.Parameters,
 	}
 	if err := format.Check(opts); err != nil {
 		return nil, err
 	}
 	run.warnDisregardedOptions(f)
 
-	if err := run.loadSchemas(f, format, opts); err != nil {
+	if err := run.build(f, format, opts); err != nil {
 		return nil, err
 	}
 	return run, nil
+}
+
+// wireFormat infers the run's Wire format from where the Payload's schema
+// comes from (#84 decisions 2, 3 and 9; ADR-0011): Avro payloads in the spec,
+// or -avro-schema, mean avro, otherwise json. -format only confirms it, and
+// stops the run when it disagrees; it never converts. A Kafka topic is
+// produced in one Wire format, so its Message types must share one payload
+// format.
+func wireFormat(f *flags, topic string, types []asyncapi.MessageType) (string, error) {
+	var avroTypes, jsonTypes []string
+	for _, mt := range types {
+		if mt.Avsc != nil {
+			avroTypes = append(avroTypes, mt.Name)
+		} else {
+			jsonTypes = append(jsonTypes, mt.Name)
+		}
+	}
+	declared := f.format.format
+	switch {
+	case len(avroTypes) > 0 && len(jsonTypes) > 0:
+		return "", &Error{Flag: "topic", Detail: fmt.Sprintf("Kafka topic %q mixes payload formats: Avro (%s) and JSON Schema (%s); a Kafka topic is produced in one Wire format", topic, strings.Join(avroTypes, ", "), strings.Join(jsonTypes, ", "))}
+	case len(avroTypes) > 0:
+		if declared == "json" {
+			return "", &Error{Flag: "format", Detail: fmt.Sprintf("payload of %s is Avro, so the Wire format is avro; drop -format json", avroTypes[0])}
+		}
+		return "avro", nil
+	case *f.avroSchema != "":
+		if declared == "json" {
+			return "", &Error{Flag: "format", Detail: "-avro-schema makes the Wire format avro; drop -format json"}
+		}
+		return "avro", nil
+	case declared != "":
+		return declared, nil
+	}
+	return "json", nil
 }
 
 // warnDisregardedOptions records the dry-run diagnostic. -keyPath is honoured
@@ -220,24 +270,13 @@ func (r *Run) warnDisregardedOptions(f *flags) {
 	}
 }
 
-// loadSchemas reads the spec, then has the Wire format wire the run's
-// generation, Key source and encoder from it and its own files.
-func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error {
-	doc, err := asyncapi.Load(*f.specPath)
-	if err != nil {
-		return &Error{Flag: "spec", Detail: "loading spec", Err: err}
-	}
-	topic, err := doc.Topic(*f.topic)
-	if err != nil {
-		return &Error{Flag: "topic", Detail: "reading the spec", Err: err}
-	}
-
+// build has the Wire format wire the run's generation, Key source and encoder
+// from the spec and its own files.
+func (r *Run) build(f *flags, format wire.Format, opts wire.Options) error {
 	// One Synthesizer per run: the Payload and the Key draw from one shared
 	// stream in both wire formats (ADR-0008 decision 4), and so do the Key
 	// reuse decisions.
 	opts.Synth = synth.New(*f.seed, f.now.now)
-	opts.MessageTypes = topic.MessageTypes
-	opts.TopicParameters = topic.Parameters
 	parts, err := format.Build(opts)
 	if err != nil {
 		return err
@@ -251,7 +290,7 @@ func (r *Run) loadSchemas(f *flags, format wire.Format, opts wire.Options) error
 	// With -records-per-key above 1 its Keys identify Entities that recur
 	// across records, which needs a Key schema to generate them from.
 	if *f.recordsPerKey > 1 && parts.KeyGen == nil {
-		return &Error{Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec (JSON mode) or pass -avro-key-schema (AVRO), so there is a Key to reuse"}
+		return &Error{Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec, or pass -avro-key-schema under AVRO, so there is a Key to reuse"}
 	}
 	var keyPlan pipeline.KeyPlan
 	if parts.KeyGen != nil {
@@ -361,13 +400,14 @@ func (n *nowFlag) String() string {
 }
 
 // formatFlag is a flag.Value accepting the name of a Wire format
-// (case-sensitive). Invalid values fail at parse time with a hint.
+// (case-sensitive). Invalid values fail at parse time with a hint. Unset, it
+// is empty and the Wire format is inferred.
 type formatFlag struct {
 	format string
 }
 
 func newFormatFlag() *formatFlag {
-	return &formatFlag{format: "json"}
+	return &formatFlag{}
 }
 
 // Set parses the -format value; the flag package reports parse errors.
@@ -382,7 +422,7 @@ func (f *formatFlag) Set(v string) error {
 }
 
 // String satisfies flag.Value and is used for the flag default and usage. The
-// zero value renders empty, so help shows the json default beside it.
+// unset value renders empty, so help states the inferred default beside it.
 func (f *formatFlag) String() string {
 	if f == nil {
 		return ""

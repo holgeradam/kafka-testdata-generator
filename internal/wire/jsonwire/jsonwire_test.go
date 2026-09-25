@@ -122,16 +122,15 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 	}
 }
 
-// TestCheck proves JSON rejects the AVRO flags before any file is read,
-// naming the flag at fault.
+// TestCheck proves JSON rejects the AVRO flags, naming the flag at fault.
+// -avro-schema never reaches it: it makes the Wire format avro.
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		name, flag string
 		opts       wire.Options
 	}{
 		{"plain run", "", wire.Options{Topic: "orders"}},
-		{"value avsc", "avro-schema", wire.Options{AvroSchema: "v.avsc"}},
-		{"key avsc", "avro-schema", wire.Options{AvroKeySchema: "k.avsc"}},
+		{"key avsc", "avro-key-schema", wire.Options{AvroKeySchema: "k.avsc"}},
 		{"registry", "registry", wire.Options{RegistryURL: "http://localhost:8081"}},
 	}
 	for _, tc := range cases {

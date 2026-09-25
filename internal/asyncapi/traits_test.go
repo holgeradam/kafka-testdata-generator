@@ -232,20 +232,19 @@ channels:
 	}
 }
 
-// TestSchemaFormatsRefused reproduces #81: an Avro payload was read as JSON
-// Schema and failed with a puzzling unsupported type "record". Every format
-// the tool does not read stops the run naming the format and the Message
-// type, whether the message or a trait declares it.
+// TestSchemaFormatsRefused reproduces #81: a payload in another format was
+// read as JSON Schema and failed with a puzzling error. Every format the tool
+// does not read stops the run naming the format and the Message type,
+// whether the message or a trait declares it. Avro is read (#84).
 func TestSchemaFormatsRefused(t *testing.T) {
 	cases := map[string]string{
-		"avro":             `schemaFormat: 'application/vnd.apache.avro;version=1.9.0'`,
-		"avro in a trait":  `traits: [{schemaFormat: 'application/vnd.apache.avro;version=1.9.0'}]`,
-		"protobuf":         `schemaFormat: 'application/vnd.google.protobuf;version=3'`,
-		"unknown":          `schemaFormat: 'application/x-made-up'`,
-		"other draft":      `schemaFormat: 'application/schema+json;version=draft-2020-12'`,
-		"asyncapi 3":       `schemaFormat: 'application/vnd.aai.asyncapi+json;version=3.0.0'`,
-		"no version":       `schemaFormat: 'application/schema+json'`,
-		"not a media type": `schemaFormat: ';;'`,
+		"protobuf in a trait": `traits: [{schemaFormat: 'application/vnd.google.protobuf;version=3'}]`,
+		"protobuf":            `schemaFormat: 'application/vnd.google.protobuf;version=3'`,
+		"unknown":             `schemaFormat: 'application/x-made-up'`,
+		"other draft":         `schemaFormat: 'application/schema+json;version=draft-2020-12'`,
+		"asyncapi 3":          `schemaFormat: 'application/vnd.aai.asyncapi+json;version=3.0.0'`,
+		"no version":          `schemaFormat: 'application/schema+json'`,
+		"not a media type":    `schemaFormat: ';;'`,
 	}
 	for name, field := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -277,11 +276,11 @@ channels:
     publish:
       message:
         name: OrderCreated
-        schemaFormat: 'application/vnd.apache.avro;version=1.9.0'
-        payload: {type: record, name: OrderCreated, fields: []}
+        schemaFormat: 'application/vnd.google.protobuf;version=3'
+        payload: {type: object}
 `)
 	_, err := messageTypes(doc, "orders")
-	want := "payload of OrderCreated is application/vnd.apache.avro;version=1.9.0, which the tool does not read"
+	want := "payload of OrderCreated is application/vnd.google.protobuf;version=3, which the tool does not read"
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
 	}

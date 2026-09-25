@@ -24,13 +24,14 @@ type Format struct{}
 func (Format) Name() string { return "json" }
 
 // Check rejects the AVRO flags: under JSON the Message schema governs and
-// nothing is registered.
+// nothing is registered. -avro-schema never reaches here, since it makes the
+// Wire format avro.
 func (Format) Check(opts wire.Options) error {
-	if opts.AvroSchema != "" || opts.AvroKeySchema != "" {
-		return &wire.Error{Flag: "avro-schema", Detail: "-avro-schema and -avro-key-schema are only valid with -format avro"}
+	if opts.AvroKeySchema != "" {
+		return &wire.Error{Flag: "avro-key-schema", Detail: "-avro-key-schema needs the avro Wire format: pass -avro-schema, or use a spec with Avro payloads"}
 	}
 	if opts.RegistryURL != "" {
-		return &wire.Error{Flag: "registry", Detail: "-registry is only valid with -format avro"}
+		return &wire.Error{Flag: "registry", Detail: "-registry is only valid with the avro Wire format"}
 	}
 	return nil
 }

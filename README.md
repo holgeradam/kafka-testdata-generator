@@ -8,7 +8,8 @@ A CLI tool that reads an AsyncAPI specification, generates random test data conf
 - Generates realistic test data based on JSON Schema constraints
 - Supports all standard JSON Schema types and formats
 - Produces to Kafka with configurable broker and topic
-- Produces Confluent-framed Avro from an explicit value avsc via a Schema Registry
+- Produces Confluent-framed Avro via a Schema Registry, from Avro payloads in the spec or an
+  explicit value avsc
 - Dry-run mode for console output without Kafka
 - Deterministic generation with seed control
 - Rate limiting for controlled test data production
@@ -94,21 +95,53 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
 ### AVRO Wire Format
 
 Produce Confluent-framed Avro (magic byte `0x00` + registry schema ID + Avro binary) to a
-Schema Registry-backed topic, using an explicit value avsc:
+Schema Registry-backed topic. A spec that declares its payloads in Avro needs no AVRO flags:
+
+```yaml
+channels:
+  orders:
+    address: orders.created
+    messages:
+      created:
+        bindings: {kafka: {key: {type: string, logicalType: uuid}}}   # the key avsc
+        payload:
+          schemaFormat: 'application/vnd.apache.avro;version=1.9.0'  # 2.x: message.schemaFormat
+          schema: {$ref: '#/components/schemas/OrderCreated'}        # the value avsc
+```
+
+```bash
+kafka-testdata-generator -spec orders.yaml -topic orders.created -registry http://localhost:8081
+```
+
+For a spec whose payloads are JSON Schema, pass the value avsc as a file:
 
 ```bash
 kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.created \
-  -format avro -avro-schema order.avsc -registry http://localhost:8081
+  -avro-schema order.avsc -registry http://localhost:8081
 ```
 
+- The Wire format follows wherever the Payload's schema comes from: Avro payloads in the spec,
+  or `-avro-schema`, mean avro. `-format` is optional and only confirms it; `-format json`
+  against Avro payloads or beside `-avro-schema` stops the run. One source per schema:
+  `-avro-schema` beside Avro payloads, or `-avro-key-schema` beside an Avro Key binding, stops
+  the run naming both.
+- Avro `schemaFormat`s read: `application/vnd.apache.avro[+json|+yaml];version=1.x.y`. `$ref`s
+  inside the avsc are expanded, a named type referenced again becomes a reference by its full
+  name, and a `$ref` cycle is refused (Avro expresses recursion by name).
+- A Kafka topic has one payload format: Message types mixing Avro and JSON Schema stop the run.
+  One Avro Message type per Kafka topic is supported for now.
+- The Kafka message binding's registry fields must match the Confluent framing:
+  `schemaIdLocation: payload`, `schemaIdPayloadEncoding: confluent` (or `4`), and
+  `schemaLookupStrategy: TopicNameStrategy` (or `TopicIdStrategy`); anything else stops the run.
 - Generation follows the avsc, not the AsyncAPI JSON Schema.
 - The value avsc is registered under `<topic>-value`; the returned schema ID is what gets
   framed on the wire, so any Confluent-compatible consumer can deserialize the records.
-- `-registry` is required only when producing (never in `-dry-run`); under `-format json` it is
+- `-registry` is required only when producing (never in `-dry-run`); in a JSON run it is
   rejected.
-- Pass `-avro-key-schema key.avsc` to generate message keys from a key avsc: it registers under
-  `<topic>-key` and each key is framed with its own schema ID, so consumers deserialize it
-  against the key avsc. Without it, records are payload-only (null key).
+- The key avsc, the spec's Avro Key binding or `-avro-key-schema key.avsc`, generates message
+  keys: it registers under `<topic>-key` and each key is framed with its own schema ID, so
+  consumers deserialize it against the key avsc. Without one, records are payload-only (null
+  key).
 - Dry run renders generated avro values in the Avro JSON encoding - the readable spec-defined text
   form, with logical types in their human-readable representation (dates as calendar days,
   timestamps as ISO 8601 instants, decimals as base-10 strings) - straight from the local avsc,
@@ -121,8 +154,8 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
   `duration`, is ignored and its base type governs, as the Avro spec requires of readers; the
   encoded bytes stay registry-valid because the serializer treats it the same way. A supported
   logical type on the wrong base type (say `date` on a string) is a malformed avsc and fails.
-- Spec key bindings are ignored under `-format avro` (warning): the AVRO key comes exclusively
-  from `-avro-key-schema`, which `-keyPath` requires there.
+- Beside JSON Schema payloads, spec key bindings are ignored under AVRO (warning): the AVRO key
+  then comes exclusively from `-avro-key-schema`, which `-keyPath` requires there.
 
 ## CLI Options
 
@@ -139,10 +172,10 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
 | `-seed` | random | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
-| `-format` | `json` | Output wire format: `json` or `avro` |
-| `-avro-schema` | `` | Path to value avsc file (required with `-format avro`) |
-| `-avro-key-schema` | `` | Path to key avsc file (the AVRO key schema) |
-| `-registry` | `` | Confluent Schema Registry base URL (required with `-format avro` when producing) |
+| `-format` | inferred | Wire format: `json` or `avro`; inferred from the spec's payloads and `-avro-schema` when omitted |
+| `-avro-schema` | `` | Path to value avsc file, for a spec whose payloads are JSON Schema; makes the run AVRO |
+| `-avro-key-schema` | `` | Path to key avsc file (the AVRO key schema), unless the spec declares an Avro Key binding |
+| `-registry` | `` | Confluent Schema Registry base URL (required to produce AVRO) |
 
 ### Acks and Durability
 
@@ -156,7 +189,7 @@ This tool generates disposable test data, so `1` is a sensible default; use `all
 ### Keys
 
 The **key schema** generates the Key: `message.bindings.kafka.key` in JSON mode,
-the key avsc (`-avro-key-schema`) under `-format avro`. With no key schema, records
+the key avsc under AVRO (the spec's Avro Key binding, or `-avro-key-schema`). With no key schema, records
 carry a null key (Kafka convention, random partition), with an info message on stderr.
 
 `-keyPath` mirrors the generated Key into the payload, so the record's key and the
@@ -184,7 +217,7 @@ JSON key bytes are serialized as plain-scalar values: a string as UTF-8 bytes (e
 a number as its decimal text, and an object or array as JSON. This matches standard Kafka key
 conventions where the key is the raw serialized value, not a JSON wrapper. In **AVRO mode** the
 Key comes from the key avsc, is registered under `<topic>-key` and framed like the payload.
-`-keyPath` works there too and requires `-avro-key-schema`; since only record fields are
+`-keyPath` works there too and requires a key avsc; since only record fields are
 guaranteed in Avro, a path stepping into a union, an array or a map is rejected, and the type
 at the path must be the key avsc's type (same primitive kind and logical overlay, or the same
 full name for a record, enum or fixed).
@@ -250,8 +283,8 @@ seeded stream, so `-seed` still reproduces the exact sequence and a Kafka topic 
 type behaves as it always did. The Message types must declare the same Key binding, or none - a
 Key identifies one Entity, such as one order, across its OrderCreated and OrderUpdated records -
 and `-keyPath` must be guaranteed in every Message type's payload; either mistake stops the run
-naming the Message types involved. Under `-format avro` the avsc governs the payload, so the
-spec's Message types play no part.
+naming the Message types involved. Under AVRO from `-avro-schema` the file governs the payload, so
+the spec's JSON Schema Message types play no part.
 
 Every spec mistake stops the run with an error naming the message: a broken `$ref`, a missing
 payload, a Key binding that is declared but not a schema, or a payload in a format the tool does
@@ -265,8 +298,8 @@ not read. It supports:
   (`application/vnd.aai.asyncapi[+json|+yaml];version=2.x.y`, or `3.x.y` in a 3.0 spec) or JSON
   Schema draft-07 (`application/schema+json;version=draft-07`, or `+yaml`). 2.x declares the
   format as the message's `schemaFormat`, 3.0 as a payload `{schemaFormat, schema}`. Any other
-  format, such as an Avro or Protobuf payload, stops the run naming it; for Avro, pass the avsc
-  with `-format avro` instead
+  format, such as a Protobuf payload, stops the run naming it. Avro payloads are read too, and
+  make the run AVRO (see AVRO Wire Format)
 - Templated Kafka topics such as `orders.{region}`, with their Topic parameters (below): a 3.0
   address, or a 2.x spec entry key
 - `$ref` wherever AsyncAPI allows one: messages, bindings (entry and message level), the kafka
@@ -332,7 +365,7 @@ channels:
 Before any record is generated, the location is checked as `-keyPath` is: generation must put a
 field there in every record (required at every step, no `oneOf`/`anyOf` on the way), and the value
 must conform to that field's schema - its `pattern`, `enum`, `format`, `maxLength` and so on - so
-every record still conforms. Under `-format avro` the location is walked through the value avsc
+every record still conforms. Under AVRO the location is walked through the value avsc
 instead: record fields only, ending in a `string`, a `uuid` or an `enum` holding the value. Every
 mistake stops the run with its own error:
 

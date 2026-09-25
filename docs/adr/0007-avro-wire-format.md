@@ -50,6 +50,10 @@ way, so the bytes stay registry-valid: `timestamp-nanos` encodes as a long,
 does know, declared on the wrong base type, is still a malformed avsc and stops
 Parse.
 
+Amended (2026-09-25, ADR-0011): the avsc may also come from the AsyncAPI spec, when it declares
+its payloads in Avro, and the Key's from the spec's Avro Key binding. It is still never derived
+from a JSON Schema: the spec states it in Avro.
+
 ### 4. Conformance is per Wire format
 
 Conformance (ADR-0006) is now defined per format: JSON mode honors the Message schema; AVRO mode
@@ -112,6 +116,11 @@ before any file is read and a `Build` phase that loads its own schemas and wires
 Key source and the Encoders. The rules above are unchanged; they now live in the adapter they
 concern, and `-keyPath` requiring a key schema is checked by each format against its own Key
 source. The encoders of decision 1 moved out of `internal/pipeline` with them.
+
+Amended (2026-09-25, ADR-0011): `-format` no longer selects the Wire format; it confirms the one
+inferred from where the Payload's schema comes from. Avro payloads in the spec or `-avro-schema`
+mean avro, and `-avro-schema` is then required only for a spec whose payloads are JSON Schema.
+The adapter's `Check` runs once the spec is read, judging the flags against it.
 
 ### 7. Dry run never contacts a registry
 
