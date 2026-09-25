@@ -121,8 +121,8 @@ components:
 		t.Errorf("key binding = %v, want %v", mt.KeyBinding, id)
 	}
 	want := map[string]any{"type": "object", "properties": map[string]any{"id": id}}
-	if !reflect.DeepEqual(mt.Payload, want) {
-		t.Errorf("payload = %v, want %v", mt.Payload, want)
+	if got := withoutOrder(mt.Payload); !reflect.DeepEqual(got, want) {
+		t.Errorf("payload = %v, want %v", got, want)
 	}
 }
 
@@ -264,7 +264,7 @@ components:
 			if err != nil {
 				t.Fatalf("payloadSchema: %v", err)
 			}
-			if !reflect.DeepEqual(got, want) {
+			if got := withoutOrder(got); !reflect.DeepEqual(got, want) {
 				t.Errorf("payload = %v, want %v", got, want)
 			}
 		})

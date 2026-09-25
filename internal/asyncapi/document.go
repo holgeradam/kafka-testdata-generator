@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"gopkg.in/yaml.v3"
 )
 
@@ -109,6 +110,7 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 	if err := json.Unmarshal(buf, &normalized); err != nil {
 		return nil, fmt.Errorf("parsing spec: the document is not an object")
 	}
+	recordPropertyOrder(data, normalized)
 	return normalized, nil
 }
 
@@ -508,4 +510,72 @@ func escapeToken(s string) string {
 
 func unescapeToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
+}
+
+// recordPropertyOrder records, on each schema object, the order its
+// properties are written in (#96), which decoding into maps forgets: generated
+// records then encode in that order. It reads the spec a second time as YAML
+// nodes, which keep their order, JSON being YAML too, and walks them beside
+// the decoded document. A spec it cannot read that way keeps sorted order.
+func recordPropertyOrder(data []byte, doc map[string]any) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return
+	}
+	var walk func(n *yaml.Node, v any)
+	walk = func(n *yaml.Node, v any) {
+		switch n.Kind {
+		case yaml.DocumentNode:
+			if len(n.Content) == 1 {
+				walk(n.Content[0], v)
+			}
+		case yaml.AliasNode:
+			walk(n.Alias, v)
+		case yaml.MappingNode:
+			m, ok := v.(map[string]any)
+			if !ok {
+				return
+			}
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				key, value := n.Content[i].Value, n.Content[i+1]
+				child, ok := m[key]
+				if !ok {
+					continue
+				}
+				walk(value, child)
+				if key == "properties" {
+					if names := mappingKeys(value); names != nil {
+						m[generator.OrderKeyword] = names
+					}
+				}
+			}
+		case yaml.SequenceNode:
+			list, ok := v.([]any)
+			if !ok || len(list) != len(n.Content) {
+				return
+			}
+			for i, item := range n.Content {
+				walk(item, list[i])
+			}
+		}
+	}
+	walk(&root, doc)
+}
+
+// mappingKeys lists a mapping node's keys in order, nil when it is no
+// mapping; a merge key is not a property.
+func mappingKeys(n *yaml.Node) []any {
+	for n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil
+	}
+	names := []any{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if key := n.Content[i].Value; key != "<<" {
+			names = append(names, key)
+		}
+	}
+	return names
 }

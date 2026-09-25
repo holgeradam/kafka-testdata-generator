@@ -8,4 +8,4 @@ Continuous mode is triggered by `-count 0`, which runs indefinitely until interr
 
 In Dry run, when `-key` is set, the extracted Key value is echoed to stderr ahead of the stats. Stderr otherwise carries only warnings and stats; stdout carries only Payload NDJSON lines.
 
-Amended (2026-09-25, issue #92): a record's Headers are echoed to stderr too, as `Headers: {...}` after its Key, a JSON object of each header's text in name order and a null header as `null`. stdout still carries only Payload NDJSON lines, so pipelines such as `| jq` are unaffected.
+Amended (2026-09-25, issue #92): a record's Headers are echoed to stderr too, as `Headers: {...}` after its Key, a JSON object of each header's text in the order the headers schema declares them (#96; name order before) and a null header as `null`. stdout still carries only Payload NDJSON lines, so pipelines such as `| jq` are unaffected.

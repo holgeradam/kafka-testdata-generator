@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -135,21 +135,19 @@ func (h *HeaderSource) Generate(i int) ([]pipeline.Header, error) {
 		return nil, fmt.Errorf("headers of %s: %w", h.types[i].Name, err)
 	}
 	values, _ := v.(map[string]any)
-	return EncodeHeaders(values)
+	return EncodeHeaders(h.schemas[i], values)
 }
 
 // EncodeHeaders turns a generated headers object into Kafka record headers:
-// one per property, sorted by name so a seeded run is byte-identical, each
-// value plain-scalar and a null value a null header (#85 decision 2).
-func EncodeHeaders(values map[string]any) ([]pipeline.Header, error) {
-	names := make([]string, 0, len(values))
-	for name := range values {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	headers := make([]pipeline.Header, len(names))
-	for i, name := range names {
-		value, err := PlainScalar(values[name])
+// one per property, in the order the headers schema declares them (#96), an
+// undeclared one after them by name, each value plain-scalar - an object's
+// JSON text in its own declared order - and a null value a null header (#85
+// decision 2).
+func EncodeHeaders(schema map[string]any, values map[string]any) ([]pipeline.Header, error) {
+	obj, _ := generator.Ordered(schema, values).(ordered.Object)
+	headers := make([]pipeline.Header, len(obj.Keys))
+	for i, name := range obj.Keys {
+		value, err := PlainScalar(obj.Values[i])
 		if err != nil {
 			return nil, fmt.Errorf("header %s: %w", name, err)
 		}

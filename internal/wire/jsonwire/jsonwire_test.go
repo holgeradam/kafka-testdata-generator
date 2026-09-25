@@ -455,3 +455,53 @@ func TestBuildGeneratesHeaders(t *testing.T) {
 		t.Errorf("Message types = %v, want both", seen)
 	}
 }
+
+// TestEncoderFollowsDeclaredOrder proves a run's JSON encoder writes each
+// Payload in the order its own Message type declares its properties, and an
+// object Key in the order its Key binding does (#96).
+func TestEncoderFollowsDeclaredOrder(t *testing.T) {
+	str := map[string]any{"type": "string", "const": "v"}
+	schema := func(names ...string) map[string]any {
+		props := map[string]any{}
+		var order []any
+		for _, n := range names {
+			props[n] = str
+			order = append(order, n)
+		}
+		return map[string]any{"type": "object", "required": order, "properties": props, generator.OrderKeyword: order}
+	}
+	opts := options()
+	opts.MessageTypes = []asyncapi.MessageType{
+		{Name: "A", Payload: schema("zeta", "alpha"), KeyBinding: schema("tenant", "id")},
+		{Name: "B", Payload: schema("mid", "beta", "zulu"), KeyBinding: schema("tenant", "id")},
+	}
+	parts, err := Format{}.Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	enc, err := parts.Encoder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`{"zeta":"v","alpha":"v"}`, `{"mid":"v","beta":"v","zulu":"v"}`}
+	for i := 0; i < 20; i++ {
+		g, err := parts.Values.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := parts.KeyGen.Value()
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyBytes, payload, err := enc.Encode(key, g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(payload) != want[g.Type] {
+			t.Fatalf("type %d: payload %s, want %s", g.Type, payload, want[g.Type])
+		}
+		if string(keyBytes) != `{"tenant":"v","id":"v"}` {
+			t.Fatalf("key %s, want tenant before id", keyBytes)
+		}
+	}
+}

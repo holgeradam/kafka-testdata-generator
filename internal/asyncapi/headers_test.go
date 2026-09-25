@@ -37,7 +37,7 @@ components:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(mt.Headers, wantHeaders) {
+			if !reflect.DeepEqual(withoutOrder(mt.Headers), wantHeaders) {
 				t.Errorf("Headers = %v, want %v", mt.Headers, wantHeaders)
 			}
 		})
@@ -68,7 +68,7 @@ components:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(types[0].Headers, wantHeaders) {
+			if !reflect.DeepEqual(withoutOrder(types[0].Headers), wantHeaders) {
 				t.Errorf("OrderCreated Headers = %v, want %v", types[0].Headers, wantHeaders)
 			}
 			if types[1].Headers != nil {

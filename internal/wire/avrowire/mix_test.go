@@ -152,7 +152,7 @@ func TestDryRunRendersBranchAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if want := `{"amount":9.5,"billing":{"city":"Oslo"},"id":"o-1","region":"eu"}`; string(out) != want {
+	if want := `{"id":"o-1","region":"eu","amount":9.5,"billing":{"city":"Oslo"}}`; string(out) != want {
 		t.Errorf("Dry run = %s, want %s", out, want)
 	}
 }
