@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 )
 
 // mergeAllOf folds every allOf branch into one schema using ADR-0006 Decision 5
@@ -77,10 +78,12 @@ func mergeTwoSchemas(a, b map[string]any, path string) (map[string]any, error) {
 			out[k] = merged
 		case "type":
 			if ok {
-				if !reflect.DeepEqual(existing, v) {
+				merged, err := intersectTypes(existing, v)
+				if err != nil {
 					return nil, &UnsupportedSchemaError{Keyword: "allOf", Path: path,
 						Detail: fmt.Sprintf("clashing type %v and %v", existing, v)}
 				}
+				out[k] = merged
 				continue
 			}
 			out[k] = v
@@ -165,4 +168,31 @@ func unionRequired(existing, v any, exists bool) any {
 		out = append(out, s)
 	}
 	return out
+}
+
+// intersectTypes keeps the types both type keywords allow, in the first's
+// order (#99 decision 6): one name when one is left, a list otherwise, and an
+// error when none is.
+func intersectTypes(a, b any) (any, error) {
+	as, err := typeList(map[string]any{"type": a})
+	if err != nil {
+		return nil, err
+	}
+	bs, err := typeList(map[string]any{"type": b})
+	if err != nil {
+		return nil, err
+	}
+	var both []any
+	for _, t := range as {
+		if slices.Contains(bs, t) {
+			both = append(both, t)
+		}
+	}
+	switch len(both) {
+	case 0:
+		return nil, fmt.Errorf("no type in common")
+	case 1:
+		return both[0], nil
+	}
+	return both, nil
 }

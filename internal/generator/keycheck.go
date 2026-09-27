@@ -2,6 +2,8 @@ package generator
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 )
@@ -93,10 +95,9 @@ func resolveGuaranteed(defs, schema map[string]any, depth int) (map[string]any, 
 
 // descend takes one step into the schema, requiring the step to be guaranteed.
 func descend(schema map[string]any, step Step) (map[string]any, error) {
-	typ, _ := schema["type"].(string)
 	if step.Index >= 0 {
-		if typ != "array" {
-			return nil, fmt.Errorf("the schema here is %s, not an array", describeType(schema))
+		if err := always(schema, "array"); err != nil {
+			return nil, err
 		}
 		minItems := 1
 		if v, ok := schema["minItems"].(float64); ok {
@@ -112,8 +113,8 @@ func descend(schema map[string]any, step Step) (map[string]any, error) {
 		return items, nil
 	}
 
-	if typ != "object" {
-		return nil, fmt.Errorf("the schema here is %s, not an object", describeType(schema))
+	if err := always(schema, "object"); err != nil {
+		return nil, err
 	}
 	props, _ := schema["properties"].(map[string]any)
 	field, ok := props[step.Field].(map[string]any)
@@ -139,38 +140,66 @@ func isRequired(schema map[string]any, field string) bool {
 	return false
 }
 
-// holds reports whether a value generated from the key schema conforms to the
-// schema at the key path. Types must match, except that an integer Key also
-// conforms to a number field.
-func (c *KeyChecker) holds(at map[string]any) error {
-	keyType, _ := c.keySchema["type"].(string)
-	fieldType, _ := at["type"].(string)
+// always requires every value of schema to be of type want, so a path can
+// step into it: a type list that also allows null may hold nothing to plant
+// into, and one with other types holds want only sometimes (#99 decision 5).
+func always(schema map[string]any, want string) error {
+	types, err := typeList(schema)
 	switch {
-	case keyType == "":
-		return fmt.Errorf("the key schema declares no type, so the Key cannot be planted")
-	case fieldType == "":
-		return fmt.Errorf("the schema here declares no type, so the Key cannot be planted")
-	case keyType == fieldType:
+	case err == nil && len(types) == 1 && types[0] == want:
 		return nil
-	case keyType == "integer" && fieldType == "number":
-		return nil
-	default:
-		return fmt.Errorf("the schema here is %s but the key schema is %s", fieldType, keyType)
+	case err == nil && len(types) > 1 && slices.Contains(types, want) && slices.Contains(types, "null"):
+		return fmt.Errorf("the schema here is %s, so it may be null, with nothing to plant into", describeType(schema))
+	case err == nil && len(types) > 1 && slices.Contains(types, want):
+		return fmt.Errorf("the schema here is %s, so it is %s only sometimes", describeType(schema), withArticle(want))
 	}
+	return fmt.Errorf("the schema here is %s, not %s", describeType(schema), withArticle(want))
+}
+
+// holds reports whether a value generated from the key schema conforms to the
+// schema at the key path: every type the Key may take must be one the field
+// allows, an integer Key also fitting a number field. A field whose type list
+// allows null takes a planted Key of another type it lists (#99 decision 5).
+func (c *KeyChecker) holds(at map[string]any) error {
+	keyTypes, err := typeList(c.keySchema)
+	if err != nil {
+		return fmt.Errorf("the key schema declares no type, so the Key cannot be planted")
+	}
+	fieldTypes, err := typeList(at)
+	if err != nil {
+		return fmt.Errorf("the schema here declares no type, so the Key cannot be planted")
+	}
+	for _, kt := range keyTypes {
+		if slices.Contains(fieldTypes, kt) || (kt == "integer" && slices.Contains(fieldTypes, "number")) {
+			continue
+		}
+		if kt == "null" {
+			return fmt.Errorf("the key schema may be null, but the schema here is %s", describeType(at))
+		}
+		return fmt.Errorf("the schema here is %s but the key schema is %s", describeType(at), describeType(c.keySchema))
+	}
+	return nil
 }
 
 // describeType names what a schema node is, for error messages, with its
 // article: "an array", "a string".
 func describeType(schema map[string]any) string {
-	typ, ok := schema["type"].(string)
+	types, err := typeList(schema)
 	switch {
-	case !ok:
+	case err != nil:
 		return "untyped"
-	case typ == "array" || typ == "object" || typ == "integer":
-		return "an " + typ
-	default:
-		return "a " + typ
+	case len(types) > 1:
+		return "one of " + strings.Join(types, ", ")
 	}
+	return withArticle(types[0])
+}
+
+// withArticle names a type with its article: "an array", "a string".
+func withArticle(typ string) string {
+	if typ == "array" || typ == "object" || typ == "integer" {
+		return "an " + typ
+	}
+	return "a " + typ
 }
 
 // pathError names the step that failed, so the message points at the part of

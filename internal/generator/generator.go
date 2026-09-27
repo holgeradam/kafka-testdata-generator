@@ -3,6 +3,7 @@ package generator
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -132,10 +133,16 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 		return g.value(sub, field, path, depth)
 	}
 
-	typ, ok := schema["type"].(string)
-	if !ok {
-		return nil, &UnsupportedSchemaError{Keyword: "type", Path: path, Detail: "type is missing or not a string"}
+	types, err := typeList(schema)
+	if err != nil {
+		return nil, &UnsupportedSchemaError{Keyword: "type", Path: path, Detail: err.Error()}
 	}
+	typ := types[0]
+	if len(types) > 1 {
+		typ = g.drawType(types)
+	}
+	// Each type reads only its own keywords, so a draw honours those of its
+	// type and ignores the others', as JSON Schema defines them (#99).
 	switch typ {
 	case "object":
 		return g.object(schema, path, depth)
@@ -167,9 +174,68 @@ func (g *Generator) refValue(ref, field, path string, depth int) (any, error) {
 		return nil, &UnsupportedSchemaError{Keyword: "$ref", Path: path, Detail: err.Error()}
 	}
 	if depth >= maxRecursionDepth {
+		// null ends the recursion where the type allows it, a conforming
+		// value, as a nullable Avro union does (#99 decision 4).
+		if types, err := typeList(target); err == nil && slices.Contains(types, "null") {
+			return nil, nil
+		}
 		return nil, errAbsent
 	}
 	return g.value(target, field, path, depth+1)
+}
+
+// jsonTypes are the type names JSON Schema defines.
+var jsonTypes = map[string]bool{"string": true, "integer": true, "number": true, "boolean": true, "object": true, "array": true, "null": true}
+
+// typeList reads a schema's type keyword: one type name, or a list of unique
+// ones, which JSON Schema allows and nullable fields are written with (#99).
+func typeList(schema map[string]any) ([]string, error) {
+	switch t := schema["type"].(type) {
+	case nil:
+		return nil, fmt.Errorf("type is missing")
+	case string:
+		if !jsonTypes[t] {
+			return nil, fmt.Errorf("unsupported type %q", t)
+		}
+		return []string{t}, nil
+	case []any:
+		if len(t) == 0 {
+			return nil, fmt.Errorf("type is an empty list")
+		}
+		types := make([]string, len(t))
+		for i, e := range t {
+			name, ok := e.(string)
+			if !ok {
+				return nil, fmt.Errorf("type lists %v, which is not a type name", e)
+			}
+			if !jsonTypes[name] {
+				return nil, fmt.Errorf("unsupported type %q", name)
+			}
+			if slices.Contains(types[:i], name) {
+				return nil, fmt.Errorf("type lists %q twice", name)
+			}
+			types[i] = name
+		}
+		return types, nil
+	default:
+		return nil, fmt.Errorf("type is neither a type name nor a list of them")
+	}
+}
+
+// drawType picks the type of one value from a type list as a nullable Avro
+// union picks its branch (#99 decision 1): null with 30% chance when listed,
+// otherwise one of the other types uniformly.
+func (g *Generator) drawType(types []string) string {
+	var others []string
+	for _, t := range types {
+		if t != "null" {
+			others = append(others, t)
+		}
+	}
+	if len(others) < len(types) && g.synth.Chance(30) {
+		return "null"
+	}
+	return others[g.synth.Pick(len(others))]
 }
 
 // lookupDef resolves a local $ref of the form #/$defs/<name>, where name is a

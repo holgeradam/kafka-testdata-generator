@@ -3,6 +3,7 @@ package generator
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -27,7 +28,7 @@ func Locate(schema map[string]any, pointer []string) ([]Step, map[string]any, er
 		}
 		depth = d
 		steps[i] = Step{Field: token, Index: -1}
-		if n, err := strconv.Atoi(token); err == nil && n >= 0 && strconv.Itoa(n) == token && resolved["type"] == "array" {
+		if n, err := strconv.Atoi(token); err == nil && n >= 0 && strconv.Itoa(n) == token && allows(resolved, "array") {
 			steps[i] = Step{Index: n}
 		}
 		if current, err = descend(resolved, steps[i]); err != nil {
@@ -52,4 +53,10 @@ func locationError(pointer []string, i int, err error) error {
 		escaped[j] = strings.ReplaceAll(strings.ReplaceAll(token, "~", "~0"), "/", "~1")
 	}
 	return fmt.Errorf("at %q: %w", "/"+strings.Join(escaped, "/"), err)
+}
+
+// allows reports whether the schema's type is typ or lists it.
+func allows(schema map[string]any, typ string) bool {
+	types, err := typeList(schema)
+	return err == nil && slices.Contains(types, typ)
 }
