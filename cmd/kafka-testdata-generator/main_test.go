@@ -1390,7 +1390,7 @@ func init() {
 // the draw sequences line up exactly.
 func TestScenarioHeuristicsAgreeAcrossFormats(t *testing.T) {
 	bin := buildBinary(t)
-	fields := []string{"city", "country", "currency", "customerName", "description", "email", "orderId", "status", "street", "websiteUrl"}
+	fields := []string{"alias", "city", "country", "currency", "customerName", "description", "displayName", "email", "nickname", "orderId", "status", "street", "websiteUrl"}
 
 	spec := "asyncapi: '2.6.0'\ninfo: {title: Same, version: '1.0.0'}\nchannels:\n  orders:\n    publish:\n      message:\n        payload:\n          type: object\n          required: [" + strings.Join(fields, ", ") + "]\n          properties:\n"
 	var avscFields []string

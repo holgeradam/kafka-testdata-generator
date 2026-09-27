@@ -480,7 +480,7 @@ order:
 | `id`, `uuid`, `guid` | UUID |
 | `firstname`, or `first` + `name` | first name |
 | `lastname`, `surname`, or `last` + `name` | surname |
-| `name`, `fullname` | full name |
+| `name`, `fullname`, `displayname` | full name |
 | `phone`, `telephone` | phone number |
 | `city` | city name |
 | `country` | country name |
@@ -491,7 +491,7 @@ order:
 | `url`, `uri` | URL |
 | `sku` | SKU |
 | `ip`, `ipAddress`, `ipv4` | IPv4 from the RFC 5737 documentation ranges |
-| `username`, `login`, `handle`, or `user` + `name` | handle (`alice.roberts42`) |
+| `username`, `login`, `handle`, `nickname`, `alias`, or `user`/`nick` + `name` | handle (`alice.roberts42`) |
 | `filename`, or `file` + `name` | file name with extension (`report-4821.pdf`) |
 | `countrycode`, or `country` + `code` | ISO 3166-1 alpha-2 code |
 | `zip`, `postcode`, or `postal` + `code` | 5-digit postal code |
