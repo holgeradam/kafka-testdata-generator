@@ -92,11 +92,11 @@ func TestTextHeuristics(t *testing.T) {
 		fields   []string
 		ok       func(string) bool
 	}{
-		{"uuid", []string{"id", "orderId", "customer_id", "order-id", "UUID", "orderIds"}, uuidRe.MatchString},
+		{"uuid", []string{"id", "orderId", "customer_id", "order-id", "UUID", "orderIds", "aliasId", "nicknameId"}, uuidRe.MatchString},
 		{"email", []string{"email", "emailAddress", "customer_email", "emails"}, emailRe.MatchString},
 		{"first name", []string{"firstName", "first_name", "firstname"}, inPool(firstNames)},
 		{"last name", []string{"lastName", "last_name", "lastname", "surname"}, inPool(surnames)},
-		{"full name", []string{"name", "customerName", "fullName"}, fullName},
+		{"full name", []string{"name", "customerName", "fullName", "displayName", "display_name", "displayname", "displaynames"}, fullName},
 		{"phone", []string{"phone", "phoneNumber", "telephone"}, phoneRe.MatchString},
 		{"city", []string{"city", "billingCity", "cities", "cityName"}, inPool(cities)},
 		{"country", []string{"country", "shippingCountry"}, inPool(countries)},
@@ -110,7 +110,7 @@ func TestTextHeuristics(t *testing.T) {
 		{"region", []string{"state", "region", "province", "billingState"}, inPool(regions)},
 		{"country code", []string{"countryCode", "country_code"}, regexp.MustCompile(`^[A-Z]{2}$`).MatchString},
 		{"address line", []string{"address", "addressLine", "billing_address"}, isAddress},
-		{"username", []string{"username", "userName", "login", "handle"}, regexp.MustCompile(`^[a-z]+\.[a-z]+\d{1,2}$`).MatchString},
+		{"username", []string{"username", "userName", "login", "handle", "nickname", "nickName", "nick_name", "nicknames", "alias", "aliases", "customerAlias"}, regexp.MustCompile(`^[a-z]+\.[a-z]+\d{1,2}$`).MatchString},
 		{"company", []string{"company", "organization", "employer", "companyName"}, inPool(companies)},
 		{"job title", []string{"title", "jobTitle"}, inPool(jobTitles)},
 		{"ipv4", []string{"ip", "ipAddress", "ipv4", "clientIp"}, isDocIPv4},

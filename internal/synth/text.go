@@ -90,7 +90,7 @@ func (s *Synthesizer) Text(field string) string {
 		return s.Semantic(UUID)
 	case has("ip", "ipv"):
 		return s.Semantic(IPv4)
-	case has("username") || has("login", "handle") || has("user") && has("name"):
+	case has("username") || has("login", "handle", "nickname", "alias") || has("user", "nick") && has("name"):
 		return fmt.Sprintf("%s.%s%d", strings.ToLower(s.pick(firstNames)), strings.ToLower(s.pick(surnames)), s.rng.Intn(100))
 	case has("filename") || has("file") && has("name"):
 		return fmt.Sprintf("%s-%04d.%s", s.pick(fileStems), s.rng.Intn(10000), s.pick(fileExtensions))
@@ -137,7 +137,7 @@ func (s *Synthesizer) Text(field string) string {
 	case has("sku"):
 		return fmt.Sprintf("%s-%s-%04d", s.random(upper, 3), s.random(upper, 2), s.rng.Intn(10000))
 	// Only now does a bare name word mean a person.
-	case has("name", "fullname"):
+	case has("name", "fullname", "displayname"):
 		return s.pick(firstNames) + " " + s.pick(surnames)
 	default:
 		return s.random(lowerAlnum, 8)
