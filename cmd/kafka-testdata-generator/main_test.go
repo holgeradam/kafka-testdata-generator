@@ -1158,6 +1158,84 @@ components:
 	}
 }
 
+// TestScenarioTypeLists is #99 end to end: nullable fields written as type
+// lists generate both nulls and values - in the Payload, the Headers and the
+// Key, in 3.0 and 2.x specs - and a nullable JSON field draws exactly as the
+// same nullable Avro union does.
+func TestScenarioTypeLists(t *testing.T) {
+	bin := buildBinary(t)
+	body := `
+        bindings: {kafka: {key: {type: [string, "null"], format: uuid}}}
+        headers: {type: object, required: [trace], properties: {trace: {type: [string, "null"], format: uuid}}}
+        payload: {type: object, required: [note, qty], properties: {note: {type: [string, "null"]}, qty: {type: [integer, "null"], minimum: 1, maximum: 9}}}`
+	specs := map[string]string{
+		"3.0": "asyncapi: 3.0.0\ninfo: {title: T, version: '1'}\nchannels:\n  orders:\n    address: orders\n    messages:\n      created:" + body + "\n",
+		"2.x": "asyncapi: 2.6.0\ninfo: {title: T, version: '1'}\nchannels:\n  orders:\n    publish:\n      message:" + body + "\n",
+	}
+	for name, spec := range specs {
+		t.Run(name, func(t *testing.T) {
+			cmd := exec.Command(bin, "-spec", writeTempSpec(t, spec), "-topic", "orders", "-dry-run", "-count", "60", "-seed", "8")
+			var stdout, stderr strings.Builder
+			cmd.Stdout, cmd.Stderr = &stdout, &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("run: %v\n%s", err, stderr.String())
+			}
+			seen := map[string]bool{}
+			for _, line := range filterJSONLines(stdout.String()) {
+				var p map[string]any
+				if err := json.Unmarshal([]byte(line), &p); err != nil {
+					t.Fatal(err)
+				}
+				seen["note "+kind(p["note"])] = true
+				seen["qty "+kind(p["qty"])] = true
+			}
+			for _, line := range strings.Split(stderr.String(), "\n") {
+				switch {
+				case strings.HasPrefix(line, "Key: "):
+					seen["key value"] = true
+				case line == `Headers: {"trace":null}`:
+					seen["header null"] = true
+				case strings.HasPrefix(line, `Headers: {"trace":"`):
+					seen["header value"] = true
+				}
+			}
+			for _, want := range []string{"note null", "note value", "qty null", "qty value", "key value", "header null", "header value"} {
+				if !seen[want] {
+					t.Errorf("never saw %s over 60 records; saw %v", want, seen)
+				}
+			}
+			if keys := strings.Count(stderr.String(), "Key: "); keys == 0 || keys == 60 {
+				t.Errorf("%d Key echoes of 60, want a null Key in some records", keys)
+			}
+		})
+	}
+
+	jsonSpec := writeTempSpec(t, "asyncapi: 2.6.0\ninfo: {title: T, version: '1'}\nchannels:\n  orders:\n    publish:\n      message:\n        payload: {type: object, required: [note], properties: {note: {type: [string, \"null\"]}}}\n")
+	avsc := writeTempAvsc(t, "note.avsc", `{"type":"record","name":"R","fields":[{"name":"note","type":["null","string"]}]}`)
+	run := func(extra ...string) string {
+		out, err := exec.Command(bin, append([]string{"-spec", jsonSpec, "-topic", "orders", "-dry-run", "-count", "30", "-seed", "5"}, extra...)...).Output()
+		if err != nil {
+			t.Fatalf("run %v: %v", extra, err)
+		}
+		return strings.Join(filterJSONLines(string(out)), "\n")
+	}
+	j, a := run(), run("-avro-schema", avsc)
+	if n := strings.Count(j, "\n") + 1; n != 30 || !strings.Contains(j, `"note":null`) || !strings.Contains(j, `"note":"`) {
+		t.Fatalf("JSON run gave %d records, want 30 with nulls and strings:\n%s", n, j)
+	}
+	if j != a {
+		t.Errorf("a nullable field draws differently in the two Wire formats:\njson:\n%s\navro:\n%s", j, a)
+	}
+}
+
+// kind is "null" or "value", for counting what a nullable field held.
+func kind(v any) string {
+	if v == nil {
+		return "null"
+	}
+	return "value"
+}
+
 // testBinary is built once per package run: the scenarios below exercise the
 // real process, but they all exercise the same build.
 var testBinary string

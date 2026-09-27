@@ -320,6 +320,13 @@ not read. It supports:
 - Nested JSON Schema objects and arrays
 - All standard JSON Schema types: `string`, `integer`, `number`, `boolean`, `array`, `object`,
   `null`
+- Type lists such as `type: [string, "null"]`, the usual way to write a nullable field: each
+  value draws one listed type as a nullable Avro union does - `null` with 30% chance when listed,
+  otherwise one of the other types alike - and honours that type's keywords (`minLength` for a
+  string, `minimum` for a number, ...). A recursion that runs out of depth ends in `null` where
+  the list allows it. `-keyPath` and Topic parameter locations may end at a nullable field whose
+  list includes the planted value's type, but not step through a nullable object or array, which
+  may hold nothing to plant into
 - All 19 string formats JSON Schema 2020-12 defines: `date-time`, `date`, `time`,
   `duration`, `email`, `idn-email`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`,
   `uri`, `uri-reference`, `iri`, `iri-reference`, `uuid`, `uri-template`,
