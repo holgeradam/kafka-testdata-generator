@@ -100,19 +100,21 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 		return g.refValue(ref, field, path, depth)
 	}
 
+	// A literal comes back as a copy: planting writes into the value, which
+	// must reach neither the schema nor another record (#107).
 	if ex, ok := schema["example"]; ok {
-		return ex, nil
+		return copyLiteral(ex), nil
 	}
 	if ex, ok := schema["examples"]; ok {
 		if arr, ok := ex.([]any); ok && len(arr) > 0 {
-			return arr[0], nil
+			return copyLiteral(arr[0]), nil
 		}
 	}
 	if c, ok := schema["const"]; ok {
-		return c, nil
+		return copyLiteral(c), nil
 	}
 	if enums, ok := schema["enum"].([]any); ok && len(enums) > 0 {
-		return enums[g.synth.Pick(len(enums))], nil
+		return copyLiteral(enums[g.synth.Pick(len(enums))]), nil
 	}
 
 	if allOf, ok := schema["allOf"].([]any); ok {
@@ -161,6 +163,26 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 	default:
 		return nil, &UnsupportedSchemaError{Keyword: "type", Path: path, Detail: fmt.Sprintf("unsupported type %q", typ)}
 	}
+}
+
+// copyLiteral deep-copies a literal of the decoded spec: its objects and
+// arrays are fresh, its scalars shared, being immutable.
+func copyLiteral(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = copyLiteral(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = copyLiteral(e)
+		}
+		return out
+	}
+	return v
 }
 
 // refValue follows a preserved $ref node into the schema's $defs. When the

@@ -108,43 +108,48 @@ func (p *Plan) Apply(payload any) (any, error) {
 	if len(p.path) == 0 {
 		return key, nil
 	}
-	if err := plant(payload, p.path, key); err != nil {
-		return nil, err
+	if i, err := plant(payload, p.path, key); err != nil {
+		return nil, &PathError{
+			Path:   PathString(p.path),
+			Detail: fmt.Sprintf("at %q: the Payload %v", PathString(p.path[:i+1]), err),
+		}
 	}
 	return key, nil
 }
 
 // plant writes value at the end of path. Every step must already exist: the
 // Checker rejects a path that is not guaranteed, so a miss here is a defect
-// rather than an expected outcome, and it surfaces as a typed error.
-func plant(payload any, path []Step, value any) error {
+// rather than an expected outcome. It reports the step that missed and what
+// the value there lacks, for the caller to phrase: the Key plan names
+// -keyPath and the Payload, a Topic parameter its own location.
+func plant(payload any, path []Step, value any) (int, error) {
 	current := payload
 	for i, step := range path[:len(path)-1] {
 		next, err := child(current, step)
 		if err != nil {
-			return pathErrorAt(path, i, err)
+			return i, err
 		}
 		current = next
 	}
 
-	last := path[len(path)-1]
+	i, last := len(path)-1, path[len(path)-1]
 	if last.Index >= 0 {
 		arr, ok := current.([]any)
 		if !ok || last.Index >= len(arr) {
-			return pathErrorAt(path, len(path)-1, fmt.Errorf("the Payload holds no item at this index"))
+			return i, fmt.Errorf("holds no item at this index")
 		}
 		arr[last.Index] = value
-		return nil
+		return 0, nil
 	}
 	m, ok := current.(map[string]any)
 	if !ok {
-		return pathErrorAt(path, len(path)-1, fmt.Errorf("the Payload holds no object here"))
+		return i, fmt.Errorf("holds no object here")
 	}
 	if _, ok := m[last.Field]; !ok {
-		return pathErrorAt(path, len(path)-1, fmt.Errorf("the Payload has no field %q", last.Field))
+		return i, fmt.Errorf("has no field %q", last.Field)
 	}
 	m[last.Field] = value
-	return nil
+	return 0, nil
 }
 
 // child descends one step into the generated value.
@@ -152,31 +157,22 @@ func child(current any, step Step) (any, error) {
 	if step.Index >= 0 {
 		arr, ok := current.([]any)
 		if !ok {
-			return nil, fmt.Errorf("the Payload holds no array here")
+			return nil, fmt.Errorf("holds no array here")
 		}
 		if step.Index >= len(arr) {
-			return nil, fmt.Errorf("the Payload holds no item at this index")
+			return nil, fmt.Errorf("holds no item at this index")
 		}
 		return arr[step.Index], nil
 	}
 	m, ok := current.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("the Payload holds no object here")
+		return nil, fmt.Errorf("holds no object here")
 	}
 	v, ok := m[step.Field]
 	if !ok {
-		return nil, fmt.Errorf("the Payload has no field %q", step.Field)
+		return nil, fmt.Errorf("has no field %q", step.Field)
 	}
 	return v, nil
-}
-
-// pathErrorAt names the step that failed, so the message points at the part of
-// the path that is wrong rather than the whole of it.
-func pathErrorAt(path []Step, i int, err error) error {
-	return &PathError{
-		Path:   PathString(path),
-		Detail: fmt.Sprintf("at %q: %v", PathString(path[:i+1]), err),
-	}
 }
 
 // ParsePath splits a key path into steps: dotted field names with optional [n]
@@ -227,11 +223,16 @@ func ParsePath(path string) ([]Step, error) {
 	return steps, nil
 }
 
-// Put plants value into payload at path, as Apply plants the Key: for a value
-// planted beside the Key, such as a Topic parameter's (#83). The path must
-// have been checked against the Payload schema, so a miss is a defect.
-func Put(payload any, path []Step, value any) error {
-	return plant(payload, path, value)
+// Put plants value into a generated value at path, as Apply plants the Key:
+// for a value planted beside the Key, such as a Topic parameter's (#83), in
+// the Payload or the Headers. The path must have been checked against the
+// schema, so a miss is a defect. Its error names the step that missed, and
+// leaves naming the value planted to the caller.
+func Put(into any, path []Step, value any) error {
+	if i, err := plant(into, path, value); err != nil {
+		return fmt.Errorf("at %q: the value %w", PathString(path[:i+1]), err)
+	}
+	return nil
 }
 
 // Overlap reports whether one path leads to or into the other, so planting

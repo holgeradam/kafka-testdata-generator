@@ -13,7 +13,7 @@ The Kafka topic a run produces to, exactly one per run, named by `-topic`. The A
 _Avoid_: channel, topic (alone)
 
 **Topic parameter**:
-A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (a 3.0 address, or a 2.x spec entry key without a Kafka binding). `-topic` fills it, the value must satisfy the parameter's declaration (a 3.0 enum, a 2.x schema, which must allow a string), and a declared payload or header location receives it in every message's Payload or Headers, checked before the run starts like a Key path.
+A named placeholder in a Kafka topic's address template, such as `region` in `orders.{region}` (a 3.0 address, or a 2.x spec entry key without a Kafka binding). `-topic` fills it, the value must satisfy the parameter's declaration (a 3.0 enum, a 2.x schema, which must allow a string), and a declared payload or header location receives it in every message's Payload or Headers, as a Planting.
 _Avoid_: channel parameter, address parameter, variable
 
 **Message**:
@@ -57,7 +57,11 @@ The thing a Key identifies across messages, such as one order. With `-records-pe
 _Avoid_: aggregate, object
 
 **Key path**:
-Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. Accepted only where generation guarantees a value in every message and the type there can hold the Key; both are checked before the run starts, against whichever schema language governs the Payload.
+Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. The Key's Planting.
+
+**Planting**:
+A value the run writes into every message at a location in its Payload or Headers: the Key at the Key path, a Topic parameter's value at its location. Accepted only where generation guarantees a value in every message of every Message type, never through a node the schema answers with a literal (`example`, `examples`, `const`, `enum`), and only where the schema there can hold the value; no two Plantings may share a location. All of it is checked before the run starts, against whichever schema language governs.
+_Avoid_: injection, mirroring (except for the Key)
 
 **Headers**:
 The named values a Message type's `headers` schema describes, a JSON Schema object in either Wire format: each property is one Kafka record header. Each record gets the Headers of its own Message type, generated from the seeded stream after its Payload; a Message type without `headers` gives none. Every value is encoded plain-scalar, as a JSON Key is, a null as a null header, in the order the headers schema declares them. Under AVRO from `-avro-schema` the records are of no Message type in the spec, so its headers are ignored with a warning.
