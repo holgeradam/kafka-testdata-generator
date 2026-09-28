@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
 // avroSpec declares its Payload, and optionally its Key, in Avro (#84): the
@@ -131,7 +131,7 @@ channels:
 		{"producing without a registry", []string{"-spec", avroPayloads, "-produce"}, "registry", "-registry is required to produce with the avro Wire format", nil},
 		{"mixed payload formats", []string{"-spec", mixed}, "topic", `Kafka topic "orders" mixes payload formats: Avro (OrderCreated, OrderPaid) and JSON Schema (OrderUpdated); a Kafka topic is produced in one Wire format`, nil},
 		{"malformed spec avsc", []string{"-spec", brokenAvsc}, "topic", "payload of OrderCreated", new(*avro.ParseError)},
-		{"key path not in the spec avsc", []string{"-spec", keyed, "-keyPath", "missing"}, "keyPath", "no field", new(*keyplan.PathError)},
+		{"key path not in the spec avsc", []string{"-spec", keyed, "-keyPath", "missing"}, "keyPath", "no field", new(*planting.PathError)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,28 +273,27 @@ channels:
 	if p := payload(r); p["id"] == nil || p["region"] == nil {
 		t.Errorf("payload = %v, want the spec avsc's record", p)
 	}
-	if r.Config.KeyPlan != nil {
-		t.Error("no Key binding and no -avro-key-schema: KeyPlan must be nil")
+	if r.Config.Keyed {
+		t.Error("no Key binding and no -avro-key-schema: the run must not be keyed")
 	}
 	if len(r.Warnings) != 0 {
 		t.Errorf("warnings = %v, want none: the Key binding is read, not ignored", r.Warnings)
 	}
 
 	r = plan("-spec", keyed, "-topic", "orders", "-keyPath", "id")
-	if r.Config.KeyPlan == nil {
-		t.Fatal("an Avro Key binding must produce a KeyPlan")
+	if !r.Config.Keyed {
+		t.Fatal("an Avro Key binding must key the run")
 	}
-	p := payload(r)
-	k, err := r.Config.KeyPlan.Apply(p)
+	g, err := r.Config.Generator.Generate()
 	if err != nil {
-		t.Fatalf("Apply: %v", err)
+		t.Fatalf("Generate: %v", err)
 	}
-	if p["id"] != k {
-		t.Errorf("planted %v, key %v; want the Key planted at -keyPath", p["id"], k)
+	if g.Payload.(map[string]any)["id"] != g.Key {
+		t.Errorf("payload %v, key %v; want the Key planted at -keyPath", g.Payload, g.Key)
 	}
 
-	if r := plan("-spec", avroPayloads, "-topic", "orders", "-avro-key-schema", key); r.Config.KeyPlan == nil {
-		t.Error("-avro-key-schema beside Avro payloads without a Key binding must produce a KeyPlan")
+	if r := plan("-spec", avroPayloads, "-topic", "orders", "-avro-key-schema", key); !r.Config.Keyed {
+		t.Error("-avro-key-schema beside Avro payloads without a Key binding must key the run")
 	}
 
 	if p := payload(plan("-spec", templated, "-topic", "orders.eu")); p["region"] != "eu" {

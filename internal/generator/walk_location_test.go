@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
 // TestLocateGuaranteedFields proves a JSON Pointer into the Payload becomes
@@ -22,15 +22,15 @@ func TestLocateGuaranteedFields(t *testing.T) {
 		{[]string{"items", "1", "sku"}, "items[1].sku", "string"},
 	}
 	for _, c := range cases {
-		steps, field, err := Locate(orderSchema(), c.pointer)
+		steps, field, err := locate(orderSchema(), c.pointer)
 		if err != nil {
-			t.Fatalf("Locate(%v): %v", c.pointer, err)
+			t.Fatalf("locate(%v): %v", c.pointer, err)
 		}
-		if got := keyplan.PathString(steps); got != c.steps {
-			t.Errorf("Locate(%v) steps = %s, want %s", c.pointer, got, c.steps)
+		if got := planting.PathString(steps); got != c.steps {
+			t.Errorf("locate(%v) steps = %s, want %s", c.pointer, got, c.steps)
 		}
 		if field["type"] != c.typ {
-			t.Errorf("Locate(%v) field = %v, want a %s", c.pointer, field, c.typ)
+			t.Errorf("locate(%v) field = %v, want a %s", c.pointer, field, c.typ)
 		}
 	}
 }
@@ -50,7 +50,7 @@ func TestLocateRefusesUnguaranteedFields(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := Locate(orderSchema(), c.pointer)
+			_, _, err := locate(orderSchema(), c.pointer)
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("err = %v, want it to mention %q", err, c.want)
 			}
@@ -72,7 +72,7 @@ func TestLocateFieldIsSelfContained(t *testing.T) {
 			"Code":   map[string]any{"type": "string", "pattern": "^[a-z]{2}$"},
 		},
 	}
-	_, field, err := Locate(schema, []string{"region", "code"})
+	_, field, err := locate(schema, []string{"region", "code"})
 	if err != nil {
 		t.Fatal(err)
 	}

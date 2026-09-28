@@ -216,10 +216,10 @@ func TestTypeListPlanting(t *testing.T) {
 		})
 	}
 
-	if _, field, err := Locate(payload, []string{"id"}); err != nil || Conforms(field, "eu") != nil {
+	if _, field, err := locate(payload, []string{"id"}); err != nil || Conforms(field, "eu") != nil {
 		t.Errorf("Locate at a nullable end: %v, want the field accepting a string", err)
 	}
-	if _, _, err := Locate(payload, []string{"customer", "cid"}); err == nil || !strings.Contains(err.Error(), "may be null") {
+	if _, _, err := locate(payload, []string{"customer", "cid"}); err == nil || !strings.Contains(err.Error(), "may be null") {
 		t.Errorf("Locate through a nullable object: %v, want it refused", err)
 	}
 }

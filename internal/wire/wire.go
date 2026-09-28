@@ -8,11 +8,11 @@ package wire
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -40,6 +40,9 @@ type Options struct {
 	Topic string
 	// KeyPath is -keyPath; empty when the Key is not planted.
 	KeyPath string
+	// RecordsPerKey is -records-per-key: how many records an Entity's Key
+	// carries on average (#75).
+	RecordsPerKey int
 	// RegistryURL, AvroSchema and AvroKeySchema are the AVRO flags.
 	RegistryURL   string
 	AvroSchema    string
@@ -54,21 +57,20 @@ type Options struct {
 	// follows -avro-schema instead when they are not.
 	MessageTypes []asyncapi.MessageType
 	// TopicParameters are the values -topic fills a templated address with.
-	// Each one with a payload location is planted into every Payload, in
-	// either format, after the format has checked that the location is
-	// guaranteed and holds the value (#83).
+	// Each one with a location is planted into every Payload or Headers, in
+	// either format, once Plantings has checked that the location is
+	// guaranteed and holds the value (#83, #93).
 	TopicParameters []asyncapi.TopicParameter
 }
 
 // Parts is a run as its Wire format wires it.
 type Parts struct {
-	// Values generates each Payload, with the Message type it is of.
+	// Values generates each message: its Payload, Headers and Key, every
+	// Planting in place, with the Message type it is of.
 	Values pipeline.PayloadGenerator
-	// KeyGen generates each Key; nil means records carry a null Key.
-	KeyGen keyplan.Generator
-	// Checker validates -keyPath against the Payload schema; nil when the run
-	// has no -keyPath.
-	Checker keyplan.Checker
+	// Keyed says the run has a key schema; without one every record carries
+	// a null Key.
+	Keyed bool
 	// Encoder builds the run's Encoder. It is called after the sink exists, so
 	// a run that cannot reach its broker never contacts a registry (ADR-0010).
 	Encoder func(ctx context.Context) (pipeline.Encoder, error)
@@ -77,42 +79,21 @@ type Parts struct {
 	Warnings []string
 }
 
-// Plants are the Topic parameter values planted into each Payload, and where
-// (#83). A format builds them at Build, once each location has passed its
-// checks against the schema that governs the Payload.
-type Plants []Plant
-
-// Plant is one Topic parameter's value and the path it is planted along.
-type Plant struct {
-	Parameter asyncapi.TopicParameter
-	Path      []keyplan.Step
-}
-
-// Add appends a parameter's planting, refusing one whose path overlaps
-// -keyPath or an earlier planting: one would overwrite the other.
-func (ps Plants) Add(tp asyncapi.TopicParameter, path []keyplan.Step, keyPath string) (Plants, error) {
-	// A malformed -keyPath is reported by the Key plan; it overlaps nothing.
-	if steps, err := keyplan.ParsePath(keyPath); err == nil && keyplan.Overlap(path, steps) {
-		return nil, &Error{Flag: "keyPath", Detail: fmt.Sprintf("Topic parameter %s: location %s overlaps -keyPath %s; both would plant into the same field", tp.Name, tp.Location, keyPath)}
+// Plantings checks every Planting of the run against each Message type
+// before any record exists (internal/planting): -keyPath, and each Topic
+// parameter's location in the Payload or the Headers. A refusal is an Error
+// on the flag the Planting belongs to.
+func Plantings(types []planting.MessageType, keyPath string, params []asyncapi.TopicParameter) ([]*planting.Set, error) {
+	ps := make([]planting.Parameter, len(params))
+	for i, tp := range params {
+		ps[i] = planting.Parameter{Name: tp.Name, Value: tp.Value, Location: tp.Location, Pointer: tp.Pointer, InHeaders: tp.InHeaders}
 	}
-	for _, other := range ps {
-		if keyplan.Overlap(path, other.Path) {
-			return nil, &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameters %s and %s plant into the same field (%s and %s)", other.Parameter.Name, tp.Name, other.Parameter.Location, tp.Location)}
-		}
+	sets, err := planting.New(types, keyPath, ps)
+	var pe *planting.Error
+	if errors.As(err, &pe) {
+		return nil, &Error{Flag: pe.Flag, Err: pe.Err}
 	}
-	return append(ps, Plant{Parameter: tp, Path: path}), nil
-}
-
-// Apply plants every value into a generated Payload or Headers. Each
-// location passed its checks at Build, so a miss is a defect; it is reported
-// against the Topic parameter it belongs to.
-func (ps Plants) Apply(into any) error {
-	for _, p := range ps {
-		if err := keyplan.Put(into, p.Path, p.Parameter.Value); err != nil {
-			return &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: planting at location %s", p.Parameter.Name, p.Parameter.Location), Err: err}
-		}
-	}
-	return nil
+	return sets, err
 }
 
 // Error reports a run a Wire format rejects. Flag names the option at fault
@@ -145,26 +126,3 @@ func (e *Error) Error() string {
 
 // Unwrap exposes the cause for errors.Is/As.
 func (e *Error) Unwrap() error { return e.Err }
-
-// EveryType checks a key path against each Message type's own checker,
-// naming the Message type a rejection comes from when there are several: a
-// path must hold in every Message type a record may be of.
-type EveryType []NamedChecker
-
-// NamedChecker is one Message type's key path checker.
-type NamedChecker struct {
-	Name    string
-	Checker keyplan.Checker
-}
-
-func (c EveryType) Check(path []keyplan.Step) error {
-	for _, nc := range c {
-		if err := nc.Checker.Check(path); err != nil {
-			if len(c) == 1 {
-				return err
-			}
-			return fmt.Errorf("in Message type %s: %w", nc.Name, err)
-		}
-	}
-	return nil
-}

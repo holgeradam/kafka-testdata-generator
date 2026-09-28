@@ -34,7 +34,7 @@ func TestAvroDisplayEncoderRendersAvroJSON(t *testing.T) {
 	enc := NewAvroDisplayEncoder(model, nil)
 
 	payload := map[string]any{"id": "abc", "qty": int32(42)}
-	keyBytes, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: payload})
+	keyBytes, payloadBytes, err := enc.Encode(pipeline.Generated{Payload: payload})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestAvroDisplayEncoderBytesLatin1(t *testing.T) {
 	model := testDisplayModel(t, `{"type":"record","name":"O","fields":[{"name":"blob","type":"bytes"}]}`)
 	enc := NewAvroDisplayEncoder(model, nil)
 
-	_, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: map[string]any{"blob": []byte{0x00, 0xFF, 'A'}}})
+	_, payloadBytes, err := enc.Encode(pipeline.Generated{Payload: map[string]any{"blob": []byte{0x00, 0xFF, 'A'}}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestAvroDisplayEncoderKeyContract(t *testing.T) {
 	}
 	for _, tc := range cases {
 		enc := NewAvroDisplayEncoder(value, testDisplayModel(t, tc.avsc))
-		keyBytes, _, err := enc.Encode(tc.key, pipeline.Generated{Payload: payload})
+		keyBytes, _, err := enc.Encode(pipeline.Generated{Key: tc.key, Payload: payload})
 		if err != nil {
 			t.Fatalf("%s: Encode: %v", tc.avsc, err)
 		}
@@ -103,15 +103,15 @@ func TestAvroDisplayEncoderKeyContract(t *testing.T) {
 	}
 
 	unkeyed := NewAvroDisplayEncoder(value, nil)
-	keyBytes, _, err := unkeyed.Encode(nil, pipeline.Generated{Payload: payload})
+	keyBytes, _, err := unkeyed.Encode(pipeline.Generated{Payload: payload})
 	if err != nil || keyBytes != nil {
 		t.Errorf("no key avsc: key = %q, err = %v; want nil, nil", keyBytes, err)
 	}
-	if _, _, err := unkeyed.Encode("stray", pipeline.Generated{Payload: payload}); err == nil {
+	if _, _, err := unkeyed.Encode(pipeline.Generated{Key: "stray", Payload: payload}); err == nil {
 		t.Error("a Key without a key avsc must be rejected")
 	}
 	keyed := NewAvroDisplayEncoder(value, testDisplayModel(t, `{"type":"string"}`))
-	if _, _, err := keyed.Encode(nil, pipeline.Generated{Payload: payload}); err == nil {
+	if _, _, err := keyed.Encode(pipeline.Generated{Payload: payload}); err == nil {
 		t.Error("a key avsc without a Key must be rejected")
 	}
 }
@@ -133,7 +133,7 @@ func TestAvroDisplayEncoderRendersRecordKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
 	}
-	keyBytes, _, err := enc.Encode(k, pipeline.Generated{Payload: map[string]any{"id": "a"}})
+	keyBytes, _, err := enc.Encode(pipeline.Generated{Key: k, Payload: map[string]any{"id": "a"}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestAvroDisplayEncoderConformanceProperty(t *testing.T) {
 			if err != nil {
 				t.Fatalf("seed %d: generation failed: %v", seed, err)
 			}
-			_, payloadBytes, err := enc.Encode(nil, pipeline.Generated{Payload: value})
+			_, payloadBytes, err := enc.Encode(pipeline.Generated{Payload: value})
 			if err != nil {
 				t.Fatalf("seed %d: Encode failed: %v", seed, err)
 			}

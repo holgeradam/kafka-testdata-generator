@@ -1,6 +1,6 @@
 // Package runplan turns argv into a validated Run: the plan of one generation
-// run (ADR-0010). Planning is pure - flags, validation, spec loading, the Wire
-// format's parts and the Key plan - so every rule is reachable from a table
+// run (ADR-0010). Planning is pure - flags, validation, spec loading, and the
+// Wire format's parts, every Planting checked - so every rule is reachable from a table
 // test without spawning a process or dialing anything. The two constructors
 // that do I/O, NewSink and NewEncoder, are called by the process edge
 // afterwards.
@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -27,7 +26,7 @@ import (
 
 // Error reports a run the planner rejects. Flag names the option at fault
 // (without its dash) when one rule owns the failure, and Err carries the typed
-// cause when the rejection came from another module: a *keyplan.PathError, an
+// cause when the rejection came from another module: a *planting.PathError, an
 // *avro.ParseError, a *generator.UnsupportedSchemaError. Tests assert on those
 // rather than on message text. It is the Wire formats' error type, so a rule
 // reports the same shape whether runplan or a format owns it.
@@ -209,6 +208,7 @@ func Plan(args []string) (*Run, error) {
 		DryRun:          run.DryRun,
 		Topic:           run.Topic,
 		KeyPath:         *f.keyPath,
+		RecordsPerKey:   *f.recordsPerKey,
 		RegistryURL:     run.RegistryURL,
 		AvroSchema:      *f.avroSchema,
 		AvroKeySchema:   *f.avroKeySchema,
@@ -270,7 +270,7 @@ func (r *Run) warnDisregardedOptions(f *flags) {
 	}
 }
 
-// build has the Wire format wire the run's generation, Key source and encoder
+// build has the Wire format wire the run's generation, Key and encoder
 // from the spec and its own files.
 func (r *Run) build(f *flags, format wire.Format, opts wire.Options) error {
 	// One Synthesizer per run: the Payload and the Key draw from one shared
@@ -284,29 +284,17 @@ func (r *Run) build(f *flags, format wire.Format, opts wire.Options) error {
 	r.encoder = parts.Encoder
 	r.Warnings = append(r.Warnings, parts.Warnings...)
 
-	// The Key plan owns the Key of the run: the key schema generates it, and
-	// -keyPath says where it is planted into the Payload (ADR-0009). Its checks
-	// run here, so an unusable path stops the run before a record exists.
-	// With -records-per-key above 1 its Keys identify Entities that recur
-	// across records, which needs a Key schema to generate them from.
-	if *f.recordsPerKey > 1 && parts.KeyGen == nil {
+	// With -records-per-key above 1 Keys identify Entities that recur across
+	// records, which needs a Key schema to generate them from (#75).
+	if *f.recordsPerKey > 1 && !parts.Keyed {
 		return &Error{Usage: true, Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec, or pass -avro-key-schema under AVRO, so there is a Key to reuse"}
-	}
-	var keyPlan pipeline.KeyPlan
-	if parts.KeyGen != nil {
-		keyGen := keyplan.Reuse(parts.KeyGen, *f.recordsPerKey, opts.Synth)
-		plan, err := keyplan.New(keyGen, parts.Checker, *f.keyPath)
-		if err != nil {
-			return &Error{Flag: "keyPath", Err: err}
-		}
-		keyPlan = plan
 	}
 
 	r.Config = pipeline.Config{
 		Generator: parts.Values,
 		Count:     *f.count,
 		RateLimit: *f.rateLimit,
-		KeyPlan:   keyPlan,
+		Keyed:     parts.Keyed,
 	}
 	return nil
 }

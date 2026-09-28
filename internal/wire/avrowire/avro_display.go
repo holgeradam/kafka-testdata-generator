@@ -37,8 +37,8 @@ func newAvroDisplayEncoder(values []*avro.Schema, key *avro.Schema) *AvroDisplay
 // (the readable spec-defined text form of a datum), each against its own avsc
 // (#64). As for the AvroEncoder, a Key exists exactly when a key avsc does; a
 // mismatch is a programming error, rejected rather than shown.
-func (e *AvroDisplayEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
-	payload := generated.Payload
+func (e *AvroDisplayEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
+	key, payload := generated.Key, generated.Payload
 	var keyBytes []byte
 	switch {
 	case e.key == nil && key != nil:

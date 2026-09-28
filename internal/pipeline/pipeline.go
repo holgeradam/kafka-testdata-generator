@@ -31,23 +31,27 @@ type Sink interface {
 	Close() error
 }
 
-// PayloadGenerator is the seam between the Pipeline and payload generation. The
-// Wire format binds the schemas that govern it, so each Generate is a random
-// Payload honouring the schema of the Message type it picked, or a typed error
+// PayloadGenerator is the seam between the Pipeline and message generation.
+// The Wire format binds the schemas that govern it, so each Generate is a
+// random message honouring the schema of the Message type it picked - its
+// Payload, Headers and Key, every Planting already in place - or a typed error
 // when the schema holds a construct that cannot be honoured (ADR-0006). The
-// Pipeline knows no schema of any language; tests substitute a fake so they
-// never load one or touch an RNG.
+// Pipeline knows no schema of any language, nor where a Key is planted; tests
+// substitute a fake so they never load one or touch an RNG.
 type PayloadGenerator interface {
 	Generate() (Generated, error)
 }
 
-// Generated is one generated Payload and the Message type it is of: an index
+// Generated is one generated message and the Message type it is of: an index
 // into the Kafka topic's Message types, in the order the Wire format holds
 // them. The Pipeline carries it from the PayloadGenerator to the Encoder, so
 // a Wire format that encodes each Message type differently knows which one a
 // record is (#91). With one Message type it is always 0.
 type Generated struct {
-	Type    int
+	Type int
+	// Key is the message's Key, from the key schema; nil when the run has
+	// none, and the record carries a null Key.
+	Key     any
 	Payload any
 	// Headers are the record's Headers, generated from its Message type's
 	// headers schema and already encoded, since every Wire format encodes
@@ -55,23 +59,14 @@ type Generated struct {
 	Headers []Header
 }
 
-// KeyPlan is the seam between the Pipeline and the Key of a run: it generates
-// the Key from the key schema and, when -keyPath is set, plants it into the
-// Payload, returning the value both then hold (ADR-0009). A nil KeyPlan means
-// the run produces records with a null Key. *keyplan.Plan satisfies it, and
-// tests substitute a fake, so the Pipeline knows neither schema language nor
-// path syntax.
-type KeyPlan interface {
-	Apply(payload any) (any, error)
-}
-
 // Config carries the fixed inputs of a run.
 type Config struct {
 	Generator PayloadGenerator
 	Count     int
 	RateLimit time.Duration
-	// KeyPlan, when set, produces the Key of each record; nil means a null Key.
-	KeyPlan KeyPlan
+	// Keyed says the run's messages carry a Key from a key schema; without
+	// one every record carries a null Key, which the Pipeline announces once.
+	Keyed   bool
 	Encoder Encoder
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
@@ -87,8 +82,8 @@ type Stats struct {
 	Elapsed time.Duration
 }
 
-// Pipeline drives a run: generate each Payload, take its Key from the Key
-// plan, encode via the injected Encoder, and hand bytes to the configured Sink
+// Pipeline drives a run: generate each message, encode it via the injected
+// Encoder, and hand bytes to the configured Sink
 // until Count is reached or the context is cancelled.
 type Pipeline struct {
 	cfg  Config
@@ -108,7 +103,7 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	var total, acked, failed int64
 	start := time.Now()
 
-	if p.cfg.KeyPlan == nil {
+	if !p.cfg.Keyed {
 		p.warnf("no key configured, generating messages with a null key\n")
 	}
 
@@ -128,21 +123,9 @@ loop:
 		if err != nil {
 			return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
 		}
-
-		// The Key is planned after the Payload exists, because planting writes
-		// into it. A key schema that cannot be honoured, or a path the Payload
-		// does not carry, aborts the run before the record is counted: both are
-		// true of every record, not just this one.
-		var key any
-		if p.cfg.KeyPlan != nil {
-			key, err = p.cfg.KeyPlan.Apply(generated.Payload)
-			if err != nil {
-				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
-			}
-		}
 		total++
 
-		keyBytes, data, err := p.cfg.Encoder.Encode(key, generated)
+		keyBytes, data, err := p.cfg.Encoder.Encode(generated)
 		if err != nil {
 			failed++
 			continue

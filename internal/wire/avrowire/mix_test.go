@@ -15,7 +15,6 @@ import (
 
 	codec "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
@@ -87,10 +86,11 @@ func TestBuildChecksEveryAvroType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.KeyGen == nil || parts.Checker == nil {
-		t.Fatal("an agreed Avro Key binding and -keyPath must give a Key and a checker")
+	if g, err := parts.Values.Generate(); !parts.Keyed || err != nil || g.Payload.(map[string]any)["id"] != g.Key {
+		t.Fatalf("an agreed Avro Key binding and -keyPath: Keyed %v, %+v, %v; want the Key planted", parts.Keyed, g, err)
 	}
-	if err := parts.Checker.Check(mustPath(t, "amount")); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
+	opts.KeyPath = "amount"
+	if _, err := (Format{}).Build(opts); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
 		t.Errorf("err = %v, want the path refused in Message type OrderCreated", err)
 	}
 
@@ -148,7 +148,7 @@ func TestDryRunRendersBranchAlone(t *testing.T) {
 		t.Fatalf("Encoder: %v", err)
 	}
 	paid := map[string]any{"id": "o-1", "region": "eu", "amount": 9.5, "billing": map[string]any{"city": "Oslo"}}
-	_, out, err := enc.Encode(nil, pipeline.Generated{Type: 1, Payload: paid})
+	_, out, err := enc.Encode(pipeline.Generated{Type: 1, Payload: paid})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestAvroEncoderRegistersUnion(t *testing.T) {
 		t.Fatal(err)
 	}
 	paid := map[string]any{"id": "o-1", "region": "eu", "amount": 9.5, "billing": map[string]any{"city": "Oslo"}}
-	_, framed, err := enc.Encode(nil, pipeline.Generated{Type: 1, Payload: paid})
+	_, framed, err := enc.Encode(pipeline.Generated{Type: 1, Payload: paid})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -263,15 +263,6 @@ func TestAvroEncoderRegistersUnion(t *testing.T) {
 	if want := map[string]any{"com.acme.OrderPaid": paid}; !reflect.DeepEqual(decoded, want) {
 		t.Errorf("decoded %v, want %v", decoded, want)
 	}
-}
-
-func mustPath(t *testing.T, path string) []keyplan.Step {
-	t.Helper()
-	steps, err := keyplan.ParsePath(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return steps
 }
 
 // TestBuildGeneratesHeadersUnderAvro proves an Avro Message type's Headers

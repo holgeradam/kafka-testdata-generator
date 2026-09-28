@@ -49,7 +49,7 @@ The schema that governs Key generation, supplied per Wire format: `message.bindi
 _Avoid_: key binding (JSON-only term), key avsc (AVRO-only term)
 
 **Key plan**:
-The run's rule for the Key: generate it from the Key schema and, when a **Key path** is configured, plant that value into the Payload so both hold it. With `-records-per-key` above 1 it reuses Keys, so an **Entity** recurs across records. Built once at the process edge, where it refuses a Key path the run cannot honour, then applied to each generated Payload.
+The run's rule for the Key: generate it from the Key schema and, when a **Key path** is configured, plant that value into the Payload so both hold it, as the Key's **Planting**. With `-records-per-key` above 1 it reuses Keys, so an **Entity** recurs across records. Its Planting is checked before the run starts, with every other Planting.
 _Avoid_: key source, key strategy
 
 **Entity**:
@@ -76,11 +76,11 @@ The validated description of one run, built from the command line before anythin
 _Avoid_: config, options, args
 
 **Pipeline**:
-The deep module driving a run: generates each message for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **PayloadGenerator** seam for Payload generation, and on an optional **Key plan** for the Key; the Wire format's generator and `*keyplan.Plan` satisfy them, and tests substitute fakes. It holds no schema of any language.
+The deep module driving a run: generates each message for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **PayloadGenerator** seam that hands it whole messages, every Planting in place; the Wire format's generator satisfies it, and tests substitute fakes. It holds no schema of any language and knows no Key path.
 _Avoid_: runner, loop, producer loop
 
 **PayloadGenerator**:
-The seam between the Pipeline and Payload generation: one method, `Generate() (Generated, error)`, promises a Payload honouring the schema that governs the active Wire format (see Conformance), with the Message type it is of, or a typed conformance error. The Pipeline hands that Message type on to the Encoder, which may encode each Message type differently. The Wire format binds the schemas when it builds the generator: the Message types' Message schemas in JSON mode, the value avscs in AVRO mode, one Message type picked per record in both. Adapters pass the deletion test: one per Wire format in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
+The seam between the Pipeline and message generation: one method, `Generate() (Generated, error)`, promises a message - its Payload honouring the schema that governs the active Wire format (see Conformance), its Headers and its Key, every Planting in place - with the Message type it is of, or a typed conformance error. The Pipeline hands that Message type on to the Encoder, which may encode each Message type differently. The Wire format binds the schemas when it builds the generator: the Message types' Message schemas in JSON mode, the value avscs in AVRO mode, one Message type picked per record in both. Adapters pass the deletion test: one per Wire format in production, a fixed-payload fake in Pipeline tests. Error Paths are reported in JSON Path (RFC 9535) form rooted at `$`, e.g. `$.orderId` or `$.items[0].sku`, with no fabricated root name.
 _Avoid_: generator interface, data source, ValueGenerator (its former name)
 
 **Synthesizer**:

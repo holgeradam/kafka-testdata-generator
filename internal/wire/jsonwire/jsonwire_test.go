@@ -13,7 +13,7 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
@@ -65,15 +65,15 @@ func TestBuildGeneratesFromMessageSchema(t *testing.T) {
 }
 
 // TestBuildKey proves the Key comes from the key binding: none means a null
-// Key, and a Checker exists only when -keyPath asks for planting.
+// Key, and with -keyPath the Key is planted into the Payload.
 func TestBuildKey(t *testing.T) {
 	opts := options()
 	parts, err := Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.KeyGen != nil || parts.Checker != nil {
-		t.Error("no key binding: want a null Key and no Checker")
+	if g, err := parts.Values.Generate(); parts.Keyed || err != nil || g.Key != nil {
+		t.Errorf("no key binding: Keyed %v, Key %v, %v; want a null Key", parts.Keyed, g.Key, err)
 	}
 
 	opts.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
@@ -81,18 +81,15 @@ func TestBuildKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.KeyGen == nil {
-		t.Fatal("a key binding must produce a Key generator")
-	}
-	k, err := parts.KeyGen.Value()
+	g, err := parts.Values.Generate()
 	if err != nil {
-		t.Fatalf("Key: %v", err)
+		t.Fatal(err)
 	}
-	if _, ok := k.(string); !ok {
-		t.Errorf("key = %T, want a string from the binding", k)
+	if _, ok := g.Key.(string); !parts.Keyed || !ok {
+		t.Errorf("key binding: Keyed %v, Key %T; want a string Key from the binding", parts.Keyed, g.Key)
 	}
-	if parts.Checker != nil {
-		t.Error("no -keyPath: want no Checker")
+	if g.Payload.(map[string]any)["orderId"] == g.Key {
+		t.Error("no -keyPath: the Key must not be planted")
 	}
 
 	opts.KeyPath = "orderId"
@@ -100,8 +97,8 @@ func TestBuildKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.Checker == nil {
-		t.Error("-keyPath with a key binding must produce a Checker")
+	if g, err = parts.Values.Generate(); err != nil || g.Payload.(map[string]any)["orderId"] != g.Key {
+		t.Errorf("-keyPath orderId: Key %v, Payload %v, %v; want the Key planted", g.Key, g.Payload, err)
 	}
 }
 
@@ -271,8 +268,8 @@ func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("identical Key bindings: Build = %v, want nil", err)
 	}
-	if parts.KeyGen == nil {
-		t.Error("identical Key bindings must produce a Key generator")
+	if !parts.Keyed {
+		t.Error("identical Key bindings must give the run a Key")
 	}
 }
 
@@ -285,15 +282,11 @@ func TestBuildChecksKeyPathInEveryType(t *testing.T) {
 		asyncapi.MessageType{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: key},
 	)
 	opts.KeyPath = "orderId"
-	parts, err := Format{}.Build(opts)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	steps, _ := keyplan.ParsePath("orderId")
-	err = parts.Checker.Check(steps)
-	var pe *keyplan.PathError
-	if !errors.As(err, &pe) {
-		t.Fatalf("err = %v, want a *keyplan.PathError", err)
+	_, err := Format{}.Build(opts)
+	var we *wire.Error
+	var pe *planting.PathError
+	if !errors.As(err, &we) || we.Flag != "keyPath" || !errors.As(err, &pe) {
+		t.Fatalf("err = %v, want a *planting.PathError on -keyPath", err)
 	}
 	if !strings.Contains(err.Error(), "OrderUpdated") || strings.Contains(err.Error(), "OrderCreated") {
 		t.Errorf("err = %v, want it to name OrderUpdated only", err)
@@ -489,11 +482,7 @@ func TestEncoderFollowsDeclaredOrder(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		key, err := parts.KeyGen.Value()
-		if err != nil {
-			t.Fatal(err)
-		}
-		keyBytes, payload, err := enc.Encode(key, g)
+		keyBytes, payload, err := enc.Encode(g)
 		if err != nil {
 			t.Fatal(err)
 		}

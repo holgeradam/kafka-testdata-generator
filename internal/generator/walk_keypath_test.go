@@ -1,21 +1,37 @@
 package generator
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
-// checkPath is the shim these tests drive: parse a -keyPath, then validate it
-// against a Message schema and a key schema exactly as the process edge does.
+// checkPath is the shim these tests drive: check a -keyPath against a Message
+// schema and a key schema through the Planting module, exactly as a run does.
 func checkPath(t *testing.T, payload, key map[string]any, path string) error {
 	t.Helper()
-	steps, err := keyplan.ParsePath(path)
-	if err != nil {
-		t.Fatalf("ParsePath(%q): %v", path, err)
+	_, err := planting.New([]planting.MessageType{{Name: "T", Payload: NewWalk(payload, key)}}, path, nil)
+	return err
+}
+
+// locate walks a JSON Pointer through schema, as a Topic parameter's
+// location, returning the resolved steps and the field's self-contained
+// schema, and a refusal naming the failing token as a pointer.
+func locate(schema map[string]any, pointer []string) ([]planting.Step, map[string]any, error) {
+	path := make([]planting.Step, len(pointer))
+	for i, token := range pointer {
+		path[i] = planting.Step{Field: token, Index: -1, Token: true}
 	}
-	return NewKeyChecker(payload, key).Check(steps)
+	steps, f, err := NewWalk(schema, nil).Locate(path)
+	if se, ok := err.(*planting.StepError); ok {
+		return nil, nil, fmt.Errorf("at %q: %w", "/"+strings.Join(pointer[:se.Step+1], "/"), se.Err)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return steps, f.(*field).selfContained(), nil
 }
 
 func stringKey() map[string]any { return map[string]any{"type": "string"} }
@@ -50,7 +66,7 @@ func orderSchema() map[string]any {
 	}
 }
 
-func TestKeyCheckerAcceptsGuaranteedPaths(t *testing.T) {
+func TestWalkKeyPathAcceptsGuaranteedPaths(t *testing.T) {
 	for _, path := range []string{"id", "customer.id", "items[0].sku", "items[1].sku"} {
 		if err := checkPath(t, orderSchema(), stringKey(), path); err != nil {
 			t.Errorf("Check(%q) = %v, want nil", path, err)
@@ -58,7 +74,7 @@ func TestKeyCheckerAcceptsGuaranteedPaths(t *testing.T) {
 	}
 }
 
-func TestKeyCheckerRejectsUnguaranteedPaths(t *testing.T) {
+func TestWalkKeyPathRejectsUnguaranteedPaths(t *testing.T) {
 	cases := []struct {
 		path string
 		want string
@@ -82,10 +98,10 @@ func TestKeyCheckerRejectsUnguaranteedPaths(t *testing.T) {
 	}
 }
 
-// TestKeyCheckerRejectsAlternatives proves a step whose schema is a oneOf or
+// TestWalkKeyPathRejectsAlternatives proves a step whose schema is a oneOf or
 // anyOf is rejected: the generator picks a branch per record, so no step under
 // it is guaranteed.
-func TestKeyCheckerRejectsAlternatives(t *testing.T) {
+func TestWalkKeyPathRejectsAlternatives(t *testing.T) {
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"payment"},
@@ -102,9 +118,9 @@ func TestKeyCheckerRejectsAlternatives(t *testing.T) {
 	}
 }
 
-// TestKeyCheckerMergesAllOf proves allOf is walked the way generation walks it:
+// TestWalkKeyPathMergesAllOf proves allOf is walked the way generation walks it:
 // the branches merge, so a field required by one branch is guaranteed.
-func TestKeyCheckerMergesAllOf(t *testing.T) {
+func TestWalkKeyPathMergesAllOf(t *testing.T) {
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"order"},
@@ -120,10 +136,10 @@ func TestKeyCheckerMergesAllOf(t *testing.T) {
 	}
 }
 
-// TestKeyCheckerFollowsRefs proves a $ref step resolves inside the schema's
+// TestWalkKeyPathFollowsRefs proves a $ref step resolves inside the schema's
 // own $defs (#73), and that a path deeper than the generator's budget is
 // rejected rather than silently truncated at run time (ADR-0005).
-func TestKeyCheckerFollowsRefs(t *testing.T) {
+func TestWalkKeyPathFollowsRefs(t *testing.T) {
 	node := map[string]any{
 		"type":     "object",
 		"required": []any{"name", "child"},
@@ -155,9 +171,9 @@ func TestKeyCheckerFollowsRefs(t *testing.T) {
 	}
 }
 
-// TestKeyCheckerTypeCompatibility proves the type at the path must be able to
+// TestWalkKeyPathTypeCompatibility proves the type at the path must be able to
 // hold the Key the key schema produces.
-func TestKeyCheckerTypeCompatibility(t *testing.T) {
+func TestWalkKeyPathTypeCompatibility(t *testing.T) {
 	cases := []struct {
 		name    string
 		key     map[string]any
@@ -195,9 +211,9 @@ func TestKeyCheckerTypeCompatibility(t *testing.T) {
 	}
 }
 
-// TestKeyCheckerNamesTypesWithTheirArticle pins the article: "an array", "an
+// TestWalkKeyPathNamesTypesWithTheirArticle pins the article: "an array", "an
 // object", "an integer", never "a array".
-func TestKeyCheckerNamesTypesWithTheirArticle(t *testing.T) {
+func TestWalkKeyPathNamesTypesWithTheirArticle(t *testing.T) {
 	err := checkPath(t, orderSchema(), stringKey(), "items.sku")
 	if err == nil || !strings.Contains(err.Error(), "the schema here is an array, not an object") {
 		t.Errorf("err = %v, want it to say an array", err)

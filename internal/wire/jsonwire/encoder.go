@@ -25,10 +25,10 @@ type JsonEncoder struct {
 	Key map[string]any
 }
 
-// Encode marshals the payload to JSON and the key to plain-scalar bytes. When
-// key is nil the returned keyBytes is nil (the pipeline skips sending).
-func (e JsonEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
-	keyBytes, err := plainScalarKey(generator.Ordered(e.Key, key))
+// Encode marshals the Payload to JSON and the Key to plain-scalar bytes. When
+// the Key is nil the returned keyBytes is nil: the record carries a null Key.
+func (e JsonEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
+	keyBytes, err := plainScalarKey(generator.Ordered(e.Key, generated.Key))
 	if err != nil {
 		return nil, nil, err
 	}
