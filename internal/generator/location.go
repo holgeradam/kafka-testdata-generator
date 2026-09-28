@@ -22,7 +22,7 @@ func Locate(schema map[string]any, pointer []string) ([]Step, map[string]any, er
 	steps := make([]Step, len(pointer))
 	current, depth := schema, 0
 	for i, token := range pointer {
-		resolved, d, err := resolveGuaranteed(defs, current, depth)
+		resolved, d, err := resolveGuaranteed(defs, current, depth, true)
 		if err != nil {
 			return nil, nil, locationError(pointer, i, err)
 		}
@@ -35,7 +35,7 @@ func Locate(schema map[string]any, pointer []string) ([]Step, map[string]any, er
 			return nil, nil, locationError(pointer, i, err)
 		}
 	}
-	field, _, err := resolveGuaranteed(defs, current, depth)
+	field, _, err := resolveGuaranteed(defs, current, depth, false)
 	if err != nil {
 		return nil, nil, locationError(pointer, len(pointer)-1, err)
 	}

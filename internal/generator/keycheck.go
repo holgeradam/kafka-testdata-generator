@@ -37,7 +37,7 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 	current := c.schema
 	depth := 0
 	for i, step := range path {
-		resolved, d, err := resolveGuaranteed(c.defs, current, depth)
+		resolved, d, err := resolveGuaranteed(c.defs, current, depth, true)
 		if err != nil {
 			return pathError(path, i, err)
 		}
@@ -48,7 +48,7 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 		}
 		current = next
 	}
-	final, _, err := resolveGuaranteed(c.defs, current, depth)
+	final, _, err := resolveGuaranteed(c.defs, current, depth, false)
 	if err != nil {
 		return pathError(path, len(path)-1, err)
 	}
@@ -59,16 +59,28 @@ func (c *KeyChecker) Check(path []keyplan.Step) error {
 }
 
 // resolveGuaranteed follows $ref nodes into defs and merges allOf, so the
-// caller sees the schema generation actually walks. It refuses alternatives,
-// whose branch is chosen per record, and a $ref chain past the depth budget,
-// where generation truncates the subtree instead of producing the field.
-func resolveGuaranteed(defs, schema map[string]any, depth int) (map[string]any, int, error) {
+// caller sees the schema generation actually walks, taking the keywords in
+// the order Generator.value does. It refuses alternatives, whose branch is
+// chosen per record, and a $ref chain past the depth budget, where generation
+// truncates the subtree instead of producing the field. When the path steps
+// into the schema, it also refuses one the generator answers with a literal,
+// which need not hold the next step (#107); at the end of the path a literal
+// is no obstacle, since the planted value replaces it.
+func resolveGuaranteed(defs, schema map[string]any, depth int, into bool) (map[string]any, int, error) {
 	for {
-		if _, ok := schema["oneOf"]; ok {
-			return nil, depth, fmt.Errorf("the schema here is a oneOf, so the branch differs per record")
+		if ref, ok := schema["$ref"].(string); ok {
+			target, err := lookupDef(defs, ref)
+			if err != nil {
+				return nil, depth, err
+			}
+			if depth >= maxRecursionDepth {
+				return nil, depth, fmt.Errorf("the path goes beyond the $ref depth budget of %d, where generation truncates the subtree", maxRecursionDepth)
+			}
+			schema, depth = target, depth+1
+			continue
 		}
-		if _, ok := schema["anyOf"]; ok {
-			return nil, depth, fmt.Errorf("the schema here is an anyOf, so the branch differs per record")
+		if keyword := literalKeyword(schema); into && keyword != "" {
+			return nil, depth, fmt.Errorf("the schema here declares %s, which generation returns as-is, so a path cannot step into it", keyword)
 		}
 		if allOf, ok := schema["allOf"].([]any); ok {
 			merged, err := mergeSchemas(allOf, RootPath)
@@ -78,19 +90,34 @@ func resolveGuaranteed(defs, schema map[string]any, depth int) (map[string]any, 
 			schema = merged
 			continue
 		}
-		ref, ok := schema["$ref"].(string)
-		if !ok {
-			return schema, depth, nil
+		if _, ok := schema["oneOf"]; ok {
+			return nil, depth, fmt.Errorf("the schema here is a oneOf, so the branch differs per record")
 		}
-		target, err := lookupDef(defs, ref)
-		if err != nil {
-			return nil, depth, err
+		if _, ok := schema["anyOf"]; ok {
+			return nil, depth, fmt.Errorf("the schema here is an anyOf, so the branch differs per record")
 		}
-		if depth >= maxRecursionDepth {
-			return nil, depth, fmt.Errorf("the path goes beyond the $ref depth budget of %d, where generation truncates the subtree", maxRecursionDepth)
-		}
-		schema, depth = target, depth+1
+		return schema, depth, nil
 	}
+}
+
+// literalKeyword names the keyword Generator.value answers schema with as-is,
+// with its article, or "" when it builds the value from the schema instead.
+// It mirrors value's short-circuits: an example, the first of non-empty
+// examples, a const, a member of a non-empty enum.
+func literalKeyword(schema map[string]any) string {
+	if _, ok := schema["example"]; ok {
+		return "an example"
+	}
+	if ex, ok := schema["examples"].([]any); ok && len(ex) > 0 {
+		return "examples"
+	}
+	if _, ok := schema["const"]; ok {
+		return "a const"
+	}
+	if enum, ok := schema["enum"].([]any); ok && len(enum) > 0 {
+		return "an enum"
+	}
+	return ""
 }
 
 // descend takes one step into the schema, requiring the step to be guaranteed.

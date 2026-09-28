@@ -103,11 +103,13 @@ func (ps Plants) Add(tp asyncapi.TopicParameter, path []keyplan.Step, keyPath st
 	return append(ps, Plant{Parameter: tp, Path: path}), nil
 }
 
-// Apply plants every value into payload.
-func (ps Plants) Apply(payload any) error {
+// Apply plants every value into a generated Payload or Headers. Each
+// location passed its checks at Build, so a miss is a defect; it is reported
+// against the Topic parameter it belongs to.
+func (ps Plants) Apply(into any) error {
 	for _, p := range ps {
-		if err := keyplan.Put(payload, p.Path, p.Parameter.Value); err != nil {
-			return err
+		if err := keyplan.Put(into, p.Path, p.Parameter.Value); err != nil {
+			return &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: planting at location %s", p.Parameter.Name, p.Parameter.Location), Err: err}
 		}
 	}
 	return nil
