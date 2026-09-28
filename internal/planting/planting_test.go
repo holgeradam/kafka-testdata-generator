@@ -1,12 +1,15 @@
 package planting
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
 // fakeWalk stands in for a schema language: the paths it guarantees, by their
@@ -250,5 +253,45 @@ func TestPlantMissingPath(t *testing.T) {
 		if err := sets[0].Plant(payload, nil, "k"); !errors.As(err, &pe) {
 			t.Errorf("Plant(%v) = %v, want a *PathError", payload, err)
 		}
+	}
+}
+
+// TestPlantIntoOrderedObjects proves planting reaches into the ordered
+// objects the JSON Schema generator emits (#112) as into plain maps, keeping
+// every key where it is.
+func TestPlantIntoOrderedObjects(t *testing.T) {
+	sets, err := New([]MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}}, "id", []Parameter{
+		payloadParam("region", "eu", "meta", "region"),
+		payloadParam("sku", "s1", "items", "0", "sku"),
+		headerParam("tenant", "acme", "tenant"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := func(kv ...any) ordered.Object {
+		var o ordered.Object
+		for i := 0; i < len(kv); i += 2 {
+			o.Add(kv[i].(string), kv[i+1])
+		}
+		return o
+	}
+	payload := obj("meta", obj("region", "xx", "at", 1), "id", "x", "items", []any{obj("sku", "x")})
+	headers := obj("trace", "t", "tenant", "x")
+	if err := sets[0].Plant(payload, headers, "k1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		v    any
+		want string
+	}{
+		{payload, `{"meta":{"region":"eu","at":1},"id":"k1","items":[{"sku":"s1"}]}`},
+		{headers, `{"trace":"t","tenant":"acme"}`},
+	} {
+		if b, _ := json.Marshal(c.v); string(b) != c.want {
+			t.Errorf("planted %s, want %s", b, c.want)
+		}
+	}
+	if err := sets[0].Plant(obj("id", "x", "meta", obj("source", "web")), nil, "k"); err == nil || !strings.Contains(err.Error(), `no field "region"`) {
+		t.Errorf("Plant into an Object without the field = %v, want the miss named", err)
 	}
 }

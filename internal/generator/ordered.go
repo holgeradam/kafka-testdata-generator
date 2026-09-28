@@ -6,119 +6,8 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
-// Ordered returns value ready for JSON encoding with every object's keys in
-// the order its schema declares its properties, at every level: nested
-// objects, array items, through $refs into the schema's $defs, and through
-// allOf, oneOf and anyOf, whose declared properties count in branch order.
-// Keys the schema does not declare follow, sorted, and so do all keys of a
-// schema whose order was never recorded. Only the order changes: values are
-// the ones generated.
-func Ordered(schema map[string]any, value any) any {
-	defs, _ := schema["$defs"].(map[string]any)
-	return orderer{defs: defs}.value(schema, value)
-}
-
-type orderer struct {
-	defs map[string]any
-}
-
-func (o orderer) value(schema map[string]any, v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		names, children := o.properties(schema)
-		var obj ordered.Object
-		for _, name := range names {
-			if val, ok := v[name]; ok {
-				obj.Add(name, o.value(children[name], val))
-			}
-		}
-		var rest []string
-		for name := range v {
-			if _, declared := children[name]; !declared {
-				rest = append(rest, name)
-			}
-		}
-		sort.Strings(rest)
-		for _, name := range rest {
-			obj.Add(name, o.value(nil, v[name]))
-		}
-		return obj
-	case []any:
-		items := o.items(schema)
-		out := make([]any, len(v))
-		for i, e := range v {
-			out[i] = o.value(items, e)
-		}
-		return out
-	}
-	return v
-}
-
-// properties collects the properties the schema declares, in order, with
-// the schema of each, across its $ref and composition branches.
-func (o orderer) properties(schema map[string]any) ([]string, map[string]map[string]any) {
-	var names []string
-	children := map[string]map[string]any{}
-	for _, s := range o.branches(schema) {
-		props, _ := s["properties"].(map[string]any)
-		for _, name := range declaredOrder(s, props) {
-			if _, seen := children[name]; seen {
-				continue
-			}
-			child, _ := props[name].(map[string]any)
-			children[name] = child
-			names = append(names, name)
-		}
-	}
-	return names, children
-}
-
-// items is the items schema the schema declares, across its branches.
-func (o orderer) items(schema map[string]any) map[string]any {
-	for _, s := range o.branches(schema) {
-		if items, ok := s["items"].(map[string]any); ok {
-			return items
-		}
-	}
-	return nil
-}
-
-// branches are the schema and every schema it stands for through $ref,
-// allOf, oneOf and anyOf, each once.
-func (o orderer) branches(schema map[string]any) []map[string]any {
-	var out []map[string]any
-	seen := map[string]bool{}
-	var walk func(s map[string]any)
-	walk = func(s map[string]any) {
-		if s == nil {
-			return
-		}
-		if ref, ok := s["$ref"].(string); ok {
-			if seen[ref] {
-				return
-			}
-			seen[ref] = true
-			target, err := lookupDef(o.defs, ref)
-			if err == nil {
-				walk(target)
-			}
-			return
-		}
-		out = append(out, s)
-		for _, key := range []string{"allOf", "oneOf", "anyOf"} {
-			list, _ := s[key].([]any)
-			for _, b := range list {
-				branch, _ := b.(map[string]any)
-				walk(branch)
-			}
-		}
-	}
-	walk(schema)
-	return out
-}
-
 // declaredOrder is the order of props as the schema declares them: the
-// recorded order, then any property it misses, sorted.
+// recorded order (ordered.Keyword), then any property it misses, sorted.
 func declaredOrder(schema, props map[string]any) []string {
 	var names []string
 	listed := map[string]bool{}
@@ -138,4 +27,62 @@ func declaredOrder(schema, props map[string]any) []string {
 	}
 	sort.Strings(rest)
 	return append(names, rest...)
+}
+
+// literalOf is the literal under keyword of schema, the value v - the
+// index-th of a list of them when index is not negative - as a fresh copy in
+// the order it is written in, from the order tree the spec reader records
+// (ordered.LiteralKeyword).
+func literalOf(schema map[string]any, keyword string, v any, index int) any {
+	trees, _ := schema[ordered.LiteralKeyword].(map[string]any)
+	tree := trees[keyword]
+	if index >= 0 {
+		list, _ := tree.([]any)
+		tree = nil
+		if index < len(list) {
+			tree = list[index]
+		}
+	}
+	return orderLiteral(v, tree)
+}
+
+// orderLiteral copies v with every object an ordered.Object: its keys in the
+// order tree gives them, then any key tree does not know, sorted. Objects and
+// arrays are fresh, scalars shared, being immutable.
+func orderLiteral(v, tree any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		t, _ := tree.(ordered.Object)
+		var obj ordered.Object
+		listed := map[string]bool{}
+		for i, k := range t.Keys {
+			if e, ok := v[k]; ok && !listed[k] {
+				obj.Add(k, orderLiteral(e, t.Values[i]))
+				listed[k] = true
+			}
+		}
+		var rest []string
+		for k := range v {
+			if !listed[k] {
+				rest = append(rest, k)
+			}
+		}
+		sort.Strings(rest)
+		for _, k := range rest {
+			obj.Add(k, orderLiteral(v[k], nil))
+		}
+		return obj
+	case []any:
+		t, _ := tree.([]any)
+		out := make([]any, len(v))
+		for i, e := range v {
+			var sub any
+			if i < len(t) {
+				sub = t[i]
+			}
+			out[i] = orderLiteral(e, sub)
+		}
+		return out
+	}
+	return v
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
@@ -15,35 +14,19 @@ import (
 // structured value (object/array) to JSON - never a JSON-wrapped scalar. The
 // same encoding serves Dry run and produce.
 //
-// Objects encode in the order their schema declares their properties (#96):
-// each Payload by its own Message type's Payload schema, a structured Key by
-// the Key binding. The zero value orders by name.
-type JsonEncoder struct {
-	// types are the run's bound Message types, the very slice its Mix
-	// generates from, so a record's Type finds its Payload schema.
-	types []wire.Bound[encoding]
-	// key is the Key binding.
-	key map[string]any
-}
-
-// encoding is what JsonEncoder needs of a Message type: the Payload schema,
-// whose declared order the Payload encodes in.
-type encoding struct {
-	payload map[string]any
-}
+// Objects encode in the order they were generated in: the order their schema
+// declares their properties (#96), a literal as it is written (#112). The
+// encoder needs no schema for that, so its zero value is the whole encoder.
+type JsonEncoder struct{}
 
 // Encode marshals the Payload to JSON and the Key to plain-scalar bytes. When
 // the Key is nil the returned keyBytes is nil: the record carries a null Key.
-func (e JsonEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
-	keyBytes, err := plainScalarKey(generator.Ordered(e.key, generated.Key))
+func (JsonEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
+	keyBytes, err := plainScalarKey(generated.Key)
 	if err != nil {
 		return nil, nil, err
 	}
-	var schema map[string]any
-	if e.types != nil {
-		schema = e.types[generated.Type].Encoding.payload
-	}
-	payloadBytes, err := json.Marshal(generator.Ordered(schema, generated.Payload))
+	payloadBytes, err := json.Marshal(generated.Payload)
 	if err != nil {
 		return nil, nil, err
 	}

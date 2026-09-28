@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -118,13 +119,15 @@ func TestValueReturnsItsOwnLiteral(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			first.(map[string]any)["id"] = "planted"
-			first.(map[string]any)["tags"].([]any)[0] = "planted"
+			obj := first.(ordered.Object)
+			obj.Set("id", "planted")
+			tags, _ := obj.Get("tags")
+			tags.([]any)[0] = "planted"
 			second, err := gen.Value(schema)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(second, want) {
+			if !reflect.DeepEqual(ordered.Plain(second), want) {
 				t.Errorf("second value = %v, want %v untouched by planting into the first", second, want)
 			}
 		})

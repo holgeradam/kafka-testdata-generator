@@ -20,7 +20,7 @@ func TestGenerateObject(t *testing.T) {
 		"required": []any{"name"},
 	}
 
-	result, _ := gen.Value(schema)
+	result, _ := plainValue(gen, schema)
 	obj, ok := result.(map[string]any)
 	if !ok {
 		t.Fatalf("expected map, got %T", result)
@@ -49,7 +49,7 @@ func TestGenerateArray(t *testing.T) {
 		"maxItems": float64(5),
 	}
 
-	result, _ := gen.Value(schema)
+	result, _ := plainValue(gen, schema)
 	arr, ok := result.([]any)
 	if !ok {
 		t.Fatalf("expected array, got %T", result)
@@ -85,7 +85,7 @@ func TestGenerateStringFormats(t *testing.T) {
 				"type":   "string",
 				"format": tt.format,
 			}
-			result, _ := gen.Value(schema)
+			result, _ := plainValue(gen, schema)
 			if _, ok := result.(string); !ok {
 				t.Errorf("expected string, got %T", result)
 			}
@@ -102,7 +102,7 @@ func TestGenerateIntegerBounds(t *testing.T) {
 	}
 
 	for i := 0; i < 100; i++ {
-		result, _ := gen.Value(schema)
+		result, _ := plainValue(gen, schema)
 		num, ok := result.(int64)
 		if !ok {
 			t.Fatalf("expected int64, got %T", result)
@@ -122,7 +122,7 @@ func TestGenerateEnum(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
-		result, _ := gen.Value(schema)
+		result, _ := plainValue(gen, schema)
 		str, ok := result.(string)
 		if !ok {
 			t.Fatalf("expected string, got %T", result)
@@ -150,8 +150,8 @@ func TestDeterministic(t *testing.T) {
 	gen2 := New(synth.New(12345, fixedNow()))
 
 	for i := 0; i < 10; i++ {
-		r1, _ := gen1.Value(schema)
-		r2, _ := gen2.Value(schema)
+		r1, _ := plainValue(gen1, schema)
+		r2, _ := plainValue(gen2, schema)
 
 		j1, _ := json.Marshal(r1)
 		j2, _ := json.Marshal(r2)
@@ -181,7 +181,7 @@ func TestNestedValuesInheritFieldName(t *testing.T) {
 		},
 	}
 	for i := 0; i < 10; i++ {
-		v, err := gen.Value(schema)
+		v, err := plainValue(gen, schema)
 		if err != nil {
 			t.Fatalf("Value error: %v", err)
 		}
@@ -208,7 +208,7 @@ func TestPatternErrorCarriesPath(t *testing.T) {
 		"required":   []any{"code"},
 		"properties": map[string]any{"code": map[string]any{"type": "string", "pattern": `a.c`}},
 	}
-	_, err := gen.Value(schema)
+	_, err := plainValue(gen, schema)
 	var pe *UnsupportedPatternError
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected *UnsupportedPatternError, got %T (%v)", err, err)
@@ -222,7 +222,7 @@ func TestPatternErrorCarriesPath(t *testing.T) {
 // wherever it stands: a Payload field or a null header (#92).
 func TestNullType(t *testing.T) {
 	gen := New(synth.New(42, fixedNow()))
-	v, err := gen.Value(map[string]any{"type": "object", "required": []any{"trace"}, "properties": map[string]any{"trace": map[string]any{"type": "null"}}})
+	v, err := plainValue(gen, map[string]any{"type": "object", "required": []any{"trace"}, "properties": map[string]any{"trace": map[string]any{"type": "null"}}})
 	if err != nil {
 		t.Fatalf("Value: %v", err)
 	}

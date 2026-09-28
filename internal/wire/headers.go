@@ -6,18 +6,16 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 // EncodeHeaders turns a generated headers object into Kafka record headers:
-// one per property, in the order the headers schema declares them (#96), an
-// undeclared one after them by name, each value plain-scalar - an object's
-// JSON text in its own declared order - and a null value a null header (#85
-// decision 2).
-func EncodeHeaders(schema map[string]any, values map[string]any) ([]pipeline.Header, error) {
-	obj, _ := generator.Ordered(schema, values).(ordered.Object)
+// one per property, in the order the object has them - the order its headers
+// schema declares them (#96) - each value plain-scalar, an object as its
+// JSON text in its own order, and a null value a null header (#85 decision
+// 2).
+func EncodeHeaders(obj ordered.Object) ([]pipeline.Header, error) {
 	headers := make([]pipeline.Header, len(obj.Keys))
 	for i, name := range obj.Keys {
 		value, err := PlainScalar(obj.Values[i])

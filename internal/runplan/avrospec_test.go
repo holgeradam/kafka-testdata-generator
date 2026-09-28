@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -288,7 +289,7 @@ channels:
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	if g.Payload.(map[string]any)["id"] != g.Key {
+	if ordered.Plain(g.Payload).(map[string]any)["id"] != g.Key {
 		t.Errorf("payload %v, key %v; want the Key planted at -keyPath", g.Payload, g.Key)
 	}
 

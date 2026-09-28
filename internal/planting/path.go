@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
 // Step is one step of a Planting's path: a field name, or an array index when
@@ -156,18 +158,26 @@ func plant(into any, path []Step, value any) (int, error) {
 		arr[last.Index] = value
 		return 0, nil
 	}
-	m, ok := current.(map[string]any)
-	if !ok {
+	switch obj := current.(type) {
+	case map[string]any:
+		if _, ok := obj[last.Field]; !ok {
+			return i, fmt.Errorf("has no field %q", last.Field)
+		}
+		obj[last.Field] = value
+	case ordered.Object:
+		// Set replaces the value in place, where every copy of the Object
+		// sees it.
+		if !obj.Set(last.Field, value) {
+			return i, fmt.Errorf("has no field %q", last.Field)
+		}
+	default:
 		return i, fmt.Errorf("holds no object here")
 	}
-	if _, ok := m[last.Field]; !ok {
-		return i, fmt.Errorf("has no field %q", last.Field)
-	}
-	m[last.Field] = value
 	return 0, nil
 }
 
-// child descends one step into the generated value.
+// child descends one step into the generated value: a plain map, or the
+// ordered object the JSON Schema generator emits (#112).
 func child(current any, step Step) (any, error) {
 	if step.Index >= 0 {
 		arr, ok := current.([]any)
@@ -179,11 +189,16 @@ func child(current any, step Step) (any, error) {
 		}
 		return arr[step.Index], nil
 	}
-	m, ok := current.(map[string]any)
-	if !ok {
+	var v any
+	var ok bool
+	switch obj := current.(type) {
+	case map[string]any:
+		v, ok = obj[step.Field]
+	case ordered.Object:
+		v, ok = obj.Get(step.Field)
+	default:
 		return nil, fmt.Errorf("holds no object here")
 	}
-	v, ok := m[step.Field]
 	if !ok {
 		return nil, fmt.Errorf("has no field %q", step.Field)
 	}

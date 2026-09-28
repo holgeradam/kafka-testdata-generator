@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -100,21 +101,23 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 		return g.refValue(ref, field, path, depth)
 	}
 
-	// A literal comes back as a copy: planting writes into the value, which
-	// must reach neither the schema nor another record (#107).
+	// A literal comes back as a copy in the order it is written in (#112):
+	// planting writes into the value, which must reach neither the schema
+	// nor another record (#107).
 	if ex, ok := schema["example"]; ok {
-		return copyLiteral(ex), nil
+		return literalOf(schema, "example", ex, -1), nil
 	}
 	if ex, ok := schema["examples"]; ok {
 		if arr, ok := ex.([]any); ok && len(arr) > 0 {
-			return copyLiteral(arr[0]), nil
+			return literalOf(schema, "examples", arr[0], 0), nil
 		}
 	}
 	if c, ok := schema["const"]; ok {
-		return copyLiteral(c), nil
+		return literalOf(schema, "const", c, -1), nil
 	}
 	if enums, ok := schema["enum"].([]any); ok && len(enums) > 0 {
-		return copyLiteral(enums[g.synth.Pick(len(enums))]), nil
+		i := g.synth.Pick(len(enums))
+		return literalOf(schema, "enum", enums[i], i), nil
 	}
 
 	if allOf, ok := schema["allOf"].([]any); ok {
@@ -163,26 +166,6 @@ func (g *Generator) value(schema map[string]any, field, path string, depth int) 
 	default:
 		return nil, &UnsupportedSchemaError{Keyword: "type", Path: path, Detail: fmt.Sprintf("unsupported type %q", typ)}
 	}
-}
-
-// copyLiteral deep-copies a literal of the decoded spec: its objects and
-// arrays are fresh, its scalars shared, being immutable.
-func copyLiteral(v any) any {
-	switch v := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for k, e := range v {
-			out[k] = copyLiteral(e)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, e := range v {
-			out[i] = copyLiteral(e)
-		}
-		return out
-	}
-	return v
 }
 
 // refValue follows a preserved $ref node into the schema's $defs. When the
@@ -275,6 +258,9 @@ func lookupDef(defs map[string]any, ref string) (map[string]any, error) {
 	return target, nil
 }
 
+// object generates an object, drawing its properties in sorted name order,
+// which fixes the seeded stream, and emits them in the order the schema
+// declares them (#96, #112).
 func (g *Generator) object(schema map[string]any, path string, depth int) (any, error) {
 	result := make(map[string]any)
 	props, _ := schema["properties"].(map[string]any)
@@ -307,7 +293,13 @@ func (g *Generator) object(schema map[string]any, path string, depth int) (any, 
 		}
 	}
 
-	return result, nil
+	var obj ordered.Object
+	for _, name := range declaredOrder(schema, props) {
+		if v, ok := result[name]; ok {
+			obj.Add(name, v)
+		}
+	}
+	return obj, nil
 }
 
 func (g *Generator) shouldInclude(fieldName string, required []any) bool {
