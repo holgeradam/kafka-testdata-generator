@@ -5,6 +5,7 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // AvroDisplayEncoder is the Dry-run AVRO adapter on the Encoder seam: it
@@ -13,8 +14,9 @@ import (
 // (ADR-0007 decision 7). One adapter per concern keeps the framing/registry
 // AvroEncoder solely for producing, where registry interaction belongs.
 type AvroDisplayEncoder struct {
-	// values are the value avsc models, one per Message type.
-	values []*avro.Schema
+	// types are the run's bound Message types, the very slice its Mix
+	// generates from, so a record's Type finds its value avsc.
+	types []wire.Bound[encoding]
 	// key is the key avsc model, nil when records carry a null Key.
 	key *avro.Schema
 }
@@ -24,13 +26,7 @@ type AvroDisplayEncoder struct {
 // avsc. It requires no registry URL and makes no network calls; the models
 // alone drive the rendering.
 func NewAvroDisplayEncoder(value, key *avro.Schema) *AvroDisplayEncoder {
-	return newAvroDisplayEncoder([]*avro.Schema{value}, key)
-}
-
-// newAvroDisplayEncoder renders each Payload against its own Message type's
-// value avsc: a record of a union shows alone, without the union's wrapper.
-func newAvroDisplayEncoder(values []*avro.Schema, key *avro.Schema) *AvroDisplayEncoder {
-	return &AvroDisplayEncoder{values: values, key: key}
+	return &AvroDisplayEncoder{types: []wire.Bound[encoding]{{Encoding: encoding{value: value}}}, key: key}
 }
 
 // Encode renders the payload and the key as the canonical Avro JSON encoding
@@ -51,7 +47,7 @@ func (e *AvroDisplayEncoder) Encode(generated pipeline.Generated) ([]byte, []byt
 			return nil, nil, fmt.Errorf("avro: rendering key: %w", err)
 		}
 	}
-	payloadBytes, err := avro.RenderJSON(e.values[generated.Type].Root, payload)
+	payloadBytes, err := avro.RenderJSON(e.types[generated.Type].Encoding.value.Root, payload)
 	if err != nil {
 		return nil, nil, err
 	}

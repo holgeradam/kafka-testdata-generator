@@ -8,11 +8,9 @@ package wire
 
 import (
 	"context"
-	"errors"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -58,8 +56,8 @@ type Options struct {
 	MessageTypes []asyncapi.MessageType
 	// TopicParameters are the values -topic fills a templated address with.
 	// Each one with a location is planted into every Payload or Headers, in
-	// either format, once Plantings has checked that the location is
-	// guaranteed and holds the value (#83, #93).
+	// either format, once Plant has checked that the location is guaranteed
+	// and holds the value (#83, #93).
 	TopicParameters []asyncapi.TopicParameter
 }
 
@@ -77,23 +75,6 @@ type Parts struct {
 	// Warnings are diagnostics for the caller to print, such as a spec
 	// declaration the format ignores.
 	Warnings []string
-}
-
-// Plantings checks every Planting of the run against each Message type
-// before any record exists (internal/planting): -keyPath, and each Topic
-// parameter's location in the Payload or the Headers. A refusal is an Error
-// on the flag the Planting belongs to.
-func Plantings(types []planting.MessageType, keyPath string, params []asyncapi.TopicParameter) ([]*planting.Set, error) {
-	ps := make([]planting.Parameter, len(params))
-	for i, tp := range params {
-		ps[i] = planting.Parameter{Name: tp.Name, Value: tp.Value, Location: tp.Location, Pointer: tp.Pointer, InHeaders: tp.InHeaders}
-	}
-	sets, err := planting.New(types, keyPath, ps)
-	var pe *planting.Error
-	if errors.As(err, &pe) {
-		return nil, &Error{Flag: pe.Flag, Err: pe.Err}
-	}
-	return sets, err
 }
 
 // Error reports a run a Wire format rejects. Flag names the option at fault
