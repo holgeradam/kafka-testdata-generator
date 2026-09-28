@@ -54,7 +54,8 @@ between schema languages.
 - An AVRO run from a spec with Avro payloads needs only `-spec`, `-topic` and, to produce,
   `-registry`.
 - The Run plan no longer picks the adapter by the `-format` value alone; it infers it from the
-  spec and the flags, then hands the adapter the spec's Message types for its `Check`.
+  spec and the flags, then hands the adapter the spec's Message types, whose flag rules it
+  judges against them (in its `Build` since #110).
 - Shared named types that refer to each other cannot be separate subjects, and stop the run;
   so does a shared named type without a namespace used inside a namespaced record, which Avro
   cannot name.

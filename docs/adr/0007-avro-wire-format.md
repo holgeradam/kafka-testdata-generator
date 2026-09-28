@@ -122,6 +122,17 @@ inferred from where the Payload's schema comes from. Avro payloads in the spec o
 mean avro, and `-avro-schema` is then required only for a spec whose payloads are JSON Schema.
 The adapter's `Check` runs once the spec is read, judging the flags against it.
 
+Amended (2026-09-28, issue #110): the adapter has one phase. Since ADR-0011 its `Check` ran after
+the spec was read, so the `Check`/`Build` split of the #29 amendment no longer separated what
+each phase could read, and rules landed in one or the other by accident (`-keyPath` needing a
+key schema was a `Check` rule under AVRO, a `Build` rule under JSON). A format is now `Name()`
+and `Build(flags, Topic, Synthesizer)`: it judges every rule about its flags against the spec,
+then reads its own files and wires the run. The guarantee the split gave is kept as an ordering
+rule inside `Build`: every rule about the flags themselves is judged before any of the format's
+files is read, so a conflicting or missing flag wins over a broken file. `-records-per-key`
+needing a key schema moved into each format with Key reuse (#108), judged with the other flag
+rules.
+
 ### 7. Dry run never contacts a registry
 
 Dry run generates from the local avsc and renders records readably, without any registry

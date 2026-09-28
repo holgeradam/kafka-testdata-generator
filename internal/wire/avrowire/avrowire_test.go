@@ -33,9 +33,10 @@ func writeAvsc(t *testing.T, avsc string) string {
 
 const orderAvsc = `{"type":"record","name":"Order","fields":[{"name":"id","type":"string"}]}`
 
-func options(t *testing.T) wire.Options {
-	return wire.Options{
+func options(t *testing.T) buildOptions {
+	return buildOptions{
 		Topic:      "orders",
+		DryRun:     true,
 		AvroSchema: writeAvsc(t, orderAvsc),
 		Synth:      synth.New(1, testNow()),
 		// The Message schema and binding must not reach AVRO generation.
@@ -50,7 +51,7 @@ func options(t *testing.T) wire.Options {
 // TestBuildGeneratesFromValueAvsc proves the Payload follows the value avsc,
 // whatever Message schema the spec declares.
 func TestBuildGeneratesFromValueAvsc(t *testing.T) {
-	parts, err := Format{}.Build(options(t))
+	parts, err := build(options(t))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestBuildGeneratesFromValueAvsc(t *testing.T) {
 // Key is planted into the Payload.
 func TestBuildKey(t *testing.T) {
 	opts := options(t)
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestBuildKey(t *testing.T) {
 	}
 
 	opts.AvroKeySchema = writeAvsc(t, `{"type":"long"}`)
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestBuildKey(t *testing.T) {
 
 	opts.AvroKeySchema = writeAvsc(t, `"string"`)
 	opts.KeyPath = "id"
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -106,17 +107,17 @@ func TestBuildRejectsBadAvsc(t *testing.T) {
 	bad := writeAvsc(t, `{"type":"nope"}`)
 	cases := []struct {
 		name, flag string
-		mutate     func(*wire.Options)
+		mutate     func(*buildOptions)
 	}{
-		{"malformed value", "avro-schema", func(o *wire.Options) { o.AvroSchema = bad }},
-		{"missing value", "avro-schema", func(o *wire.Options) { o.AvroSchema = filepath.Join(t.TempDir(), "absent.avsc") }},
-		{"malformed key", "avro-key-schema", func(o *wire.Options) { o.AvroKeySchema = bad }},
+		{"malformed value", "avro-schema", func(o *buildOptions) { o.AvroSchema = bad }},
+		{"missing value", "avro-schema", func(o *buildOptions) { o.AvroSchema = filepath.Join(t.TempDir(), "absent.avsc") }},
+		{"malformed key", "avro-key-schema", func(o *buildOptions) { o.AvroKeySchema = bad }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := options(t)
 			tc.mutate(&opts)
-			_, err := Format{}.Build(opts)
+			_, err := build(opts)
 			var we *wire.Error
 			if !errors.As(err, &we) || we.Flag != tc.flag {
 				t.Fatalf("err = %v, want a *wire.Error on -%s", err, tc.flag)
@@ -135,7 +136,7 @@ func TestBuildEncoderPerMode(t *testing.T) {
 	opts := options(t)
 	opts.DryRun = true
 	opts.RegistryURL = "http://127.0.0.1:1"
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestBuildEncoderPerMode(t *testing.T) {
 	srv, calls := fakeRegistry(t, map[string]int{"orders-value": 7})
 	opts.DryRun = false
 	opts.RegistryURL = srv.URL
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -169,36 +170,49 @@ func TestBuildEncoderPerMode(t *testing.T) {
 	}
 }
 
-// TestCheck proves the AVRO flag rules, judged against the spec: one value
-// avsc, from the spec or -avro-schema; one key avsc, from the spec's Key
-// binding or -avro-key-schema, for -keyPath; a registry only when producing;
-// one Avro Message type until #91; and registry bindings the tool honours.
-func TestCheck(t *testing.T) {
+// TestBuildFlagRules proves the AVRO flag rules, judged against the spec:
+// one value avsc, from the spec or -avro-schema; one key avsc, from the
+// spec's Key binding or -avro-key-schema, for -keyPath and Key reuse; a
+// registry only when producing; and registry bindings the tool honours. Every
+// rule about the flags is judged before any avsc is read, so it wins over a
+// broken or missing file.
+func TestBuildFlagRules(t *testing.T) {
+	v, k := writeAvsc(t, orderAvsc), writeAvsc(t, `"string"`)
+	broken := writeAvsc(t, `{"type":"nope"}`)
+	registryBinding := []asyncapi.MessageType{{Name: "A", Payload: map[string]any{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}
 	cases := []struct {
 		name, flag string
-		opts       wire.Options
+		opts       buildOptions
 	}{
-		{"dry run", "", wire.Options{AvroSchema: "v.avsc", DryRun: true}},
-		{"produce", "", wire.Options{AvroSchema: "v.avsc", RegistryURL: "http://localhost:8081"}},
-		{"planted key", "", wire.Options{AvroSchema: "v.avsc", AvroKeySchema: "k.avsc", KeyPath: "id", DryRun: true}},
-		{"no value avsc", "avro-schema", wire.Options{DryRun: true}},
-		{"key path without key avsc", "keyPath", wire.Options{AvroSchema: "v.avsc", KeyPath: "id", DryRun: true}},
-		{"produce without registry", "registry", wire.Options{AvroSchema: "v.avsc"}},
-		{"spec avsc", "", wire.Options{MessageTypes: avroTypes("A"), DryRun: true}},
-		{"spec key planted", "", wire.Options{MessageTypes: keyedAvroTypes("A"), KeyPath: "id", DryRun: true}},
-		{"spec avsc, key avsc planted", "", wire.Options{MessageTypes: avroTypes("A"), AvroKeySchema: "k.avsc", KeyPath: "id", DryRun: true}},
-		{"spec avsc and value avsc", "avro-schema", wire.Options{MessageTypes: avroTypes("A"), AvroSchema: "v.avsc", DryRun: true}},
-		{"spec key and key avsc", "avro-key-schema", wire.Options{MessageTypes: keyedAvroTypes("A"), AvroKeySchema: "k.avsc", DryRun: true}},
-		{"spec avsc, key path without a key", "keyPath", wire.Options{MessageTypes: avroTypes("A"), KeyPath: "id", DryRun: true}},
-		{"several spec avscs", "", wire.Options{MessageTypes: avroTypes("A", "B"), DryRun: true}},
-		{"registry binding", "topic", wire.Options{MessageTypes: []asyncapi.MessageType{{Name: "A", Payload: map[string]any{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}, AvroSchema: "v.avsc", DryRun: true}},
+		{"dry run", "", buildOptions{AvroSchema: v, DryRun: true}},
+		{"produce", "", buildOptions{AvroSchema: v, RegistryURL: "http://localhost:8081"}},
+		{"planted key", "", buildOptions{AvroSchema: v, AvroKeySchema: k, KeyPath: "id", DryRun: true}},
+		{"no value avsc", "avro-schema", buildOptions{DryRun: true}},
+		{"key path without key avsc", "keyPath", buildOptions{AvroSchema: v, KeyPath: "id", DryRun: true}},
+		{"produce without registry", "registry", buildOptions{AvroSchema: v}},
+		{"spec avsc", "", buildOptions{MessageTypes: avroTypes("A"), DryRun: true}},
+		{"spec key planted", "", buildOptions{MessageTypes: keyedAvroTypes("A"), KeyPath: "id", DryRun: true}},
+		{"spec avsc, key avsc planted", "", buildOptions{MessageTypes: avroTypes("A"), AvroKeySchema: k, KeyPath: "id", DryRun: true}},
+		{"spec avsc and value avsc", "avro-schema", buildOptions{MessageTypes: avroTypes("A"), AvroSchema: v, DryRun: true}},
+		{"spec key and key avsc", "avro-key-schema", buildOptions{MessageTypes: keyedAvroTypes("A"), AvroKeySchema: k, DryRun: true}},
+		{"spec avsc, key path without a key", "keyPath", buildOptions{MessageTypes: avroTypes("A"), KeyPath: "id", DryRun: true}},
+		{"several spec avscs", "", buildOptions{MessageTypes: avroTypes("A", "B"), DryRun: true}},
+		{"registry binding", "topic", buildOptions{MessageTypes: registryBinding, AvroSchema: v, DryRun: true}},
+		{"key reuse without a key avsc", "records-per-key", buildOptions{AvroSchema: v, RecordsPerKey: 2, DryRun: true}},
+		{"key reuse with a key avsc", "", buildOptions{AvroSchema: v, AvroKeySchema: k, RecordsPerKey: 2, DryRun: true}},
+		{"key reuse with a spec key", "", buildOptions{MessageTypes: keyedAvroTypes("A"), RecordsPerKey: 2, DryRun: true}},
+		{"key path before a broken avsc", "keyPath", buildOptions{AvroSchema: broken, KeyPath: "id", DryRun: true}},
+		{"key reuse before a broken avsc", "records-per-key", buildOptions{AvroSchema: broken, RecordsPerKey: 2, DryRun: true}},
+		{"registry before a missing avsc", "registry", buildOptions{AvroSchema: filepath.Join(t.TempDir(), "missing.avsc")}},
+		{"registry binding before a broken avsc", "topic", buildOptions{MessageTypes: registryBinding, AvroSchema: broken, DryRun: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Format{}.Check(tc.opts)
+			tc.opts.Topic, tc.opts.Synth = "orders", synth.New(1, testNow())
+			_, err := build(tc.opts)
 			if tc.flag == "" {
 				if err != nil {
-					t.Fatalf("Check: %v, want nil", err)
+					t.Fatalf("Build: %v, want nil", err)
 				}
 				return
 			}
@@ -214,7 +228,7 @@ func TestCheck(t *testing.T) {
 // ignored under AVRO, and stays silent when there is none.
 func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 	opts := options(t)
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -223,7 +237,7 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 	}
 
 	opts.MessageTypes[0].KeyBinding = nil
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -260,7 +274,7 @@ func TestBuildPlantsTopicParameters(t *testing.T) {
 		parameter("tenant", "acme", "meta", "tenant"),
 		{Name: "env", Value: "prod"},
 	}
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -307,7 +321,7 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 				opts.KeyPath = c.keyPath
 				opts.AvroKeySchema = writeAvsc(t, `{"type":"record","name":"Meta","fields":[{"name":"tenant","type":"string"}]}`)
 			}
-			_, err := Format{}.Build(opts)
+			_, err := build(opts)
 			var we *wire.Error
 			if !errors.As(err, &we) || we.Flag != c.flag {
 				t.Fatalf("err = %v, want a *wire.Error on -%s", err, c.flag)
@@ -350,7 +364,7 @@ func TestBuildRefusesHeaderLocationUnderAvroSchema(t *testing.T) {
 	opts := options(t)
 	opts.AvroSchema = writeAvsc(t, regionAvsc)
 	opts.TopicParameters = []asyncapi.TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/tenant", Pointer: []string{"tenant"}, InHeaders: true}}
-	_, err := Format{}.Build(opts)
+	_, err := build(opts)
 	var we *wire.Error
 	want := "Topic parameter tenant: location $message.header#/tenant: under -avro-schema the records are of no Message type in the spec, so they have no Headers"
 	if !errors.As(err, &we) || we.Flag != "topic" || err.Error() != want {

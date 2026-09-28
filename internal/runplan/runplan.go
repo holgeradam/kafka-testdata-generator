@@ -203,24 +203,17 @@ func Plan(args []string) (*Run, error) {
 	if run.Format, err = wireFormat(f, run.Topic, topic.MessageTypes); err != nil {
 		return nil, err
 	}
-	format := formats[run.Format]
-	opts := wire.Options{
-		DryRun:          run.DryRun,
-		Topic:           run.Topic,
-		KeyPath:         *f.keyPath,
-		RecordsPerKey:   *f.recordsPerKey,
-		RegistryURL:     run.RegistryURL,
-		AvroSchema:      *f.avroSchema,
-		AvroKeySchema:   *f.avroKeySchema,
-		MessageTypes:    topic.MessageTypes,
-		TopicParameters: topic.Parameters,
-	}
-	if err := format.Check(opts); err != nil {
-		return nil, err
-	}
 	run.warnDisregardedOptions(f)
-
-	if err := run.build(f, format, opts); err != nil {
+	flags := wire.Flags{
+		DryRun:        run.DryRun,
+		Topic:         run.Topic,
+		KeyPath:       *f.keyPath,
+		RecordsPerKey: *f.recordsPerKey,
+		RegistryURL:   run.RegistryURL,
+		AvroSchema:    *f.avroSchema,
+		AvroKeySchema: *f.avroKeySchema,
+	}
+	if err := run.build(f, formats[run.Format], flags, topic); err != nil {
 		return nil, err
 	}
 	return run, nil
@@ -270,26 +263,18 @@ func (r *Run) warnDisregardedOptions(f *flags) {
 	}
 }
 
-// build has the Wire format wire the run's generation, Key and encoder
-// from the spec and its own files.
-func (r *Run) build(f *flags, format wire.Format, opts wire.Options) error {
+// build has the Wire format judge its flags and wire the run's generation,
+// Key and encoder from the spec and its own files.
+func (r *Run) build(f *flags, format wire.Format, flags wire.Flags, topic *asyncapi.Topic) error {
 	// One Synthesizer per run: the Payload and the Key draw from one shared
 	// stream in both wire formats (ADR-0008 decision 4), and so do the Key
 	// reuse decisions.
-	opts.Synth = synth.New(*f.seed, f.now.now)
-	parts, err := format.Build(opts)
+	parts, err := format.Build(flags, topic, synth.New(*f.seed, f.now.now))
 	if err != nil {
 		return err
 	}
 	r.encoder = parts.Encoder
 	r.Warnings = append(r.Warnings, parts.Warnings...)
-
-	// With -records-per-key above 1 Keys identify Entities that recur across
-	// records, which needs a Key schema to generate them from (#75).
-	if *f.recordsPerKey > 1 && !parts.Keyed {
-		return &Error{Usage: true, Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: declare message.bindings.kafka.key in the spec, or pass -avro-key-schema under AVRO, so there is a Key to reuse"}
-	}
-
 	r.Config = pipeline.Config{
 		Generator: parts.Values,
 		Count:     *f.count,

@@ -14,6 +14,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -23,38 +24,43 @@ type Format struct{}
 // Name is the -format value that selects AVRO.
 func (Format) Name() string { return "avro" }
 
-// Check applies the AVRO flag surface (ADR-0007 decision 6, amended by
-// ADR-0009 and ADR-0011), judged against the spec. The Payload's avsc comes
-// from the spec's Avro payloads or from -avro-schema, never both; the Key's
-// from the spec's Avro Key binding or from -avro-key-schema, never both, and
-// -keyPath needs one. Producing needs a registry. The Kafka message binding's
-// registry fields must be ones the Confluent framing honours (#84 decision
-// 8).
-func (Format) Check(opts wire.Options) error {
-	spec := specAvro(opts.MessageTypes)
+// checkFlags applies the AVRO flag surface (ADR-0007 decision 6, amended by
+// ADR-0009 and ADR-0011), judged against the spec before any avsc is read.
+// The Payload's avsc comes from the spec's Avro payloads or from
+// -avro-schema, never both; the Key's from the spec's Avro Key binding or
+// from -avro-key-schema, never both, and -keyPath and Key reuse need one.
+// Producing needs a registry. The Kafka message binding's registry fields
+// must be ones the Confluent framing honours (#84 decision 8).
+func checkFlags(flags wire.Flags, types []asyncapi.MessageType) error {
+	spec := specAvro(types)
 	switch {
-	case len(spec) > 0 && opts.AvroSchema != "":
+	case len(spec) > 0 && flags.AvroSchema != "":
 		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: fmt.Sprintf("the spec declares the Payload's avsc (payload of %s is Avro) and -avro-schema gives another; drop -avro-schema, so the run has one source of truth", spec[0].Name)}
-	case len(spec) == 0 && opts.AvroSchema == "":
+	case len(spec) == 0 && flags.AvroSchema == "":
 		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: "-avro-schema is required with -format avro when the spec's payloads are JSON Schema"}
 	}
 	keyed := slices.IndexFunc(spec, func(mt asyncapi.MessageType) bool { return mt.KeyAvsc != nil })
-	if keyed >= 0 && opts.AvroKeySchema != "" {
+	if keyed >= 0 && flags.AvroKeySchema != "" {
 		return &wire.Error{Usage: true, Flag: "avro-key-schema", Detail: fmt.Sprintf("the spec declares the Key's avsc (bindings.kafka.key of %s) and -avro-key-schema gives another; drop -avro-key-schema, so the run has one source of truth", spec[keyed].Name)}
 	}
-	if opts.KeyPath != "" && opts.AvroKeySchema == "" && keyed < 0 {
+	if flags.KeyPath != "" && flags.AvroKeySchema == "" && keyed < 0 {
 		return &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key avsc: -avro-key-schema, or a Key binding beside the spec's Avro payload, so there is a Key to plant"}
 	}
 	// Producing AVRO data needs Confluent framing (magic byte + registry
 	// schema ID, ADR-0007 decision 2), and registration of the value avsc is
 	// how that ID comes to exist. Dry run never touches a registry.
-	if !opts.DryRun && opts.RegistryURL == "" {
+	if !flags.DryRun && flags.RegistryURL == "" {
 		return &wire.Error{Usage: true, Flag: "registry", Detail: "-registry is required to produce with the avro Wire format"}
 	}
-	for _, mt := range opts.MessageTypes {
+	for _, mt := range types {
 		if err := checkRegistry(mt); err != nil {
 			return err
 		}
+	}
+	// With -records-per-key above 1 Keys identify Entities that recur across
+	// records, which needs a key avsc to generate them from (#75).
+	if flags.RecordsPerKey > 1 && flags.AvroKeySchema == "" && keyed < 0 {
+		return &wire.Error{Usage: true, Flag: "records-per-key", Detail: "-records-per-key above 1 requires a key schema: pass -avro-key-schema, or declare a Key binding beside the spec's Avro payload, so there is a Key to reuse"}
 	}
 	return nil
 }
@@ -105,28 +111,32 @@ func specAvro(types []asyncapi.MessageType) []asyncapi.MessageType {
 //
 // Several Avro Message types are mixed per record, as JSON mode mixes (#74),
 // and register as a union under <topic>-value (#84 decision 4). -keyPath and
-// every Topic parameter must hold in each of them.
-func (Format) Build(opts wire.Options) (*wire.Parts, error) {
-	spec := specAvro(opts.MessageTypes)
-	values, err := valueAvscs(opts, spec)
+// every Topic parameter must hold in each of them. Every rule about the flags
+// is judged first, before any avsc is read (checkFlags).
+func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesizer) (*wire.Parts, error) {
+	if err := checkFlags(flags, topic.MessageTypes); err != nil {
+		return nil, err
+	}
+	spec := specAvro(topic.MessageTypes)
+	values, err := valueAvscs(flags, spec)
 	if err != nil {
 		return nil, err
 	}
-	key, err := keyAvsc(opts, spec)
+	key, err := keyAvsc(flags, spec)
 	if err != nil {
 		return nil, err
 	}
 	// Records from -avro-schema are of no Message type in the spec, so they
 	// have no Headers to plant into.
 	if len(spec) == 0 {
-		for _, tp := range opts.TopicParameters {
+		for _, tp := range topic.Parameters {
 			if tp.InHeaders {
 				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Name, tp.Location)}
 			}
 		}
 	}
 
-	gen := avro.NewGenerator(opts.Synth)
+	gen := avro.NewGenerator(s)
 	bound := make([]wire.Bound[encoding], len(values))
 	for i, v := range values {
 		bound[i] = wire.Bound[encoding]{
@@ -138,7 +148,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 			bound[i].Name, bound[i].Headers = spec[i].Name, spec[i].Headers
 		}
 	}
-	if err := wire.Plant(bound, opts.KeyPath, opts.TopicParameters); err != nil {
+	if err := wire.Plant(bound, flags.KeyPath, topic.Parameters); err != nil {
 		return nil, err
 	}
 	var u *union
@@ -153,23 +163,23 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 
 	var keyGen keyplan.Generator
 	if key != nil {
-		keyGen = keyplan.Reuse(&boundGenerator{gen: gen, model: key}, opts.RecordsPerKey, opts.Synth)
+		keyGen = keyplan.Reuse(&boundGenerator{gen: gen, model: key}, flags.RecordsPerKey, s)
 	}
 	parts := &wire.Parts{
-		Values:  wire.NewMix(opts.Synth, bound, keyGen),
+		Values:  wire.NewMix(s, bound, keyGen),
 		Keyed:   key != nil,
-		Encoder: encoderFor(opts, bound, u, key),
+		Encoder: encoderFor(flags, bound, u, key),
 	}
 	// Records from -avro-schema are of no Message type in the spec, so no
 	// Message type's headers apply to them: they are ignored, out loud.
-	if len(spec) == 0 && slices.ContainsFunc(opts.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Headers != nil }) {
+	if len(spec) == 0 && slices.ContainsFunc(topic.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Headers != nil }) {
 		parts.Warnings = append(parts.Warnings, "Warning: headers are ignored under -avro-schema: its records are of no Message type in the spec")
 	}
 	// A JSON Schema payload's key binding declares a JSON-schema-shaped Key;
 	// generating one would silently violate the avsc key contract, so it is
 	// ignored, out loud. The spec's Message types play no other part: the
 	// avsc governs the Payload.
-	for _, mt := range opts.MessageTypes {
+	for _, mt := range topic.MessageTypes {
 		if mt.KeyBinding != nil {
 			parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
 			break
@@ -189,9 +199,9 @@ type encoding struct {
 
 // valueAvscs parses the Payload's avscs, one per Message type: the spec's,
 // else -avro-schema's alone.
-func valueAvscs(opts wire.Options, spec []asyncapi.MessageType) ([]*avro.Schema, error) {
+func valueAvscs(flags wire.Flags, spec []asyncapi.MessageType) ([]*avro.Schema, error) {
 	if len(spec) == 0 {
-		value, err := loadAvsc(opts.AvroSchema)
+		value, err := loadAvsc(flags.AvroSchema)
 		if err != nil {
 			return nil, &wire.Error{Flag: "avro-schema", Err: err}
 		}
@@ -212,7 +222,7 @@ func valueAvscs(opts wire.Options, spec []asyncapi.MessageType) ([]*avro.Schema,
 // share, else -avro-key-schema's; nil when the run has neither. A Key
 // identifies one Entity across the Message types, so they must declare the
 // same Key binding, or none (#34 decision 3).
-func keyAvsc(opts wire.Options, spec []asyncapi.MessageType) (*avro.Schema, error) {
+func keyAvsc(flags wire.Flags, spec []asyncapi.MessageType) (*avro.Schema, error) {
 	if len(spec) > 0 {
 		shared, err := wire.SharedKeyBinding(spec, func(mt asyncapi.MessageType) []byte { return mt.KeyAvsc })
 		if err != nil {
@@ -226,10 +236,10 @@ func keyAvsc(opts wire.Options, spec []asyncapi.MessageType) (*avro.Schema, erro
 			return key, nil
 		}
 	}
-	if opts.AvroKeySchema == "" {
+	if flags.AvroKeySchema == "" {
 		return nil, nil
 	}
-	key, err := loadAvsc(opts.AvroKeySchema)
+	key, err := loadAvsc(flags.AvroKeySchema)
 	if err != nil {
 		return nil, &wire.Error{Flag: "avro-key-schema", Err: err}
 	}
@@ -265,17 +275,17 @@ func newUnion(spec []asyncapi.MessageType) (*union, error) {
 // produce registers the value avsc under <topic>-value, or the union of
 // several (#84 decision 4), and the key avsc under <topic>-key, then frames
 // records with the assigned IDs.
-func encoderFor(opts wire.Options, bound []wire.Bound[encoding], u *union, key *avro.Schema) func(context.Context) (pipeline.Encoder, error) {
-	if opts.DryRun {
+func encoderFor(flags wire.Flags, bound []wire.Bound[encoding], u *union, key *avro.Schema) func(context.Context) (pipeline.Encoder, error) {
+	if flags.DryRun {
 		return func(context.Context) (pipeline.Encoder, error) {
 			return &AvroDisplayEncoder{types: bound, key: key}, nil
 		}
 	}
 	return func(ctx context.Context) (pipeline.Encoder, error) {
 		if u != nil {
-			return NewAvroUnionEncoder(ctx, opts.RegistryURL, opts.Topic, u.schema, u.plan, bound, key)
+			return NewAvroUnionEncoder(ctx, flags.RegistryURL, flags.Topic, u.schema, u.plan, bound, key)
 		}
-		return NewAvroEncoder(ctx, opts.RegistryURL, opts.Topic, bound[0].Encoding.value, key)
+		return NewAvroEncoder(ctx, flags.RegistryURL, flags.Topic, bound[0].Encoding.value, key)
 	}
 }
 
