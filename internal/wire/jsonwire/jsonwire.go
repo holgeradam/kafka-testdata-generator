@@ -64,15 +64,16 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 	}
 
 	gen := generator.New(s)
-	bound := make([]wire.Bound[encoding], len(types))
+	// JSON encodes each Message type alike, from the ordered values its
+	// generator emits (#112), so a bound type carries no encoding data.
+	bound := make([]wire.Bound[struct{}], len(types))
 	for i, mt := range types {
 		payload := mt.Payload.(asyncapi.JSONSchema)
-		bound[i] = wire.Bound[encoding]{
-			Name:     mt.Name,
-			Payload:  &boundGenerator{gen: gen, schema: payload},
-			Walk:     generator.NewWalk(payload, keyBinding),
-			Headers:  mt.Headers,
-			Encoding: encoding{payload: payload},
+		bound[i] = wire.Bound[struct{}]{
+			Name:    mt.Name,
+			Payload: &boundGenerator{gen: gen, schema: payload},
+			Walk:    generator.NewWalk(payload, keyBinding),
+			Headers: mt.Headers,
 		}
 	}
 	if err := wire.Plant(bound, flags.KeyPath, topic.Parameters); err != nil {
@@ -86,7 +87,7 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 		Values: wire.NewMix(s, bound, key),
 		Keyed:  keyBinding != nil,
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
-			return JsonEncoder{types: bound, key: keyBinding}, nil
+			return JsonEncoder{}, nil
 		},
 	}, nil
 }

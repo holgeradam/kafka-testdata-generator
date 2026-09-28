@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -146,7 +147,7 @@ func TestPlanAccepts(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Generate: %v", err)
 				}
-				if g.Payload.(map[string]any)["orderId"] != g.Key {
+				if ordered.Plain(g.Payload).(map[string]any)["orderId"] != g.Key {
 					t.Errorf("payload %v, key %v; want the Key planted at -keyPath", g.Payload, g.Key)
 				}
 			},
@@ -161,7 +162,7 @@ func TestPlanAccepts(t *testing.T) {
 					if err != nil {
 						t.Fatalf("Generate: %v", err)
 					}
-					if g.Payload.(map[string]any)["orderId"] != g.Key {
+					if ordered.Plain(g.Payload).(map[string]any)["orderId"] != g.Key {
 						t.Fatalf("record %d: payload %v, key %v; want the reused Key planted", i, g.Payload, g.Key)
 					}
 					distinct[g.Key] = true
@@ -546,5 +547,5 @@ func TestPlanHelp(t *testing.T) {
 // generate draws one Payload from the plan's generator.
 func generate(r *Run) (any, error) {
 	g, err := r.Config.Generator.Generate()
-	return g.Payload, err
+	return ordered.Plain(g.Payload), err
 }

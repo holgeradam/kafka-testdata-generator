@@ -54,7 +54,7 @@ func TestPatternSupportProperty(t *testing.T) {
 				"pattern": fx.pattern,
 			}
 			for i := 0; i < 50; i++ {
-				v, err := gen.Value(schema)
+				v, err := plainValue(gen, schema)
 				if err != nil {
 					t.Fatalf("iteration %d: Value error: %v", i, err)
 				}
@@ -93,7 +93,7 @@ func TestPatternUnsupportedError(t *testing.T) {
 				"type":    "string",
 				"pattern": fx.pattern,
 			}
-			_, err := gen.Value(schema)
+			_, err := plainValue(gen, schema)
 			if err == nil {
 				t.Fatalf("expected error for unsupported pattern %q", fx.pattern)
 			}
@@ -121,11 +121,11 @@ func TestPatternDeterministic(t *testing.T) {
 	gen1 := New(synth.New(99, now))
 	gen2 := New(synth.New(99, now))
 
-	a, err := gen1.Value(schema)
+	a, err := plainValue(gen1, schema)
 	if err != nil {
 		t.Fatalf("gen1.Value error: %v", err)
 	}
-	b, err := gen2.Value(schema)
+	b, err := plainValue(gen2, schema)
 	if err != nil {
 		t.Fatalf("gen2.Value error: %v", err)
 	}

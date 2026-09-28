@@ -89,7 +89,7 @@ func TestBuildKey(t *testing.T) {
 	if _, ok := g.Key.(string); !parts.Keyed || !ok {
 		t.Errorf("key binding: Keyed %v, Key %T; want a string Key from the binding", parts.Keyed, g.Key)
 	}
-	if g.Payload.(map[string]any)["orderId"] == g.Key {
+	if ordered.Plain(g.Payload).(map[string]any)["orderId"] == g.Key {
 		t.Error("no -keyPath: the Key must not be planted")
 	}
 
@@ -98,7 +98,7 @@ func TestBuildKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if g, err = parts.Values.Generate(); err != nil || g.Payload.(map[string]any)["orderId"] != g.Key {
+	if g, err = parts.Values.Generate(); err != nil || ordered.Plain(g.Payload).(map[string]any)["orderId"] != g.Key {
 		t.Errorf("-keyPath orderId: Key %v, Payload %v, %v; want the Key planted", g.Key, g.Payload, err)
 	}
 }
@@ -241,7 +241,7 @@ func TestBuildSingleTypeDrawsNothingExtra(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		got, _ := generate(parts)
 		want, _ := direct.Value(orderSchema())
-		if fmt.Sprint(got) != fmt.Sprint(want) {
+		if fmt.Sprint(got) != fmt.Sprint(ordered.Plain(want)) {
 			t.Fatalf("record %d: %v, want %v as generated without a mix", i, got, want)
 		}
 	}
@@ -426,7 +426,7 @@ func TestBuildRejectsParametersPlantingTogether(t *testing.T) {
 // generate draws one Payload from the parts' generator.
 func generate(parts *wire.Parts) (any, error) {
 	g, err := parts.Values.Generate()
-	return g.Payload, err
+	return ordered.Plain(g.Payload), err
 }
 
 // tenantHeaders is a headers schema with one constant header, tenant=name.

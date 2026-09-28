@@ -8,11 +8,12 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 // Conforms reports whether value honours schema, format included, naming each
-// constraint it breaks. It is the one production use of a JSON Schema
+// constraint it breaks. An ordered.Object reads as the plain object it is. It is the one production use of a JSON Schema
 // validator (ADR-0006, amended by #83): a check made once at startup on a
 // value the run did not generate, such as a Topic parameter's, never in the
 // generation path, where Conformance holds by construction.
@@ -33,7 +34,7 @@ func Conforms(schema map[string]any, value any) error {
 	if err != nil {
 		return fmt.Errorf("compiling the schema: %w", err)
 	}
-	err = compiled.Validate(value)
+	err = compiled.Validate(ordered.Plain(value))
 	var invalid *jsonschema.ValidationError
 	if errors.As(err, &invalid) {
 		return errors.New(strings.Join(leafMessages(invalid), "; "))

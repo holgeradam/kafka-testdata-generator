@@ -29,13 +29,13 @@ func assertUnsupported(t *testing.T, err error, keyword, path string) {
 
 func TestValueUnsupportedType(t *testing.T) {
 	gen := New(synth.New(42, fixedNow()))
-	_, err := gen.Value(map[string]any{"type": "widget"})
+	_, err := plainValue(gen, map[string]any{"type": "widget"})
 	assertUnsupported(t, err, "type", RootPath)
 }
 
 func TestValueNoType(t *testing.T) {
 	gen := New(synth.New(42, fixedNow()))
-	_, err := gen.Value(map[string]any{"minimum": 5})
+	_, err := plainValue(gen, map[string]any{"minimum": 5})
 	assertUnsupported(t, err, "type", RootPath)
 }
 
@@ -48,7 +48,7 @@ func TestValueNestedUnsupportedPath(t *testing.T) {
 			"widget": map[string]any{"type": "gadget"},
 		},
 	}
-	_, err := gen.Value(schema)
+	_, err := plainValue(gen, schema)
 	assertUnsupported(t, err, "type", RootPath+".widget")
 }
 
@@ -60,7 +60,7 @@ func TestValueArrayUnsupportedItemPath(t *testing.T) {
 		"minItems": float64(1),
 		"maxItems": float64(3),
 	}
-	_, err := gen.Value(schema)
+	_, err := plainValue(gen, schema)
 	var ue *UnsupportedSchemaError
 	if !errors.As(err, &ue) {
 		t.Fatalf("expected *UnsupportedSchemaError, got %T (%v)", err, err)
@@ -96,7 +96,7 @@ func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
 					t.Errorf("schema[%d] panicked: %v", i, r)
 				}
 			}()
-			_, _ = gen.Value(s)
+			_, _ = plainValue(gen, s)
 		}()
 	}
 }
@@ -110,7 +110,7 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 			"a": "not-a-schema-object",
 		},
 	}
-	_, err := gen.Value(schema)
+	_, err := plainValue(gen, schema)
 	assertUnsupported(t, err, "properties", RootPath+".a")
 }
 
@@ -118,7 +118,7 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 // schema cannot be honoured, so generation stops with a typed error.
 func TestValueRefMissingDef(t *testing.T) {
 	gen := New(synth.New(1, fixedNow()))
-	_, err := gen.Value(map[string]any{
+	_, err := plainValue(gen, map[string]any{
 		"$ref":  "#/$defs/Missing",
 		"$defs": map[string]any{"Node": map[string]any{"type": "string"}},
 	})
@@ -130,7 +130,7 @@ func TestValueRefMissingDef(t *testing.T) {
 // else to resolve it against.
 func TestValueRefOutsideSchema(t *testing.T) {
 	gen := New(synth.New(1, fixedNow()))
-	_, err := gen.Value(map[string]any{"$ref": "#/components/schemas/Node"})
+	_, err := plainValue(gen, map[string]any{"$ref": "#/components/schemas/Node"})
 	assertUnsupported(t, err, "$ref", RootPath)
 }
 
@@ -138,7 +138,7 @@ func TestValueRefOutsideSchema(t *testing.T) {
 // object schema carrying it generates exactly its properties.
 func TestValueDefsIsNotAKeyword(t *testing.T) {
 	gen := New(synth.New(1, fixedNow()))
-	v, err := gen.Value(map[string]any{
+	v, err := plainValue(gen, map[string]any{
 		"type":       "object",
 		"required":   []any{"id"},
 		"properties": map[string]any{"id": map[string]any{"type": "string"}},

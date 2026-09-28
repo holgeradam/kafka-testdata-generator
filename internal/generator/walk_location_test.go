@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
@@ -112,5 +113,20 @@ func TestConforms(t *testing.T) {
 		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
 			t.Errorf("Conforms(%v, %q) = %v, want it to mention %q", c.schema, c.value, err, c.want)
 		}
+	}
+}
+
+// TestConformsReadsOrderedObjects proves the value check reads the ordered
+// objects the generator emits (#112) as plain ones.
+func TestConformsReadsOrderedObjects(t *testing.T) {
+	schema := map[string]any{"type": "object", "required": []any{"id"}, "properties": map[string]any{"id": map[string]any{"type": "string"}}}
+	var ok, bad ordered.Object
+	ok.Add("id", "x")
+	bad.Add("id", 7.0)
+	if err := Conforms(schema, ok); err != nil {
+		t.Errorf("Conforms(ordered id x) = %v, want nil", err)
+	}
+	if err := Conforms(schema, bad); err == nil {
+		t.Error("Conforms(ordered id 7) = nil, want the type refused")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -118,8 +119,8 @@ func (m *Mix[E]) Generate() (pipeline.Generated, error) {
 	}
 	g := pipeline.Generated{Type: i, Key: key, Payload: payload}
 	if b.Headers != nil {
-		values, _ := headers.(map[string]any)
-		g.Headers, err = EncodeHeaders(b.Headers, values)
+		obj, _ := headers.(ordered.Object)
+		g.Headers, err = EncodeHeaders(obj)
 	}
 	return g, err
 }

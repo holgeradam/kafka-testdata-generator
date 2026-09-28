@@ -2,9 +2,12 @@ package generator
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"slices"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
 // mergeAllOf folds every allOf branch into one schema using ADR-0006 Decision 5
@@ -96,9 +99,34 @@ func mergeTwoSchemas(a, b map[string]any, path string) (map[string]any, error) {
 				continue
 			}
 			out[k] = v
+		case ordered.Keyword:
+			// Merged below, from both schemas' declared orders.
+		case ordered.LiteralKeyword:
+			trees, _ := existing.(map[string]any)
+			merged := maps.Clone(trees)
+			if merged == nil {
+				merged = map[string]any{}
+			}
+			maps.Copy(merged, v.(map[string]any))
+			out[k] = merged
 		default:
 			out[k] = v
 		}
+	}
+	// The merge declares its properties in branch order: each schema's
+	// declared order, a property already declared keeping its place (#96).
+	aProps, _ := a["properties"].(map[string]any)
+	bProps, _ := b["properties"].(map[string]any)
+	if aProps != nil || bProps != nil {
+		var names []any
+		seen := map[string]bool{}
+		for _, name := range append(declaredOrder(a, aProps), declaredOrder(b, bProps)...) {
+			if !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+		out[ordered.Keyword] = names
 	}
 	return out, nil
 }

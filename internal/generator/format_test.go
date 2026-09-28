@@ -60,7 +60,7 @@ func TestStandardFormatsProperty(t *testing.T) {
 			gen := New(synth.New(42, fixedNow()))
 			schema := map[string]any{"type": "string", "format": format}
 			for i := 0; i < 30; i++ {
-				v, err := gen.Value(schema)
+				v, err := plainValue(gen, schema)
 				if err != nil {
 					t.Fatalf("Value error: %v", err)
 				}
@@ -88,7 +88,7 @@ func TestNonStandardFormatIgnored(t *testing.T) {
 			"city":   map[string]any{"type": "string", "format": "currency-code"},
 		},
 	}
-	v, err := gen.Value(schema)
+	v, err := plainValue(gen, schema)
 	if err != nil {
 		t.Fatalf("a non-standard format must not fail generation: %v", err)
 	}

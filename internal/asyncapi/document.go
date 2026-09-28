@@ -17,7 +17,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,6 +29,9 @@ type Document struct {
 	raw map[string]any
 	// major is the spec's AsyncAPI major version, 2 or 3.
 	major int
+	// orders holds the order each object of the spec is written in, which
+	// decoding into maps forgets (keyOrders).
+	orders keyOrder
 }
 
 // MessageType is one kind of message the spec declares for a Kafka topic. Its
@@ -77,7 +79,7 @@ func Load(path string) (*Document, error) {
 	if v, _ := raw["asyncapi"].(string); strings.HasPrefix(v, "3.") {
 		major = 3
 	}
-	return &Document{raw: raw, major: major}, nil
+	return &Document{raw: raw, major: major, orders: keyOrders(data, raw)}, nil
 }
 
 // unmarshalRaw decodes the spec bytes, choosing YAML or JSON by suffix, and
@@ -102,7 +104,6 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 	if err := json.Unmarshal(buf, &normalized); err != nil {
 		return nil, fmt.Errorf("parsing spec: the document is not an object")
 	}
-	recordPropertyOrder(data, normalized)
 	return normalized, nil
 }
 
@@ -366,10 +367,11 @@ func (d *Document) pointer(ref string) (any, error) {
 // $ref expanded in place, and every cycle preserved as a $ref into the
 // schema's own $defs, which holds the cycle's resolved target (ADR-0005,
 // amended by #73). Resolution walks each path with a stack of the refs being
-// expanded, so a diamond resolves in full and only a true cycle is kept.
+// expanded, so a diamond resolves in full and only a true cycle is kept. Each
+// schema object of the copy records the order the spec writes it in (stamp).
 func (d *Document) schema(node any) (map[string]any, error) {
 	r := &resolver{d: d, defs: map[string]any{}}
-	out, err := r.node(node, nil)
+	out, err := r.node(node, nil, inSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +398,7 @@ type resolver struct {
 	defs map[string]any
 }
 
-func (r *resolver) node(node any, stack []string) (any, error) {
+func (r *resolver) node(node any, stack []string, at place) (any, error) {
 	switch n := node.(type) {
 	case map[string]any:
 		if ref, ok := n["$ref"].(string); ok {
@@ -409,21 +411,22 @@ func (r *resolver) node(node any, stack []string) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			return r.node(target, append(stack, ref))
+			return r.node(target, append(stack, ref), at.referenced())
 		}
 		out := make(map[string]any, len(n))
 		for k, v := range n {
-			rv, err := r.node(v, stack)
+			rv, err := r.node(v, stack, at.child(k))
 			if err != nil {
 				return nil, err
 			}
 			out[k] = rv
 		}
+		r.d.stamp(n, out, at)
 		return out, nil
 	case []any:
 		out := make([]any, len(n))
 		for i, item := range n {
-			rv, err := r.node(item, stack)
+			rv, err := r.node(item, stack, at)
 			if err != nil {
 				return nil, err
 			}
@@ -463,7 +466,7 @@ func (r *resolver) define(ref string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	local, err := r.local(target)
+	local, err := r.local(target, inSchema)
 	if err != nil {
 		return "", err
 	}
@@ -472,7 +475,7 @@ func (r *resolver) define(ref string) (string, error) {
 }
 
 // local copies a node, rewriting each $ref in it to a local one.
-func (r *resolver) local(node any) (any, error) {
+func (r *resolver) local(node any, at place) (any, error) {
 	switch n := node.(type) {
 	case map[string]any:
 		if ref, ok := n["$ref"].(string); ok {
@@ -480,17 +483,18 @@ func (r *resolver) local(node any) (any, error) {
 		}
 		out := make(map[string]any, len(n))
 		for k, v := range n {
-			lv, err := r.local(v)
+			lv, err := r.local(v, at.child(k))
 			if err != nil {
 				return nil, err
 			}
 			out[k] = lv
 		}
+		r.d.stamp(n, out, at)
 		return out, nil
 	case []any:
 		out := make([]any, len(n))
 		for i, item := range n {
-			lv, err := r.local(item)
+			lv, err := r.local(item, at)
 			if err != nil {
 				return nil, err
 			}
@@ -513,72 +517,4 @@ func escapeToken(s string) string {
 
 func unescapeToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
-}
-
-// recordPropertyOrder records, on each schema object, the order its
-// properties are written in (#96), which decoding into maps forgets: generated
-// records then encode in that order. It reads the spec a second time as YAML
-// nodes, which keep their order, JSON being YAML too, and walks them beside
-// the decoded document. A spec it cannot read that way keeps sorted order.
-func recordPropertyOrder(data []byte, doc map[string]any) {
-	var root yaml.Node
-	if err := yaml.Unmarshal(data, &root); err != nil {
-		return
-	}
-	var walk func(n *yaml.Node, v any)
-	walk = func(n *yaml.Node, v any) {
-		switch n.Kind {
-		case yaml.DocumentNode:
-			if len(n.Content) == 1 {
-				walk(n.Content[0], v)
-			}
-		case yaml.AliasNode:
-			walk(n.Alias, v)
-		case yaml.MappingNode:
-			m, ok := v.(map[string]any)
-			if !ok {
-				return
-			}
-			for i := 0; i+1 < len(n.Content); i += 2 {
-				key, value := n.Content[i].Value, n.Content[i+1]
-				child, ok := m[key]
-				if !ok {
-					continue
-				}
-				walk(value, child)
-				if key == "properties" {
-					if names := mappingKeys(value); names != nil {
-						m[ordered.Keyword] = names
-					}
-				}
-			}
-		case yaml.SequenceNode:
-			list, ok := v.([]any)
-			if !ok || len(list) != len(n.Content) {
-				return
-			}
-			for i, item := range n.Content {
-				walk(item, list[i])
-			}
-		}
-	}
-	walk(&root, doc)
-}
-
-// mappingKeys lists a mapping node's keys in order, nil when it is no
-// mapping; a merge key is not a property.
-func mappingKeys(n *yaml.Node) []any {
-	for n.Kind == yaml.AliasNode {
-		n = n.Alias
-	}
-	if n.Kind != yaml.MappingNode {
-		return nil
-	}
-	names := []any{}
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		if key := n.Content[i].Value; key != "<<" {
-			names = append(names, key)
-		}
-	}
-	return names
 }

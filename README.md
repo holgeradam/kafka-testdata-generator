@@ -12,9 +12,10 @@ A CLI tool that reads an AsyncAPI specification, generates random test data conf
   explicit value avsc
 - Dry-run mode for console output without Kafka
 - Records read like their schema: fields come in the order the schema declares them - a JSON
-  Schema's `properties` as the spec writes them (through `$ref`s, `allOf`, `oneOf` and
-  `anyOf`), an avsc's `fields` - in Payloads, object Keys and Headers alike. Undeclared keys and
-  map entries follow, sorted
+  Schema's `properties` as the spec writes them (through `$ref`s and `allOf`, and for `oneOf`
+  and `anyOf` the branch each record was generated from), an avsc's `fields` - in Payloads,
+  object Keys and Headers alike. A literal the schema answers with (`example`, `examples`,
+  `const`, `enum`) keeps the order it is written in. Map entries follow, sorted
 - Deterministic generation with seed control
 - Rate limiting for controlled test data production
 

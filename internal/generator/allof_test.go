@@ -69,7 +69,7 @@ func TestAllOfProperty(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			gen := New(synth.New(42, fixedNow()))
 			for i := 0; i < 50; i++ {
-				v, err := gen.Value(fx.schema)
+				v, err := plainValue(gen, fx.schema)
 				if err != nil {
 					t.Fatalf("iteration %d: Value error: %v", i, err)
 				}
@@ -107,7 +107,7 @@ func TestAllOfConflict(t *testing.T) {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			gen := New(synth.New(42, fixedNow()))
-			_, err := gen.Value(c.schema)
+			_, err := plainValue(gen, c.schema)
 			assertUnsupported(t, err, "allOf", RootPath)
 		})
 	}

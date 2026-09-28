@@ -38,7 +38,7 @@ func draws(t *testing.T, schema map[string]any, n int) map[string]int {
 	gen := New(synth.New(7, fixedNow()))
 	counts := map[string]int{}
 	for i := 0; i < n; i++ {
-		v, err := gen.Value(schema)
+		v, err := plainValue(gen, schema)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -80,7 +80,7 @@ func TestTypeListOfOneType(t *testing.T) {
 		gen := New(synth.New(3, fixedNow()))
 		var out []any
 		for i := 0; i < 50; i++ {
-			v, err := gen.Value(schema)
+			v, err := plainValue(gen, schema)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +110,7 @@ func TestTypeListKeywordsPerDraw(t *testing.T) {
 	gen := New(synth.New(11, fixedNow()))
 	kinds := map[string]bool{}
 	for i := 0; i < 500; i++ {
-		v, err := gen.Value(schema)
+		v, err := plainValue(gen, schema)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -137,7 +137,7 @@ func TestTypeListRecursionEndsInNull(t *testing.T) {
 	}
 	gen := New(synth.New(1, fixedNow()))
 	for i := 0; i < 50; i++ {
-		v, err := gen.Value(schema)
+		v, err := plainValue(gen, schema)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
@@ -158,7 +158,7 @@ func TestTypeListAllOfIntersects(t *testing.T) {
 		t.Errorf("allOf of [string, null] and [integer, string]: %v, want strings only", counts)
 	}
 	gen := New(synth.New(1, fixedNow()))
-	_, err := gen.Value(map[string]any{"allOf": []any{map[string]any{"type": []any{"string", "null"}}, map[string]any{"type": "integer"}}})
+	_, err := plainValue(gen, map[string]any{"allOf": []any{map[string]any{"type": []any{"string", "null"}}, map[string]any{"type": "integer"}}})
 	assertUnsupported(t, err, "allOf", RootPath)
 }
 
@@ -173,7 +173,7 @@ func TestTypeListMalformed(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			gen := New(synth.New(1, fixedNow()))
-			_, err := gen.Value(map[string]any{"type": "object", "required": []any{"f"}, "properties": map[string]any{"f": map[string]any{"type": types}}})
+			_, err := plainValue(gen, map[string]any{"type": "object", "required": []any{"f"}, "properties": map[string]any{"f": map[string]any{"type": types}}})
 			assertUnsupported(t, err, "type", "$.f")
 		})
 	}
