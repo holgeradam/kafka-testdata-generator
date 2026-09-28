@@ -20,8 +20,8 @@ import (
 
 var _ wire.Format = Format{}
 
-func options() wire.Options {
-	return wire.Options{
+func options() buildOptions {
+	return buildOptions{
 		Synth:        synth.New(1, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 		MessageTypes: []asyncapi.MessageType{{Name: "Order", Payload: orderSchema()}},
 	}
@@ -51,7 +51,7 @@ func kindSchema(name string, required ...string) map[string]any {
 // schema the format bound at Build.
 func TestBuildGeneratesFromMessageSchema(t *testing.T) {
 	opts := options()
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestBuildGeneratesFromMessageSchema(t *testing.T) {
 // Key, and with -keyPath the Key is planted into the Payload.
 func TestBuildKey(t *testing.T) {
 	opts := options()
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestBuildKey(t *testing.T) {
 	}
 
 	opts.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestBuildKey(t *testing.T) {
 	}
 
 	opts.KeyPath = "orderId"
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 	for _, dry := range []bool{false, true} {
 		opts := options()
 		opts.DryRun = dry
-		parts, err := Format{}.Build(opts)
+		parts, err := build(opts)
 		if err != nil {
 			t.Fatalf("Build: %v", err)
 		}
@@ -122,23 +122,39 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 	}
 }
 
-// TestCheck proves JSON rejects the AVRO flags, naming the flag at fault.
-// -avro-schema never reaches it: it makes the Wire format avro.
-func TestCheck(t *testing.T) {
+// TestBuildFlagRules proves JSON's rules about its flags: the AVRO flags are
+// refused, naming the flag at fault - -avro-schema never reaches it, since it
+// makes the Wire format avro - and Key reuse needs a Key binding (#75). A rule
+// about the flags wins over what the spec declares and over a Planting.
+func TestBuildFlagRules(t *testing.T) {
+	bound := func(o buildOptions) buildOptions {
+		o.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
+		return o
+	}
+	with := func(change func(*buildOptions)) buildOptions {
+		o := options()
+		change(&o)
+		return o
+	}
+	unplantable := []asyncapi.TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/nope", Pointer: []string{"nope"}}}
 	cases := []struct {
 		name, flag string
-		opts       wire.Options
+		opts       buildOptions
 	}{
-		{"plain run", "", wire.Options{Topic: "orders"}},
-		{"key avsc", "avro-key-schema", wire.Options{AvroKeySchema: "k.avsc"}},
-		{"registry", "registry", wire.Options{RegistryURL: "http://localhost:8081"}},
+		{"plain run", "", options()},
+		{"key avsc", "avro-key-schema", with(func(o *buildOptions) { o.AvroKeySchema = "k.avsc" })},
+		{"registry", "registry", with(func(o *buildOptions) { o.RegistryURL = "http://localhost:8081" })},
+		{"key avsc before the spec", "avro-key-schema", with(func(o *buildOptions) { o.AvroKeySchema = "k.avsc"; o.MessageTypes = nil })},
+		{"key reuse without a binding", "records-per-key", with(func(o *buildOptions) { o.RecordsPerKey = 2 })},
+		{"key reuse with a binding", "", bound(with(func(o *buildOptions) { o.RecordsPerKey = 2 }))},
+		{"key reuse before a Planting", "records-per-key", with(func(o *buildOptions) { o.RecordsPerKey = 2; o.TopicParameters = unplantable })},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Format{}.Check(tc.opts)
+			_, err := build(tc.opts)
 			if tc.flag == "" {
 				if err != nil {
-					t.Fatalf("Check: %v, want nil", err)
+					t.Fatalf("Build: %v, want nil", err)
 				}
 				return
 			}
@@ -155,7 +171,7 @@ func TestCheck(t *testing.T) {
 func TestBuildRejectsKeyPathWithoutBinding(t *testing.T) {
 	opts := options()
 	opts.KeyPath = "orderId"
-	_, err := Format{}.Build(opts)
+	_, err := build(opts)
 	var we *wire.Error
 	if !errors.As(err, &we) || we.Flag != "keyPath" {
 		t.Fatalf("err = %v, want a *wire.Error on -keyPath", err)
@@ -163,17 +179,17 @@ func TestBuildRejectsKeyPathWithoutBinding(t *testing.T) {
 }
 
 // mixOptions builds options for a Kafka topic with the given Message types.
-func mixOptions(seed int64, types ...asyncapi.MessageType) wire.Options {
-	return wire.Options{
+func mixOptions(seed int64, types ...asyncapi.MessageType) buildOptions {
+	return buildOptions{
 		Synth:        synth.New(seed, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
 		MessageTypes: types,
 	}
 }
 
 // kinds generates n Payloads and returns their kind fields in order.
-func kinds(t *testing.T, opts wire.Options, n int) []string {
+func kinds(t *testing.T, opts buildOptions, n int) []string {
 	t.Helper()
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -216,7 +232,7 @@ func TestBuildMixesMessageTypes(t *testing.T) {
 // type generates exactly as before the mix: no pick is drawn from the stream.
 func TestBuildSingleTypeDrawsNothingExtra(t *testing.T) {
 	opts := mixOptions(3, asyncapi.MessageType{Name: "Order", Payload: orderSchema()})
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -247,7 +263,7 @@ func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
 	}
 	for name, types := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := Format{}.Build(mixOptions(1, types...))
+			_, err := build(mixOptions(1, types...))
 			var we *wire.Error
 			if !errors.As(err, &we) || we.Flag != "topic" {
 				t.Fatalf("err = %v, want a *wire.Error on -topic", err)
@@ -264,7 +280,7 @@ func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
 		{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
 		{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: map[string]any{"type": "string", "format": "uuid"}},
 	}
-	parts, err := Format{}.Build(mixOptions(1, same...))
+	parts, err := build(mixOptions(1, same...))
 	if err != nil {
 		t.Fatalf("identical Key bindings: Build = %v, want nil", err)
 	}
@@ -282,7 +298,7 @@ func TestBuildChecksKeyPathInEveryType(t *testing.T) {
 		asyncapi.MessageType{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: key},
 	)
 	opts.KeyPath = "orderId"
-	_, err := Format{}.Build(opts)
+	_, err := build(opts)
 	var we *wire.Error
 	var pe *planting.PathError
 	if !errors.As(err, &we) || we.Flag != "keyPath" || !errors.As(err, &pe) {
@@ -320,7 +336,7 @@ func TestBuildPlantsTopicParameters(t *testing.T) {
 		asyncapi.MessageType{Name: "OrderUpdated", Payload: regionSchema("updated")},
 	)
 	opts.TopicParameters = []asyncapi.TopicParameter{regionParameter("eu"), {Name: "env", Value: "prod"}}
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -378,7 +394,7 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 			opts := mixOptions(1, c.types...)
 			opts.TopicParameters = []asyncapi.TopicParameter{c.param}
 			opts.KeyPath = c.keyPath
-			_, err := Format{}.Build(opts)
+			_, err := build(opts)
 			var we *wire.Error
 			if !errors.As(err, &we) || we.Flag != c.flag {
 				t.Fatalf("err = %v, want a *wire.Error on -%s", err, c.flag)
@@ -399,7 +415,7 @@ func TestBuildRejectsParametersPlantingTogether(t *testing.T) {
 		regionParameter("eu"),
 		{Name: "area", Value: "us", Location: "$message.payload#/region", Pointer: []string{"region"}},
 	}
-	_, err := Format{}.Build(opts)
+	_, err := build(opts)
 	want := "Topic parameters region and area plant into the same field ($message.payload#/region and $message.payload#/region)"
 	if err == nil || err.Error() != want {
 		t.Errorf("err = %v, want %q", err, want)
@@ -425,7 +441,7 @@ func TestBuildGeneratesHeaders(t *testing.T) {
 		{Name: "OrderCreated", Payload: kindSchema("created"), Headers: tenantHeaders("acme")},
 		{Name: "OrderPaid", Payload: kindSchema("paid")},
 	}
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -468,7 +484,7 @@ func TestEncoderFollowsDeclaredOrder(t *testing.T) {
 		{Name: "A", Payload: schema("zeta", "alpha"), KeyBinding: schema("tenant", "id")},
 		{Name: "B", Payload: schema("mid", "beta", "zulu"), KeyBinding: schema("tenant", "id")},
 	}
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

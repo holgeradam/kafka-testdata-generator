@@ -18,23 +18,21 @@ import (
 type Format interface {
 	// Name is the -format value that selects the adapter.
 	Name() string
-	// Check applies the format's rules about its flags, judged against what
-	// the spec declares. It runs once the spec is read and before the
-	// format's own files are, so every field of opts but Synth is set.
-	Check(opts Options) error
-	// Build reads the format's own files and wires the run from them and
-	// the spec. It performs no network I/O: the Encoder it returns connects
-	// when called.
-	Build(opts Options) (*Parts, error)
+	// Build applies the format's rules about its flags, judged against what
+	// the spec declares for the Kafka topic, then reads the format's own
+	// files and wires the run from them, the spec and the run's one
+	// Synthesizer (ADR-0008 decision 4). Every rule about the flags
+	// themselves is judged before any of the format's files is read, so a
+	// conflicting or missing flag wins over a broken file. Build performs no
+	// network I/O: the Encoder it returns connects when called.
+	Build(flags Flags, topic *asyncapi.Topic, s *synth.Synthesizer) (*Parts, error)
 }
 
-// Options is what a run hands its Wire format: the relevant flags, what the
-// AsyncAPI spec declares for the Kafka topic, and, at Build, the Synthesizer
-// shared by Payload and Key.
-type Options struct {
+// Flags are the options a run hands its Wire format, as given.
+type Flags struct {
 	// DryRun is a property of the run; each format decides what it means.
 	DryRun bool
-	// Topic is the Kafka topic produced to.
+	// Topic is -topic, the Kafka topic produced to.
 	Topic string
 	// KeyPath is -keyPath; empty when the Key is not planted.
 	KeyPath string
@@ -45,20 +43,6 @@ type Options struct {
 	RegistryURL   string
 	AvroSchema    string
 	AvroKeySchema string
-
-	// Synth is the run's one Synthesizer (ADR-0008 decision 4).
-	Synth *synth.Synthesizer
-	// MessageTypes are the Message types the spec declares for the Kafka
-	// topic, each with a self-contained Payload schema and Key binding, all
-	// in one payload format. How they are used is the format's business:
-	// JSON mixes them, AVRO reads its avsc from them when they are Avro, and
-	// follows -avro-schema instead when they are not.
-	MessageTypes []asyncapi.MessageType
-	// TopicParameters are the values -topic fills a templated address with.
-	// Each one with a location is planted into every Payload or Headers, in
-	// either format, once Plant has checked that the location is guaranteed
-	// and holds the value (#83, #93).
-	TopicParameters []asyncapi.TopicParameter
 }
 
 // Parts is a run as its Wire format wires it.

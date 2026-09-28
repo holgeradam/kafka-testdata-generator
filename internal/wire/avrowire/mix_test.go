@@ -29,14 +29,14 @@ const paidAvsc = `{"type":"record","name":"OrderPaid","namespace":"com.acme","fi
 
 // mixOptions are the options of a run whose spec declares both Message types
 // in Avro, each with the given Key binding ("" for none).
-func mixOptions(seed int64, keys ...string) wire.Options {
+func mixOptions(seed int64, keys ...string) buildOptions {
 	types := []asyncapi.MessageType{{Name: "OrderCreated", Avsc: []byte(createdAvsc)}, {Name: "OrderPaid", Avsc: []byte(paidAvsc)}}
 	for i, k := range keys {
 		if k != "" {
 			types[i].KeyAvsc = []byte(k)
 		}
 	}
-	return wire.Options{Topic: "orders", DryRun: true, Synth: synth.New(seed, testNow()), MessageTypes: types}
+	return buildOptions{Topic: "orders", DryRun: true, Synth: synth.New(seed, testNow()), MessageTypes: types}
 }
 
 // TestBuildMixesAvroTypes proves several Avro Message types are mixed per
@@ -45,7 +45,7 @@ func mixOptions(seed int64, keys ...string) wire.Options {
 // sequence.
 func TestBuildMixesAvroTypes(t *testing.T) {
 	sequence := func(seed int64) []int {
-		parts, err := Format{}.Build(mixOptions(seed))
+		parts, err := build(mixOptions(seed))
 		if err != nil {
 			t.Fatalf("Build: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestBuildMixesAvroTypes(t *testing.T) {
 func TestBuildChecksEveryAvroType(t *testing.T) {
 	opts := mixOptions(1, `"string"`, `"string"`)
 	opts.KeyPath = "id"
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -90,19 +90,19 @@ func TestBuildChecksEveryAvroType(t *testing.T) {
 		t.Fatalf("an agreed Avro Key binding and -keyPath: Keyed %v, %+v, %v; want the Key planted", parts.Keyed, g, err)
 	}
 	opts.KeyPath = "amount"
-	if _, err := (Format{}).Build(opts); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
+	if _, err := build(opts); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
 		t.Errorf("err = %v, want the path refused in Message type OrderCreated", err)
 	}
 
 	opts = mixOptions(1)
 	opts.TopicParameters = []asyncapi.TopicParameter{{Name: "tier", Value: "gold", Location: "$message.payload#/amount", Pointer: []string{"amount"}}}
-	if _, err := (Format{}).Build(opts); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
+	if _, err := build(opts); err == nil || !strings.Contains(err.Error(), "in Message type OrderCreated") {
 		t.Errorf("err = %v, want the location refused in Message type OrderCreated", err)
 	}
 
 	opts = mixOptions(1)
 	opts.TopicParameters = []asyncapi.TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/region", Pointer: []string{"region"}}}
-	parts, err = Format{}.Build(opts)
+	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -113,12 +113,12 @@ func TestBuildChecksEveryAvroType(t *testing.T) {
 		}
 	}
 
-	_, err = Format{}.Build(mixOptions(1, `"string"`, `"long"`))
+	_, err = build(mixOptions(1, `"string"`, `"long"`))
 	var we *wire.Error
 	if !errors.As(err, &we) || we.Flag != "topic" || !strings.Contains(err.Error(), "different Key bindings (OrderCreated vs OrderPaid)") {
 		t.Errorf("err = %v, want differing Key bindings refused", err)
 	}
-	_, err = Format{}.Build(mixOptions(1, `"string"`))
+	_, err = build(mixOptions(1, `"string"`))
 	if err == nil || !strings.Contains(err.Error(), "OrderPaid (none)") {
 		t.Errorf("err = %v, want a missing Key binding refused", err)
 	}
@@ -129,7 +129,7 @@ func TestBuildChecksEveryAvroType(t *testing.T) {
 func TestBuildRefusesAvroRedefinition(t *testing.T) {
 	opts := mixOptions(1)
 	opts.MessageTypes[1].Avsc = []byte(strings.Replace(paidAvsc, `"city"`, `"town"`, 1))
-	_, err := Format{}.Build(opts)
+	_, err := build(opts)
 	var we *wire.Error
 	if !errors.As(err, &we) || we.Flag != "topic" || !strings.Contains(err.Error(), "named type com.acme.Address is defined differently in Message types OrderCreated and OrderPaid") {
 		t.Errorf("err = %v, want the redefinition refused", err)
@@ -139,7 +139,7 @@ func TestBuildRefusesAvroRedefinition(t *testing.T) {
 // TestDryRunRendersBranchAlone proves a Dry run shows each record in the
 // Avro JSON encoding of its own Message type, without the union's wrapper.
 func TestDryRunRendersBranchAlone(t *testing.T) {
-	parts, err := Format{}.Build(mixOptions(1))
+	parts, err := build(mixOptions(1))
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestAvroEncoderRegistersUnion(t *testing.T) {
 	opts := mixOptions(1)
 	opts.DryRun = false
 	opts.RegistryURL = srv.URL
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestAvroEncoderRegistersUnion(t *testing.T) {
 func TestBuildGeneratesHeadersUnderAvro(t *testing.T) {
 	opts := mixOptions(1)
 	opts.MessageTypes[1].Headers = map[string]any{"type": "object", "required": []any{"tenant"}, "properties": map[string]any{"tenant": map[string]any{"const": "acme"}}}
-	parts, err := Format{}.Build(opts)
+	parts, err := build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestBuildGeneratesHeadersUnderAvro(t *testing.T) {
 
 	file := options(t)
 	file.MessageTypes[0].Headers = opts.MessageTypes[1].Headers
-	parts, err = Format{}.Build(file)
+	parts, err = build(file)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
