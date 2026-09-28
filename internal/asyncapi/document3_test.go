@@ -28,8 +28,8 @@ func TestV3ExampleMatchesV2(t *testing.T) {
 	if !reflect.DeepEqual(v2.Payload, v3.Payload) {
 		t.Errorf("payloads differ:\n2.x: %v\n3.0: %v", v2.Payload, v3.Payload)
 	}
-	if !reflect.DeepEqual(v2.KeyBinding, v3.KeyBinding) {
-		t.Errorf("Key bindings differ: 2.x %v, 3.0 %v", v2.KeyBinding, v3.KeyBinding)
+	if !reflect.DeepEqual(v2.Key, v3.Key) {
+		t.Errorf("Key bindings differ: 2.x %v, 3.0 %v", v2.Key, v3.Key)
 	}
 	if v3.Name != "OrderCreated" {
 		t.Errorf("name = %s, want OrderCreated", v3.Name)
@@ -117,11 +117,11 @@ components:
 		t.Errorf("name = %s, want the component key OrderCreated", mt.Name)
 	}
 	id := map[string]any{"type": "string", "format": "uuid"}
-	if !reflect.DeepEqual(mt.KeyBinding, id) {
-		t.Errorf("key binding = %v, want %v", mt.KeyBinding, id)
+	if !reflect.DeepEqual(jsonKey(mt), id) {
+		t.Errorf("key binding = %v, want %v", jsonKey(mt), id)
 	}
 	want := map[string]any{"type": "object", "properties": map[string]any{"id": id}}
-	if got := withoutOrder(mt.Payload); !reflect.DeepEqual(got, want) {
+	if got := withoutOrder(jsonPayload(mt)); !reflect.DeepEqual(got, want) {
 		t.Errorf("payload = %v, want %v", got, want)
 	}
 }
@@ -202,10 +202,10 @@ components:
 		t.Errorf("name = %s, want the message's own Own", mt.Name)
 	}
 	want := map[string]any{"type": "string", "maxLength": 5.0, "minLength": 3.0, "pattern": "^a"}
-	if !reflect.DeepEqual(mt.KeyBinding, want) {
-		t.Errorf("key binding = %v, want %v", mt.KeyBinding, want)
+	if !reflect.DeepEqual(jsonKey(mt), want) {
+		t.Errorf("key binding = %v, want %v", jsonKey(mt), want)
 	}
-	note := mt.Payload["properties"].(map[string]any)["note"].(map[string]any)
+	note := jsonPayload(mt)["properties"].(map[string]any)["note"].(map[string]any)
 	if v, ok := note["default"]; !ok || v != nil {
 		t.Errorf("note = %v, want its default: null kept", note)
 	}

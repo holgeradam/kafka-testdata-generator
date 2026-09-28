@@ -30,10 +30,10 @@ const paidAvsc = `{"type":"record","name":"OrderPaid","namespace":"com.acme","fi
 // mixOptions are the options of a run whose spec declares both Message types
 // in Avro, each with the given Key binding ("" for none).
 func mixOptions(seed int64, keys ...string) buildOptions {
-	types := []asyncapi.MessageType{{Name: "OrderCreated", Avsc: []byte(createdAvsc)}, {Name: "OrderPaid", Avsc: []byte(paidAvsc)}}
+	types := []asyncapi.MessageType{{Name: "OrderCreated", Payload: asyncapi.Avsc(createdAvsc)}, {Name: "OrderPaid", Payload: asyncapi.Avsc(paidAvsc)}}
 	for i, k := range keys {
 		if k != "" {
-			types[i].KeyAvsc = []byte(k)
+			types[i].Key = asyncapi.Avsc(k)
 		}
 	}
 	return buildOptions{Topic: "orders", DryRun: true, Synth: synth.New(seed, testNow()), MessageTypes: types}
@@ -128,7 +128,7 @@ func TestBuildChecksEveryAvroType(t *testing.T) {
 // define differently stops the run before any record exists.
 func TestBuildRefusesAvroRedefinition(t *testing.T) {
 	opts := mixOptions(1)
-	opts.MessageTypes[1].Avsc = []byte(strings.Replace(paidAvsc, `"city"`, `"town"`, 1))
+	opts.MessageTypes[1].Payload = asyncapi.Avsc(strings.Replace(paidAvsc, `"city"`, `"town"`, 1))
 	_, err := build(opts)
 	var we *wire.Error
 	if !errors.As(err, &we) || we.Flag != "topic" || !strings.Contains(err.Error(), "named type com.acme.Address is defined differently in Message types OrderCreated and OrderPaid") {

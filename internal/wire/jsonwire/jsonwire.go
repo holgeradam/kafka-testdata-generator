@@ -5,6 +5,7 @@ package jsonwire
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
@@ -43,10 +44,16 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 	if len(types) == 0 {
 		return nil, &wire.Error{Flag: "topic", Detail: "the spec declares no Message type for the Kafka topic"}
 	}
-	keyBinding, err := wire.SharedKeyBinding(types, func(mt asyncapi.MessageType) map[string]any { return mt.KeyBinding })
+	// The Run plan picks JSON only for a Kafka topic whose Message schemas
+	// are JSON Schema, so each Payload and the Key are the JSONSchema case.
+	if topic.Format != asyncapi.JSONSchemaFormat {
+		return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("the Kafka topic's payloads are %s, which the json Wire format does not generate", topic.Format)}
+	}
+	shared, err := wire.SharedKeyBinding(types)
 	if err != nil {
 		return nil, err
 	}
+	keyBinding, _ := shared.(asyncapi.JSONSchema)
 	if flags.KeyPath != "" && keyBinding == nil {
 		return nil, &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
 	}
@@ -59,12 +66,13 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 	gen := generator.New(s)
 	bound := make([]wire.Bound[encoding], len(types))
 	for i, mt := range types {
+		payload := mt.Payload.(asyncapi.JSONSchema)
 		bound[i] = wire.Bound[encoding]{
 			Name:     mt.Name,
-			Payload:  &boundGenerator{gen: gen, schema: mt.Payload},
-			Walk:     generator.NewWalk(mt.Payload, keyBinding),
+			Payload:  &boundGenerator{gen: gen, schema: payload},
+			Walk:     generator.NewWalk(payload, keyBinding),
 			Headers:  mt.Headers,
-			Encoding: encoding{payload: mt.Payload},
+			Encoding: encoding{payload: payload},
 		}
 	}
 	if err := wire.Plant(bound, flags.KeyPath, topic.Parameters); err != nil {

@@ -25,7 +25,7 @@ func payloadSchema(doc *Document, topic string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return mt.Payload, nil
+	return jsonPayload(mt), nil
 }
 
 func keyBinding(doc *Document, topic string) (map[string]any, error) {
@@ -33,7 +33,7 @@ func keyBinding(doc *Document, topic string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return mt.KeyBinding, nil
+	return jsonKey(mt), nil
 }
 
 func onlyType(doc *Document, topic string) (MessageType, error) {

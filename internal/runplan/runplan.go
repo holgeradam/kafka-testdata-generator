@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
@@ -194,13 +193,19 @@ func Plan(args []string) (*Run, error) {
 		return nil, &Error{Flag: "spec", Detail: "loading spec", Err: err}
 	}
 	topic, err := doc.Topic(*f.topic)
-	if err != nil {
+	var mixed *asyncapi.MixedFormatsError
+	switch {
+	case errors.As(err, &mixed):
+		// A Kafka topic is produced in one Wire format, so its Message
+		// types must share one payload format.
+		return nil, &Error{Flag: "topic", Err: err}
+	case err != nil:
 		return nil, &Error{Flag: "topic", Detail: "reading the spec", Err: err}
 	}
 
 	// The Wire format follows from the spec and the flags; the format then
 	// owns the rules about its flags, which it judges against the spec.
-	if run.Format, err = wireFormat(f, run.Topic, topic.MessageTypes); err != nil {
+	if run.Format, err = wireFormat(f, topic); err != nil {
 		return nil, err
 	}
 	run.warnDisregardedOptions(f)
@@ -222,25 +227,13 @@ func Plan(args []string) (*Run, error) {
 // wireFormat infers the run's Wire format from where the Payload's schema
 // comes from (#84 decisions 2, 3 and 9; ADR-0011): Avro payloads in the spec,
 // or -avro-schema, mean avro, otherwise json. -format only confirms it, and
-// stops the run when it disagrees; it never converts. A Kafka topic is
-// produced in one Wire format, so its Message types must share one payload
-// format.
-func wireFormat(f *flags, topic string, types []asyncapi.MessageType) (string, error) {
-	var avroTypes, jsonTypes []string
-	for _, mt := range types {
-		if mt.Avsc != nil {
-			avroTypes = append(avroTypes, mt.Name)
-		} else {
-			jsonTypes = append(jsonTypes, mt.Name)
-		}
-	}
+// stops the run when it disagrees; it never converts.
+func wireFormat(f *flags, topic *asyncapi.Topic) (string, error) {
 	declared := f.format.format
 	switch {
-	case len(avroTypes) > 0 && len(jsonTypes) > 0:
-		return "", &Error{Flag: "topic", Detail: fmt.Sprintf("Kafka topic %q mixes payload formats: Avro (%s) and JSON Schema (%s); a Kafka topic is produced in one Wire format", topic, strings.Join(avroTypes, ", "), strings.Join(jsonTypes, ", "))}
-	case len(avroTypes) > 0:
+	case topic.Format == asyncapi.AvroFormat:
 		if declared == "json" {
-			return "", &Error{Usage: true, Flag: "format", Detail: fmt.Sprintf("payload of %s is Avro, so the Wire format is avro; drop -format json", avroTypes[0])}
+			return "", &Error{Usage: true, Flag: "format", Detail: fmt.Sprintf("payload of %s is Avro, so the Wire format is avro; drop -format json", topic.MessageTypes[0].Name)}
 		}
 		return "avro", nil
 	case *f.avroSchema != "":

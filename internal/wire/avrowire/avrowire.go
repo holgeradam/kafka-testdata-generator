@@ -31,15 +31,15 @@ func (Format) Name() string { return "avro" }
 // from -avro-key-schema, never both, and -keyPath and Key reuse need one.
 // Producing needs a registry. The Kafka message binding's registry fields
 // must be ones the Confluent framing honours (#84 decision 8).
-func checkFlags(flags wire.Flags, types []asyncapi.MessageType) error {
-	spec := specAvro(types)
+func checkFlags(flags wire.Flags, topic *asyncapi.Topic) error {
+	spec := specAvro(topic)
 	switch {
 	case len(spec) > 0 && flags.AvroSchema != "":
 		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: fmt.Sprintf("the spec declares the Payload's avsc (payload of %s is Avro) and -avro-schema gives another; drop -avro-schema, so the run has one source of truth", spec[0].Name)}
 	case len(spec) == 0 && flags.AvroSchema == "":
 		return &wire.Error{Usage: true, Flag: "avro-schema", Detail: "-avro-schema is required with -format avro when the spec's payloads are JSON Schema"}
 	}
-	keyed := slices.IndexFunc(spec, func(mt asyncapi.MessageType) bool { return mt.KeyAvsc != nil })
+	keyed := slices.IndexFunc(spec, func(mt asyncapi.MessageType) bool { return mt.Key != nil })
 	if keyed >= 0 && flags.AvroKeySchema != "" {
 		return &wire.Error{Usage: true, Flag: "avro-key-schema", Detail: fmt.Sprintf("the spec declares the Key's avsc (bindings.kafka.key of %s) and -avro-key-schema gives another; drop -avro-key-schema, so the run has one source of truth", spec[keyed].Name)}
 	}
@@ -52,7 +52,7 @@ func checkFlags(flags wire.Flags, types []asyncapi.MessageType) error {
 	if !flags.DryRun && flags.RegistryURL == "" {
 		return &wire.Error{Usage: true, Flag: "registry", Detail: "-registry is required to produce with the avro Wire format"}
 	}
-	for _, mt := range types {
+	for _, mt := range topic.MessageTypes {
 		if err := checkRegistry(mt); err != nil {
 			return err
 		}
@@ -86,16 +86,13 @@ func checkRegistry(mt asyncapi.MessageType) error {
 }
 
 // specAvro returns the Message types whose payloads the spec declares in
-// Avro. The Run plan has already refused a Kafka topic mixing payload
-// formats, so these are all of them or none.
-func specAvro(types []asyncapi.MessageType) []asyncapi.MessageType {
-	var out []asyncapi.MessageType
-	for _, mt := range types {
-		if mt.Avsc != nil {
-			out = append(out, mt)
-		}
+// Avro: all of the Kafka topic's, or none, since the spec reader refuses a
+// Kafka topic mixing payload formats. Their Payload and Key are the Avsc case.
+func specAvro(topic *asyncapi.Topic) []asyncapi.MessageType {
+	if topic.Format != asyncapi.AvroFormat {
+		return nil
 	}
-	return out
+	return topic.MessageTypes
 }
 
 // Build parses each value avsc, and the key avsc when the run has one, up
@@ -114,10 +111,10 @@ func specAvro(types []asyncapi.MessageType) []asyncapi.MessageType {
 // every Topic parameter must hold in each of them. Every rule about the flags
 // is judged first, before any avsc is read (checkFlags).
 func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesizer) (*wire.Parts, error) {
-	if err := checkFlags(flags, topic.MessageTypes); err != nil {
+	if err := checkFlags(flags, topic); err != nil {
 		return nil, err
 	}
-	spec := specAvro(topic.MessageTypes)
+	spec := specAvro(topic)
 	values, err := valueAvscs(flags, spec)
 	if err != nil {
 		return nil, err
@@ -179,11 +176,8 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 	// generating one would silently violate the avsc key contract, so it is
 	// ignored, out loud. The spec's Message types play no other part: the
 	// avsc governs the Payload.
-	for _, mt := range topic.MessageTypes {
-		if mt.KeyBinding != nil {
-			parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
-			break
-		}
+	if topic.Format == asyncapi.JSONSchemaFormat && slices.ContainsFunc(topic.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Key != nil }) {
+		parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
 	}
 	return parts, nil
 }
@@ -209,7 +203,7 @@ func valueAvscs(flags wire.Flags, spec []asyncapi.MessageType) ([]*avro.Schema, 
 	}
 	values := make([]*avro.Schema, len(spec))
 	for i, mt := range spec {
-		value, err := avro.Parse(mt.Avsc)
+		value, err := avro.Parse(mt.Payload.(asyncapi.Avsc))
 		if err != nil {
 			return nil, &wire.Error{Flag: "topic", Detail: "payload of " + mt.Name, Err: err}
 		}
@@ -224,12 +218,12 @@ func valueAvscs(flags wire.Flags, spec []asyncapi.MessageType) ([]*avro.Schema, 
 // same Key binding, or none (#34 decision 3).
 func keyAvsc(flags wire.Flags, spec []asyncapi.MessageType) (*avro.Schema, error) {
 	if len(spec) > 0 {
-		shared, err := wire.SharedKeyBinding(spec, func(mt asyncapi.MessageType) []byte { return mt.KeyAvsc })
+		shared, err := wire.SharedKeyBinding(spec)
 		if err != nil {
 			return nil, err
 		}
 		if shared != nil {
-			key, err := avro.Parse(shared)
+			key, err := avro.Parse(shared.(asyncapi.Avsc))
 			if err != nil {
 				return nil, &wire.Error{Flag: "topic", Detail: "bindings.kafka.key of " + spec[0].Name, Err: err}
 			}
@@ -257,7 +251,7 @@ type union struct {
 func newUnion(spec []asyncapi.MessageType) (*union, error) {
 	members := make([]unionMember, len(spec))
 	for i, mt := range spec {
-		members[i] = unionMember{name: mt.Name, avsc: mt.Avsc}
+		members[i] = unionMember{name: mt.Name, avsc: mt.Payload.(asyncapi.Avsc)}
 	}
 	plan, err := planUnion(members)
 	if err != nil {

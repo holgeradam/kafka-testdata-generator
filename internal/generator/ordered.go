@@ -6,12 +6,6 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
-// OrderKeyword is the extension keyword under which the spec reader records
-// the order a schema declares its properties in (#96): a decoded map forgets
-// the order its keys were written in. Validators ignore unknown keywords, so
-// it changes nothing but the order records encode in.
-const OrderKeyword = "x-kafka-testdata-generator-property-order"
-
 // Ordered returns value ready for JSON encoding with every object's keys in
 // the order its schema declares its properties, at every level: nested
 // objects, array items, through $refs into the schema's $defs, and through
@@ -128,7 +122,7 @@ func (o orderer) branches(schema map[string]any) []map[string]any {
 func declaredOrder(schema, props map[string]any) []string {
 	var names []string
 	listed := map[string]bool{}
-	recorded, _ := schema[OrderKeyword].([]any)
+	recorded, _ := schema[ordered.Keyword].([]any)
 	for _, n := range recorded {
 		name, ok := n.(string)
 		if _, declared := props[name]; ok && declared && !listed[name] {

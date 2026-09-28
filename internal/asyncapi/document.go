@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"gopkg.in/yaml.v3"
 )
 
@@ -39,27 +39,19 @@ type MessageType struct {
 	// Name is the message's name, else its component key, else where it is
 	// declared, e.g. "orders publish oneOf[1]".
 	Name string
-	// Payload is the JSON Schema the Payload honours; nil when the payload is
-	// Avro, and Avsc holds it.
-	Payload map[string]any
-	// KeyBinding is the bindings.kafka.key schema, nil when none is declared
-	// or the payload is Avro.
-	KeyBinding map[string]any
-	// Avsc is the Payload's avsc when the message declares an Avro
-	// schemaFormat (#84), as JSON with its $refs expanded; nil for a JSON
-	// Schema payload.
-	Avsc []byte
-	// KeyAvsc is bindings.kafka.key read as an avsc beside an Avro payload
-	// (#84 decision 7); nil when none is declared or the payload is JSON
-	// Schema.
-	KeyAvsc []byte
+	// Payload is the Message schema the Payload honours: a JSONSchema, or an
+	// Avsc when the message declares an Avro schemaFormat (#84).
+	Payload Schema
+	// Key is the bindings.kafka.key schema, read in the Payload's format
+	// (#84 decision 7); nil when none is declared.
+	Key Schema
 	// Registry is what the Kafka message binding declares about the schema
 	// registry, for the AVRO Wire format to judge (#84 decision 8).
 	Registry RegistryBinding
 	// Headers is the JSON Schema of the message's headers, an object whose
 	// properties are the Kafka record headers (#85); nil when none are
 	// declared.
-	Headers map[string]any
+	Headers JSONSchema
 }
 
 // RegistryBinding holds the schema-registry fields of a Kafka message binding
@@ -116,6 +108,9 @@ func unmarshalRaw(data []byte, path string) (map[string]any, error) {
 
 // Topic is what the spec declares for one Kafka topic.
 type Topic struct {
+	// Format is the payload format every Message type of the Kafka topic
+	// declares its Message schema in; a topic mixing formats is refused.
+	Format PayloadFormat
 	// MessageTypes are the Message types of the Kafka topic, in a stable
 	// order. A component message referenced more than once is one.
 	MessageTypes []MessageType
@@ -227,28 +222,36 @@ func (d *Document) messageType(msg map[string]any, name string, payloadNode, for
 		return MessageType{}, err
 	}
 
-	if pf == avroSchema {
-		if mt.Avsc, err = d.avsc(payloadNode); err != nil {
+	if pf == AvroFormat {
+		avsc, err := d.avsc(payloadNode)
+		if err != nil {
 			return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
 		}
+		mt.Payload = Avsc(avsc)
 		if kafka != nil && kafka["key"] != nil {
-			if mt.KeyAvsc, err = d.avsc(kafka["key"]); err != nil {
+			key, err := d.avsc(kafka["key"])
+			if err != nil {
 				return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
 			}
+			mt.Key = Avsc(key)
 		}
 		return mt, nil
 	}
 
-	if mt.Payload, err = d.schema(payloadNode); err != nil {
+	payload, err := d.schema(payloadNode)
+	if err != nil {
 		return MessageType{}, fmt.Errorf("message %s: payload: %w", name, err)
 	}
+	mt.Payload = JSONSchema(payload)
 	if kafka != nil && kafka["key"] != nil {
 		if _, ok := kafka["key"].(map[string]any); !ok {
 			return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key must be a schema object", name)
 		}
-		if mt.KeyBinding, err = d.schema(kafka["key"]); err != nil {
+		key, err := d.schema(kafka["key"])
+		if err != nil {
 			return MessageType{}, fmt.Errorf("message %s: bindings.kafka.key: %w", name, err)
 		}
+		mt.Key = JSONSchema(key)
 	}
 	return mt, nil
 }
@@ -257,7 +260,7 @@ func (d *Document) messageType(msg map[string]any, name string, payloadNode, for
 // be an object: each of its properties is one Kafka record header (#85). A
 // 3.0 message may declare it as a Multi Format Schema, which must be JSON
 // Schema; in 2.x, schemaFormat speaks of the payload only.
-func (d *Document) headers(msg map[string]any, name string) (map[string]any, error) {
+func (d *Document) headers(msg map[string]any, name string) (JSONSchema, error) {
 	node := msg["headers"]
 	if node == nil {
 		return nil, nil
@@ -272,7 +275,7 @@ func (d *Document) headers(msg map[string]any, name string) (map[string]any, err
 				return nil, fmt.Errorf("message %s: headers declare a schemaFormat but no schema", name)
 			}
 			f, _ := format.(string)
-			if pf, ok := readsSchemaFormat(f, d.major); !ok || pf != jsonSchema {
+			if pf, ok := readsSchemaFormat(f, d.major); !ok || pf != JSONSchemaFormat {
 				return nil, fmt.Errorf("headers of %s are %v; the tool reads headers in JSON Schema only", name, format)
 			}
 			node = resolved["schema"]
@@ -545,7 +548,7 @@ func recordPropertyOrder(data []byte, doc map[string]any) {
 				walk(value, child)
 				if key == "properties" {
 					if names := mappingKeys(value); names != nil {
-						m[generator.OrderKeyword] = names
+						m[ordered.Keyword] = names
 					}
 				}
 			}

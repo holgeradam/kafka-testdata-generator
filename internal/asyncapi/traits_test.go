@@ -70,8 +70,8 @@ channels:
 		t.Errorf("name = %s, want the last trait's Second", mt.Name)
 	}
 	want := map[string]any{"type": "string", "maxLength": 9.0, "pattern": "^a"}
-	if !reflect.DeepEqual(mt.KeyBinding, want) {
-		t.Errorf("key binding = %v, want %v", mt.KeyBinding, want)
+	if !reflect.DeepEqual(jsonKey(mt), want) {
+		t.Errorf("key binding = %v, want %v", jsonKey(mt), want)
 	}
 }
 

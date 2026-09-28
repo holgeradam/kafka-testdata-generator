@@ -2,6 +2,7 @@ package generator
 
 import (
 	"encoding/json"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"testing"
 )
 
@@ -14,7 +15,7 @@ func orderOf(props ...any) map[string]any {
 		properties[props[i].(string)] = props[i+1]
 		names = append(names, props[i])
 	}
-	return map[string]any{"type": "object", "properties": properties, OrderKeyword: names}
+	return map[string]any{"type": "object", "properties": properties, ordered.Keyword: names}
 }
 
 func encoded(t *testing.T, schema map[string]any, value any) string {
