@@ -8,6 +8,7 @@ import (
 	"github.com/confluentinc/confluent-avro-go/v2/registry"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // confluentMagicByte is the leading byte of every Confluent-framed record
@@ -61,9 +62,10 @@ type AvroEncoder struct {
 	// <topic>-key subject.
 	keySchema codec.Schema
 	keyID     int
-	// branches are the full names of the union's records, by Message type,
-	// when several Avro Message types register as a union; nil otherwise.
-	branches []string
+	// types are the run's bound Message types when several register as a
+	// union, the very slice its Mix generates from, so a record's Type finds
+	// its branch; nil otherwise.
+	types []wire.Bound[encoding]
 }
 
 // NewAvroEncoder registers the exact value avsc under <topic>-value and, when
@@ -108,17 +110,17 @@ func NewAvroEncoder(ctx context.Context, registryURL, topic string, value, key *
 // shared named types first, each referencing the subjects it names at the
 // version the registry holds them at; then the union of the records' names
 // under <topic>-value, referencing each record. The key avsc, when non-nil,
-// registers under <topic>-key. Every record is then encoded against the union
-// and framed with the union's ID.
-func NewAvroUnionEncoder(ctx context.Context, registryURL, topic string, union *avro.Schema, plan *unionPlan, key *avro.Schema) (*AvroEncoder, error) {
+// registers under <topic>-key. Every record is then encoded against the union,
+// as the branch of its bound Message type, and framed with the union's ID.
+func NewAvroUnionEncoder(ctx context.Context, registryURL, topic string, union *avro.Schema, plan *unionPlan, types []wire.Bound[encoding], key *avro.Schema) (*AvroEncoder, error) {
 	client, err := registry.NewClient(registryURL)
 	if err != nil {
 		return nil, &RegistryError{URL: registryURL, Err: err}
 	}
 	enc := &AvroEncoder{
-		api:      codec.Config{}.Freeze(),
-		schema:   union.Codec(),
-		branches: plan.Branches,
+		api:    codec.Config{}.Freeze(),
+		schema: union.Codec(),
+		types:  types,
 	}
 
 	versions := map[string]int{}
@@ -196,9 +198,9 @@ func (e *AvroEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, erro
 		keyBytes = frameConfluent(e.keyID, keyBody)
 	}
 
-	if e.branches != nil {
+	if e.types != nil {
 		// A union's generic value names its branch: the record's full name.
-		payload = map[string]any{e.branches[generated.Type]: payload}
+		payload = map[string]any{e.types[generated.Type].Encoding.branch: payload}
 	}
 	body, err := e.api.Marshal(e.schema, payload)
 	if err != nil {

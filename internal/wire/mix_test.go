@@ -10,7 +10,6 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -38,26 +37,28 @@ func orderPayload() map[string]any {
 
 func testSynth() *synth.Synthesizer { return synth.New(1, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)) }
 
-// mustPlantings checks the run's Plantings over JSON Schema walks of each
-// Message type's Payload and headers schema.
-func mustPlantings(t *testing.T, types []asyncapi.MessageType, keyPath string, key map[string]any, params ...asyncapi.TopicParameter) []*planting.Set {
-	t.Helper()
-	sets, err := Plantings(walksOf(types, key), keyPath, params)
-	if err != nil {
-		t.Fatalf("Plantings: %v", err)
+// encoding is the test's per-type encoding data: it proves Bound carries a
+// format's own data typed, here the name a test encoder would write.
+type encoding struct{ label string }
+
+// bound binds a Message type whose Payload is order(), logging each draw
+// under its name, checked for Plantings against orderPayload and the key.
+func bound(name string, log *[]string, headers, key map[string]any) Bound[encoding] {
+	return Bound[encoding]{
+		Name:     name,
+		Payload:  source{name: name, log: log, value: func() any { return order() }},
+		Walk:     generator.NewWalk(orderPayload(), key),
+		Headers:  headers,
+		Encoding: encoding{label: "enc-" + name},
 	}
-	return sets
 }
 
-func walksOf(types []asyncapi.MessageType, key map[string]any) []planting.MessageType {
-	walks := make([]planting.MessageType, len(types))
-	for i, mt := range types {
-		walks[i] = planting.MessageType{Name: mt.Name, Payload: generator.NewWalk(mt.Payload, key)}
-		if mt.Headers != nil {
-			walks[i].Headers = generator.NewWalk(mt.Headers, nil)
-		}
+// mustPlant gives each bound Message type its Plantings.
+func mustPlant(t *testing.T, types []Bound[encoding], keyPath string, params ...asyncapi.TopicParameter) {
+	t.Helper()
+	if err := Plant(types, keyPath, params); err != nil {
+		t.Fatalf("Plant: %v", err)
 	}
-	return walks
 }
 
 // keySource generates Keys from a key schema on the run's Synthesizer.
@@ -74,18 +75,12 @@ func (k keySource) Value() (any, error) { return k.gen.Value(k.schema) }
 // (#108).
 func TestMixMakesTheWholeMessage(t *testing.T) {
 	var log []string
-	types := []asyncapi.MessageType{{Name: "A", Payload: orderPayload(), Headers: tenantHeaders()}}
 	key := map[string]any{"type": "string", "format": "uuid"}
+	types := []Bound[encoding]{bound("A", &log, tenantHeaders(), key)}
+	mustPlant(t, types, "id", headerParam("tenant", "acme", "tenant"),
+		asyncapi.TopicParameter{Name: "region", Value: "eu", Location: "$message.payload#/region", Pointer: []string{"region"}})
 	s := testSynth()
-	m := &Mix{
-		Synth:   s,
-		Types:   []ValueSource{source{name: "payload", log: &log, value: func() any { return order() }}},
-		Headers: NewHeaderSource(s, types),
-		Key:     keySource{gen: generator.New(s), schema: key},
-		Plantings: mustPlantings(t, types, "id", key, headerParam("tenant", "acme", "tenant"),
-			asyncapi.TopicParameter{Name: "region", Value: "eu", Location: "$message.payload#/region", Pointer: []string{"region"}}),
-	}
-	g, err := m.Generate()
+	g, err := NewMix(s, types, keySource{gen: generator.New(s), schema: key}).Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,17 +105,43 @@ func TestMixMakesTheWholeMessage(t *testing.T) {
 	}
 }
 
+// TestMixPicksABoundType proves each record is of one bound Message type,
+// picked from the seeded stream, and Generated.Type indexes the very slice
+// the Mix was given, so a format's encoding data is found by it.
+func TestMixPicksABoundType(t *testing.T) {
+	var log []string
+	types := []Bound[encoding]{bound("A", &log, nil, nil), bound("B", &log, nil, nil), bound("C", &log, nil, nil)}
+	mustPlant(t, types, "")
+	m := NewMix(testSynth(), types, nil)
+	seen := map[string]bool{}
+	for n := 0; n < 60; n++ {
+		log = nil
+		g, err := m.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(log) != 1 || log[0] != types[g.Type].Name {
+			t.Fatalf("record of Type %d drew %v, want the Payload of %s", g.Type, log, types[g.Type].Name)
+		}
+		seen[types[g.Type].Encoding.label] = true
+	}
+	if len(seen) != 3 {
+		t.Errorf("types seen %v, want all three", seen)
+	}
+}
+
 // TestMixWithoutKey proves a run without a key schema generates messages with
-// a null Key and draws nothing for one.
+// a null Key and draws nothing for one, and a single Message type draws no
+// pick.
 func TestMixWithoutKey(t *testing.T) {
 	var log []string
-	types := []asyncapi.MessageType{{Name: "A", Payload: orderPayload()}}
-	m := &Mix{Synth: testSynth(), Types: []ValueSource{source{name: "payload", log: &log, value: func() any { return order() }}}, Plantings: mustPlantings(t, types, "", nil)}
-	g, err := m.Generate()
-	if err != nil || g.Key != nil || g.Headers != nil {
-		t.Errorf("Generate = %+v, %v; want a null Key and no Headers", g, err)
+	types := []Bound[encoding]{bound("A", &log, nil, nil)}
+	mustPlant(t, types, "")
+	g, err := NewMix(testSynth(), types, nil).Generate()
+	if err != nil || g.Key != nil || g.Headers != nil || g.Type != 0 {
+		t.Errorf("Generate = %+v, %v; want Type 0, a null Key and no Headers", g, err)
 	}
-	if want := []string{"payload"}; !reflect.DeepEqual(log, want) {
+	if want := []string{"A"}; !reflect.DeepEqual(log, want) {
 		t.Errorf("draws = %v, want %v", log, want)
 	}
 }
@@ -130,13 +151,63 @@ func TestMixWithoutKey(t *testing.T) {
 func TestMixKeyErrorAborts(t *testing.T) {
 	var log []string
 	boom := errors.New("key schema cannot be honoured")
-	types := []asyncapi.MessageType{{Name: "A", Payload: orderPayload()}}
-	m := &Mix{Synth: testSynth(),
-		Types:     []ValueSource{source{name: "payload", log: &log, value: func() any { return order() }}},
-		Key:       source{name: "key", log: &log, value: func() any { return nil }, err: boom},
-		Plantings: mustPlantings(t, types, "", nil)}
-	if _, err := m.Generate(); !errors.Is(err, boom) {
+	types := []Bound[encoding]{bound("A", &log, nil, nil)}
+	mustPlant(t, types, "")
+	key := source{name: "key", log: &log, value: func() any { return nil }, err: boom}
+	if _, err := NewMix(testSynth(), types, key).Generate(); !errors.Is(err, boom) {
 		t.Errorf("Generate = %v, want the Key generator's error", err)
+	}
+}
+
+// TestMixHeaders proves each record's Headers come from its own Message
+// type's headers schema, none for a type that declares none, and that a
+// headers schema the generator cannot honour stops the run naming the type.
+func TestMixHeaders(t *testing.T) {
+	var log []string
+	acme := map[string]any{"type": "object", "required": []any{"tenant"}, "properties": map[string]any{"tenant": map[string]any{"type": "string", "enum": []any{"acme"}}}}
+	types := []Bound[encoding]{bound("A", &log, acme, nil), bound("B", &log, nil, nil)}
+	mustPlant(t, types, "")
+	m := NewMix(testSynth(), types, nil)
+	for n := 0; n < 20; n++ {
+		g, err := m.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []pipeline.Header{{Name: "tenant", Value: []byte("acme")}}
+		if g.Type == 1 {
+			want = nil
+		}
+		if !reflect.DeepEqual(g.Headers, want) {
+			t.Fatalf("%s: headers %v, want %v", types[g.Type].Name, g.Headers, want)
+		}
+	}
+
+	bad := []Bound[encoding]{bound("A", &log, map[string]any{"type": "object", "required": []any{"n"}, "properties": map[string]any{"n": map[string]any{"type": "wat"}}}, nil)}
+	mustPlant(t, bad, "")
+	if _, err := NewMix(testSynth(), bad, nil).Generate(); err == nil || !strings.Contains(err.Error(), "headers of A") {
+		t.Errorf("err = %v, want a generation error naming the headers of A", err)
+	}
+}
+
+// TestMixHeadersFollowDeclaredOrder proves Headers come in the order the
+// headers schema declares its properties, an object header's JSON text in its
+// own declared order (#96).
+func TestMixHeadersFollowDeclaredOrder(t *testing.T) {
+	var log []string
+	schema := map[string]any{"type": "object", "required": []any{"zone", "origin", "attempt"}, "properties": map[string]any{
+		"zone":    map[string]any{"const": "eu"},
+		"origin":  map[string]any{"type": "object", "required": []any{"z", "a"}, "properties": map[string]any{"z": map[string]any{"const": 1}, "a": map[string]any{"const": 2}}, generator.OrderKeyword: []any{"z", "a"}},
+		"attempt": map[string]any{"const": 3},
+	}, generator.OrderKeyword: []any{"zone", "origin", "attempt"}}
+	types := []Bound[encoding]{bound("A", &log, schema, nil)}
+	mustPlant(t, types, "")
+	g, err := NewMix(testSynth(), types, nil).Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pipeline.Header{{Name: "zone", Value: []byte("eu")}, {Name: "origin", Value: []byte(`{"z":1,"a":2}`)}, {Name: "attempt", Value: []byte("3")}}
+	if !reflect.DeepEqual(g.Headers, want) {
+		t.Errorf("headers = %s, want %s", g.Headers, want)
 	}
 }
 
@@ -144,14 +215,10 @@ func TestMixKeyErrorAborts(t *testing.T) {
 // value planted into the Headers of every record of every Message type,
 // before they are encoded (#93).
 func TestMixPlantsHeaders(t *testing.T) {
-	s := testSynth()
-	types := []asyncapi.MessageType{{Name: "A", Payload: orderPayload(), Headers: tenantHeaders()}, {Name: "B", Payload: orderPayload(), Headers: tenantHeaders()}}
 	var log []string
-	m := &Mix{Synth: s,
-		Types:     []ValueSource{source{name: "A", log: &log, value: func() any { return order() }}, source{name: "B", log: &log, value: func() any { return order() }}},
-		Headers:   NewHeaderSource(s, types),
-		Plantings: mustPlantings(t, types, "", nil, headerParam("tenant", "acme", "tenant")),
-	}
+	types := []Bound[encoding]{bound("A", &log, tenantHeaders(), nil), bound("B", &log, tenantHeaders(), nil)}
+	mustPlant(t, types, "", headerParam("tenant", "acme", "tenant"))
+	m := NewMix(testSynth(), types, nil)
 	for n := 0; n < 20; n++ {
 		g, err := m.Generate()
 		if err != nil {
@@ -161,39 +228,80 @@ func TestMixPlantsHeaders(t *testing.T) {
 			t.Fatalf("type %d: headers %v, want tenant=acme planted", g.Type, g.Headers)
 		}
 	}
-	if !strings.Contains(strings.Join(log, ","), "A") || !strings.Contains(strings.Join(log, ","), "B") {
-		t.Errorf("types drawn %v, want both", log)
-	}
 }
 
-// TestPlantingsRefuseHeaderLocations proves every header Planting the run
-// cannot honour stops it before any record exists, as an Error of -topic.
-func TestPlantingsRefuseHeaderLocations(t *testing.T) {
-	both := []asyncapi.MessageType{{Name: "A", Payload: orderPayload(), Headers: tenantHeaders()}, {Name: "B", Payload: orderPayload(), Headers: tenantHeaders()}}
+// TestPlantRefusesHeaderLocations proves every header Planting the run cannot
+// honour stops it before any record exists, as an Error of -topic.
+func TestPlantRefusesHeaderLocations(t *testing.T) {
+	var log []string
+	both := func() []Bound[encoding] {
+		return []Bound[encoding]{bound("A", &log, tenantHeaders(), nil), bound("B", &log, tenantHeaders(), nil)}
+	}
 	cases := map[string]struct {
-		types  []asyncapi.MessageType
+		types  []Bound[encoding]
 		params []asyncapi.TopicParameter
 		want   string
 	}{
-		"a Message type without headers": {[]asyncapi.MessageType{both[0], {Name: "B", Payload: orderPayload()}},
+		"a Message type without headers": {[]Bound[encoding]{bound("A", &log, tenantHeaders(), nil), bound("B", &log, nil, nil)},
 			[]asyncapi.TopicParameter{headerParam("tenant", "acme", "tenant")},
 			"Topic parameter tenant: location $message.header#/tenant: in Message type B: B declares no headers"},
-		"no Message type declares headers": {[]asyncapi.MessageType{{Name: "A", Payload: orderPayload()}},
+		"no Message type declares headers": {[]Bound[encoding]{bound("A", &log, nil, nil)},
 			[]asyncapi.TopicParameter{headerParam("tenant", "acme", "tenant")},
 			"Topic parameter tenant: location $message.header#/tenant: A declares no headers"},
-		"not guaranteed": {both,
+		"not guaranteed": {both(),
 			[]asyncapi.TopicParameter{headerParam("trace", "t1", "trace")},
 			"Topic parameter trace: location $message.header#/trace: in Message type A:"},
-		"value the header refuses": {both,
+		"value the header refuses": {both(),
 			[]asyncapi.TopicParameter{headerParam("tenant", "ACME", "tenant")},
 			"Topic parameter tenant: value ACME does not conform to the header at $message.header#/tenant: in Message type A:"},
-		"two plantings in one header": {both,
+		"two plantings in one header": {both(),
 			[]asyncapi.TopicParameter{headerParam("tenant", "acme", "tenant"), headerParam("org", "acme", "tenant")},
 			"Topic parameters tenant and org plant into the same field"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := Plantings(walksOf(c.types, nil), "", c.params)
+			err := Plant(c.types, "", c.params)
+			var we *Error
+			if !errors.As(err, &we) || we.Flag != "topic" || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("err = %v, want a topic error mentioning %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestSharedKeyBinding proves the Message types of a Kafka topic must declare
+// the same Key binding, or none, compared in whichever format they are read
+// in, and a disagreement names them grouped by binding (#34 decision 3).
+func TestSharedKeyBinding(t *testing.T) {
+	uuid := func() map[string]any { return map[string]any{"type": "string", "format": "uuid"} }
+	json := func(mt asyncapi.MessageType) map[string]any { return mt.KeyBinding }
+	avsc := func(mt asyncapi.MessageType) []byte { return mt.KeyAvsc }
+
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyBinding: uuid()}, {Name: "B", KeyBinding: uuid()}}, json); err != nil || !reflect.DeepEqual(k, uuid()) {
+		t.Errorf("equal JSON bindings = %v, %v; want the binding", k, err)
+	}
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A"}, {Name: "B"}}, json); err != nil || k != nil {
+		t.Errorf("no bindings = %v, %v; want none", k, err)
+	}
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyAvsc: []byte(`"string"`)}, {Name: "B", KeyAvsc: []byte(`"string"`)}}, avsc); err != nil || string(k) != `"string"` {
+		t.Errorf("equal avsc bindings = %s, %v; want the binding", k, err)
+	}
+
+	for name, c := range map[string]struct {
+		err  func() error
+		want string
+	}{
+		"JSON": {func() error {
+			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyBinding: uuid()}, {Name: "B"}, {Name: "C", KeyBinding: uuid()}}, json)
+			return err
+		}, "the Message types of the Kafka topic declare different Key bindings (A, C vs B (none)); a Key identifies one Entity across them, so they must declare the same one, or none"},
+		"avsc": {func() error {
+			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyAvsc: []byte(`"string"`)}, {Name: "B", KeyAvsc: []byte(`"long"`)}}, avsc)
+			return err
+		}, "declare different Key bindings (A vs B)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := c.err()
 			var we *Error
 			if !errors.As(err, &we) || we.Flag != "topic" || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("err = %v, want a topic error mentioning %q", err, c.want)

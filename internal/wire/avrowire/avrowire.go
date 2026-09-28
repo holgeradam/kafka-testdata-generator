@@ -5,19 +5,15 @@
 package avrowire
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"slices"
-	"strings"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -112,7 +108,7 @@ func specAvro(types []asyncapi.MessageType) []asyncapi.MessageType {
 // every Topic parameter must hold in each of them.
 func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	spec := specAvro(opts.MessageTypes)
-	values, names, err := valueAvscs(opts, spec)
+	values, err := valueAvscs(opts, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -120,8 +116,29 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	if err != nil {
 		return nil, err
 	}
-	plantings, err := plantingsOf(opts, spec, values, names, key)
-	if err != nil {
+	// Records from -avro-schema are of no Message type in the spec, so they
+	// have no Headers to plant into.
+	if len(spec) == 0 {
+		for _, tp := range opts.TopicParameters {
+			if tp.InHeaders {
+				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Name, tp.Location)}
+			}
+		}
+	}
+
+	gen := avro.NewGenerator(opts.Synth)
+	bound := make([]wire.Bound[encoding], len(values))
+	for i, v := range values {
+		bound[i] = wire.Bound[encoding]{
+			Payload:  &boundGenerator{gen: gen, model: v},
+			Walk:     avro.NewWalk(v, key),
+			Encoding: encoding{value: v},
+		}
+		if len(spec) > 0 {
+			bound[i].Name, bound[i].Headers = spec[i].Name, spec[i].Headers
+		}
+	}
+	if err := wire.Plant(bound, opts.KeyPath, opts.TopicParameters); err != nil {
 		return nil, err
 	}
 	var u *union
@@ -129,21 +146,19 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		if u, err = newUnion(spec); err != nil {
 			return nil, err
 		}
+		for i := range bound {
+			bound[i].Encoding.branch = u.plan.Branches[i]
+		}
 	}
 
-	gen := avro.NewGenerator(opts.Synth)
-	payloads := make([]wire.ValueSource, len(values))
-	for i, v := range values {
-		payloads[i] = &boundGenerator{gen: gen, model: v}
-	}
-	mix := &wire.Mix{Synth: opts.Synth, Types: payloads, Headers: wire.NewHeaderSource(opts.Synth, spec), Plantings: plantings}
+	var keyGen keyplan.Generator
 	if key != nil {
-		mix.Key = keyplan.Reuse(&boundGenerator{gen: gen, model: key}, opts.RecordsPerKey, opts.Synth)
+		keyGen = keyplan.Reuse(&boundGenerator{gen: gen, model: key}, opts.RecordsPerKey, opts.Synth)
 	}
 	parts := &wire.Parts{
-		Values:  mix,
+		Values:  wire.NewMix(opts.Synth, bound, keyGen),
 		Keyed:   key != nil,
-		Encoder: encoderFor(opts, values, u, key),
+		Encoder: encoderFor(opts, bound, u, key),
 	}
 	// Records from -avro-schema are of no Message type in the spec, so no
 	// Message type's headers apply to them: they are ignored, out loud.
@@ -163,48 +178,34 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	return parts, nil
 }
 
-// plantingsOf checks every Planting against each value avsc, and against the
-// spec Message type's headers schema, which is JSON Schema in every Wire
-// format (#85 decision 1). Records from -avro-schema are of no Message type in
-// the spec, so they have no Headers to plant into.
-func plantingsOf(opts wire.Options, spec []asyncapi.MessageType, values []*avro.Schema, names []string, key *avro.Schema) ([]*planting.Set, error) {
-	if len(spec) == 0 {
-		for _, tp := range opts.TopicParameters {
-			if tp.InHeaders {
-				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Name, tp.Location)}
-			}
-		}
-	}
-	walks := make([]planting.MessageType, len(values))
-	for i, v := range values {
-		walks[i] = planting.MessageType{Name: names[i], Payload: avro.NewWalk(v, key)}
-		if len(spec) > 0 && spec[i].Headers != nil {
-			walks[i].Headers = generator.NewWalk(spec[i].Headers, nil)
-		}
-	}
-	return wire.Plantings(walks, opts.KeyPath, opts.TopicParameters)
+// encoding is what the AVRO Encoders need of a Message type: its value avsc,
+// and its branch of the union when several Message types register as one -
+// the record's full name, which names it in a union's generic value; empty
+// otherwise.
+type encoding struct {
+	value  *avro.Schema
+	branch string
 }
 
-// valueAvscs parses the Payload's avscs, one per Message type, with the
-// Message types' names: the spec's, else -avro-schema's alone.
-func valueAvscs(opts wire.Options, spec []asyncapi.MessageType) ([]*avro.Schema, []string, error) {
+// valueAvscs parses the Payload's avscs, one per Message type: the spec's,
+// else -avro-schema's alone.
+func valueAvscs(opts wire.Options, spec []asyncapi.MessageType) ([]*avro.Schema, error) {
 	if len(spec) == 0 {
 		value, err := loadAvsc(opts.AvroSchema)
 		if err != nil {
-			return nil, nil, &wire.Error{Flag: "avro-schema", Err: err}
+			return nil, &wire.Error{Flag: "avro-schema", Err: err}
 		}
-		return []*avro.Schema{value}, []string{""}, nil
+		return []*avro.Schema{value}, nil
 	}
 	values := make([]*avro.Schema, len(spec))
-	names := make([]string, len(spec))
 	for i, mt := range spec {
 		value, err := avro.Parse(mt.Avsc)
 		if err != nil {
-			return nil, nil, &wire.Error{Flag: "topic", Detail: "payload of " + mt.Name, Err: err}
+			return nil, &wire.Error{Flag: "topic", Detail: "payload of " + mt.Name, Err: err}
 		}
-		values[i], names[i] = value, mt.Name
+		values[i] = value
 	}
-	return values, names, nil
+	return values, nil
 }
 
 // keyAvsc parses the Key's avsc: the Key binding the spec's Message types
@@ -213,11 +214,12 @@ func valueAvscs(opts wire.Options, spec []asyncapi.MessageType) ([]*avro.Schema,
 // same Key binding, or none (#34 decision 3).
 func keyAvsc(opts wire.Options, spec []asyncapi.MessageType) (*avro.Schema, error) {
 	if len(spec) > 0 {
-		if err := sameKey(spec); err != nil {
+		shared, err := wire.SharedKeyBinding(spec, func(mt asyncapi.MessageType) []byte { return mt.KeyAvsc })
+		if err != nil {
 			return nil, err
 		}
-		if spec[0].KeyAvsc != nil {
-			key, err := avro.Parse(spec[0].KeyAvsc)
+		if shared != nil {
+			key, err := avro.Parse(shared)
 			if err != nil {
 				return nil, &wire.Error{Flag: "topic", Detail: "bindings.kafka.key of " + spec[0].Name, Err: err}
 			}
@@ -232,33 +234,6 @@ func keyAvsc(opts wire.Options, spec []asyncapi.MessageType) (*avro.Schema, erro
 		return nil, &wire.Error{Flag: "avro-key-schema", Err: err}
 	}
 	return key, nil
-}
-
-// sameKey refuses Message types that declare different Key bindings, naming
-// them grouped by binding.
-func sameKey(spec []asyncapi.MessageType) error {
-	var keys [][]byte
-	var groups [][]string
-	for _, mt := range spec {
-		i := slices.IndexFunc(keys, func(k []byte) bool { return bytes.Equal(k, mt.KeyAvsc) })
-		if i < 0 {
-			keys = append(keys, mt.KeyAvsc)
-			groups = append(groups, nil)
-			i = len(keys) - 1
-		}
-		groups[i] = append(groups[i], mt.Name)
-	}
-	if len(keys) == 1 {
-		return nil
-	}
-	described := make([]string, len(groups))
-	for i, g := range groups {
-		described[i] = strings.Join(g, ", ")
-		if keys[i] == nil {
-			described[i] += " (none)"
-		}
-	}
-	return &wire.Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
 }
 
 // union is how several Avro Message types register and encode: the plan of
@@ -290,17 +265,17 @@ func newUnion(spec []asyncapi.MessageType) (*union, error) {
 // produce registers the value avsc under <topic>-value, or the union of
 // several (#84 decision 4), and the key avsc under <topic>-key, then frames
 // records with the assigned IDs.
-func encoderFor(opts wire.Options, values []*avro.Schema, u *union, key *avro.Schema) func(context.Context) (pipeline.Encoder, error) {
+func encoderFor(opts wire.Options, bound []wire.Bound[encoding], u *union, key *avro.Schema) func(context.Context) (pipeline.Encoder, error) {
 	if opts.DryRun {
 		return func(context.Context) (pipeline.Encoder, error) {
-			return newAvroDisplayEncoder(values, key), nil
+			return &AvroDisplayEncoder{types: bound, key: key}, nil
 		}
 	}
 	return func(ctx context.Context) (pipeline.Encoder, error) {
 		if u != nil {
-			return NewAvroUnionEncoder(ctx, opts.RegistryURL, opts.Topic, u.schema, u.plan, key)
+			return NewAvroUnionEncoder(ctx, opts.RegistryURL, opts.Topic, u.schema, u.plan, bound, key)
 		}
-		return NewAvroEncoder(ctx, opts.RegistryURL, opts.Topic, values[0], key)
+		return NewAvroEncoder(ctx, opts.RegistryURL, opts.Topic, bound[0].Encoding.value, key)
 	}
 }
 

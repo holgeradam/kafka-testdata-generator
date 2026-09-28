@@ -5,15 +5,11 @@ package jsonwire
 
 import (
 	"context"
-	"fmt"
-	"reflect"
-	"strings"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -48,7 +44,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	if len(types) == 0 {
 		return nil, &wire.Error{Flag: "topic", Detail: "the spec declares no Message type for the Kafka topic"}
 	}
-	keyBinding, err := sharedKeyBinding(types)
+	keyBinding, err := wire.SharedKeyBinding(types, func(mt asyncapi.MessageType) map[string]any { return mt.KeyBinding })
 	if err != nil {
 		return nil, err
 	}
@@ -56,68 +52,31 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		return nil, &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
 	}
 
-	walks := make([]planting.MessageType, len(types))
+	gen := generator.New(opts.Synth)
+	bound := make([]wire.Bound[encoding], len(types))
 	for i, mt := range types {
-		walks[i] = planting.MessageType{Name: mt.Name, Payload: generator.NewWalk(mt.Payload, keyBinding)}
-		if mt.Headers != nil {
-			walks[i].Headers = generator.NewWalk(mt.Headers, nil)
+		bound[i] = wire.Bound[encoding]{
+			Name:     mt.Name,
+			Payload:  &boundGenerator{gen: gen, schema: mt.Payload},
+			Walk:     generator.NewWalk(mt.Payload, keyBinding),
+			Headers:  mt.Headers,
+			Encoding: encoding{payload: mt.Payload},
 		}
 	}
-	plantings, err := wire.Plantings(walks, opts.KeyPath, opts.TopicParameters)
-	if err != nil {
+	if err := wire.Plant(bound, opts.KeyPath, opts.TopicParameters); err != nil {
 		return nil, err
 	}
-
-	gen := generator.New(opts.Synth)
-	schemas := make([]map[string]any, len(types))
-	payloads := make([]wire.ValueSource, len(types))
-	for i, mt := range types {
-		schemas[i] = mt.Payload
-		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload}
-	}
-	mix := &wire.Mix{Synth: opts.Synth, Types: payloads, Headers: wire.NewHeaderSource(opts.Synth, types), Plantings: plantings}
+	var key keyplan.Generator
 	if keyBinding != nil {
-		mix.Key = keyplan.Reuse(&boundGenerator{gen: gen, schema: keyBinding}, opts.RecordsPerKey, opts.Synth)
+		key = keyplan.Reuse(&boundGenerator{gen: gen, schema: keyBinding}, opts.RecordsPerKey, opts.Synth)
 	}
 	return &wire.Parts{
-		Values: mix,
+		Values: wire.NewMix(opts.Synth, bound, key),
 		Keyed:  keyBinding != nil,
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
-			return JsonEncoder{Payloads: schemas, Key: keyBinding}, nil
+			return JsonEncoder{types: bound, key: keyBinding}, nil
 		},
 	}, nil
-}
-
-// sharedKeyBinding returns the Key binding every Message type declares, nil
-// when none does, or an error naming the Message types that disagree.
-func sharedKeyBinding(types []asyncapi.MessageType) (map[string]any, error) {
-	var groups [][]string
-	var bindings []map[string]any
-	for _, mt := range types {
-		found := false
-		for i, b := range bindings {
-			if reflect.DeepEqual(b, mt.KeyBinding) {
-				groups[i] = append(groups[i], mt.Name)
-				found = true
-				break
-			}
-		}
-		if !found {
-			bindings = append(bindings, mt.KeyBinding)
-			groups = append(groups, []string{mt.Name})
-		}
-	}
-	if len(bindings) == 1 {
-		return bindings[0], nil
-	}
-	described := make([]string, len(groups))
-	for i, g := range groups {
-		described[i] = strings.Join(g, ", ")
-		if bindings[i] == nil {
-			described[i] += " (none)"
-		}
-	}
-	return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
 }
 
 // boundGenerator binds a JSON Schema to the generator: a Message type's

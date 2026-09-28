@@ -43,10 +43,11 @@ type PayloadGenerator interface {
 }
 
 // Generated is one generated message and the Message type it is of: an index
-// into the Kafka topic's Message types, in the order the Wire format holds
-// them. The Pipeline carries it from the PayloadGenerator to the Encoder, so
-// a Wire format that encodes each Message type differently knows which one a
-// record is (#91). With one Message type it is always 0.
+// into the one slice of bound Message types the Wire format built for the run
+// (wire.Bound, #109), which its generator and its Encoder share. The Pipeline
+// carries it from the PayloadGenerator to the Encoder, so a Wire format that
+// encodes each Message type differently knows which one a record is (#91).
+// With one Message type it is always 0.
 type Generated struct {
 	Type int
 	// Key is the message's Key, from the key schema; nil when the run has
