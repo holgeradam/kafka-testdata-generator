@@ -61,3 +61,5 @@ between schema languages.
   cannot name.
 - Error ordering changed for broken invocations: a spec that fails to load is now reported
   before a Wire format flag rule.
+
+Amended (2026-09-28, issue #111): decision 4 is enforced by the spec reader. A Message type's Payload and Key are a sealed `asyncapi.Schema`, the `JSONSchema` or the `Avsc` case, and the `Topic` states the one payload format its Message types share, so the Run plan and the Wire formats ask the format once instead of telling it apart by which optional field is set. The refusal's wording is unchanged.

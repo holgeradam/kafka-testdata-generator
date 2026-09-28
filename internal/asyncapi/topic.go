@@ -77,7 +77,31 @@ func (d *Document) topic(name string, c *collector, matched []match, messages fu
 	if len(c.types) == 0 {
 		return nil, fmt.Errorf("Kafka topic %q: the spec declares no message for it", name)
 	}
-	return &Topic{MessageTypes: c.types, Parameters: params}, nil
+	format, err := payloadFormat(name, c.types)
+	if err != nil {
+		return nil, err
+	}
+	return &Topic{Format: format, MessageTypes: c.types, Parameters: params}, nil
+}
+
+// payloadFormat is the one payload format the Message types of a Kafka topic
+// share (#84 decision 9).
+func payloadFormat(name string, types []MessageType) (PayloadFormat, error) {
+	mixed := &MixedFormatsError{Topic: name}
+	for _, mt := range types {
+		if mt.Payload.Format() == AvroFormat {
+			mixed.Avro = append(mixed.Avro, mt.Name)
+		} else {
+			mixed.JSONSchema = append(mixed.JSONSchema, mt.Name)
+		}
+	}
+	switch {
+	case len(mixed.Avro) > 0 && len(mixed.JSONSchema) > 0:
+		return 0, mixed
+	case len(mixed.Avro) > 0:
+		return AvroFormat, nil
+	}
+	return JSONSchemaFormat, nil
 }
 
 // match is a spec entry bound to the Kafka topic, with the Topic parameter

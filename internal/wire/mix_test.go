@@ -9,6 +9,7 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -196,9 +197,9 @@ func TestMixHeadersFollowDeclaredOrder(t *testing.T) {
 	var log []string
 	schema := map[string]any{"type": "object", "required": []any{"zone", "origin", "attempt"}, "properties": map[string]any{
 		"zone":    map[string]any{"const": "eu"},
-		"origin":  map[string]any{"type": "object", "required": []any{"z", "a"}, "properties": map[string]any{"z": map[string]any{"const": 1}, "a": map[string]any{"const": 2}}, generator.OrderKeyword: []any{"z", "a"}},
+		"origin":  map[string]any{"type": "object", "required": []any{"z", "a"}, "properties": map[string]any{"z": map[string]any{"const": 1}, "a": map[string]any{"const": 2}}, ordered.Keyword: []any{"z", "a"}},
 		"attempt": map[string]any{"const": 3},
-	}, generator.OrderKeyword: []any{"zone", "origin", "attempt"}}
+	}, ordered.Keyword: []any{"zone", "origin", "attempt"}}
 	types := []Bound[encoding]{bound("A", &log, schema, nil)}
 	mustPlant(t, types, "")
 	g, err := NewMix(testSynth(), types, nil).Generate()
@@ -273,17 +274,15 @@ func TestPlantRefusesHeaderLocations(t *testing.T) {
 // the same Key binding, or none, compared in whichever format they are read
 // in, and a disagreement names them grouped by binding (#34 decision 3).
 func TestSharedKeyBinding(t *testing.T) {
-	uuid := func() map[string]any { return map[string]any{"type": "string", "format": "uuid"} }
-	json := func(mt asyncapi.MessageType) map[string]any { return mt.KeyBinding }
-	avsc := func(mt asyncapi.MessageType) []byte { return mt.KeyAvsc }
+	uuid := func() asyncapi.JSONSchema { return asyncapi.JSONSchema{"type": "string", "format": "uuid"} }
 
-	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyBinding: uuid()}, {Name: "B", KeyBinding: uuid()}}, json); err != nil || !reflect.DeepEqual(k, uuid()) {
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", Key: uuid()}, {Name: "B", Key: uuid()}}); err != nil || !reflect.DeepEqual(k, asyncapi.Schema(uuid())) {
 		t.Errorf("equal JSON bindings = %v, %v; want the binding", k, err)
 	}
-	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A"}, {Name: "B"}}, json); err != nil || k != nil {
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A"}, {Name: "B"}}); err != nil || k != nil {
 		t.Errorf("no bindings = %v, %v; want none", k, err)
 	}
-	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyAvsc: []byte(`"string"`)}, {Name: "B", KeyAvsc: []byte(`"string"`)}}, avsc); err != nil || string(k) != `"string"` {
+	if k, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", Key: asyncapi.Avsc(`"string"`)}, {Name: "B", Key: asyncapi.Avsc(`"string"`)}}); err != nil || !reflect.DeepEqual(k, asyncapi.Schema(asyncapi.Avsc(`"string"`))) {
 		t.Errorf("equal avsc bindings = %s, %v; want the binding", k, err)
 	}
 
@@ -292,11 +291,11 @@ func TestSharedKeyBinding(t *testing.T) {
 		want string
 	}{
 		"JSON": {func() error {
-			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyBinding: uuid()}, {Name: "B"}, {Name: "C", KeyBinding: uuid()}}, json)
+			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", Key: uuid()}, {Name: "B"}, {Name: "C", Key: uuid()}})
 			return err
 		}, "the Message types of the Kafka topic declare different Key bindings (A, C vs B (none)); a Key identifies one Entity across them, so they must declare the same one, or none"},
 		"avsc": {func() error {
-			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", KeyAvsc: []byte(`"string"`)}, {Name: "B", KeyAvsc: []byte(`"long"`)}}, avsc)
+			_, err := SharedKeyBinding([]asyncapi.MessageType{{Name: "A", Key: asyncapi.Avsc(`"string"`)}, {Name: "B", Key: asyncapi.Avsc(`"long"`)}})
 			return err
 		}, "declare different Key bindings (A vs B)"},
 	} {

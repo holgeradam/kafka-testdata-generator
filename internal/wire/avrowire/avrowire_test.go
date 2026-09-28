@@ -41,9 +41,9 @@ func options(t *testing.T) buildOptions {
 		Synth:      synth.New(1, testNow()),
 		// The Message schema and binding must not reach AVRO generation.
 		MessageTypes: []asyncapi.MessageType{{
-			Name:       "Order",
-			Payload:    map[string]any{"type": "integer"},
-			KeyBinding: map[string]any{"type": "integer"},
+			Name:    "Order",
+			Payload: asyncapi.JSONSchema{"type": "integer"},
+			Key:     asyncapi.JSONSchema{"type": "integer"},
 		}},
 	}
 }
@@ -179,7 +179,7 @@ func TestBuildEncoderPerMode(t *testing.T) {
 func TestBuildFlagRules(t *testing.T) {
 	v, k := writeAvsc(t, orderAvsc), writeAvsc(t, `"string"`)
 	broken := writeAvsc(t, `{"type":"nope"}`)
-	registryBinding := []asyncapi.MessageType{{Name: "A", Payload: map[string]any{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}
+	registryBinding := []asyncapi.MessageType{{Name: "A", Payload: asyncapi.JSONSchema{}, Registry: asyncapi.RegistryBinding{SchemaIDLocation: "header"}}}
 	cases := []struct {
 		name, flag string
 		opts       buildOptions
@@ -236,7 +236,7 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 		t.Errorf("warnings = %q, want the ignored-binding warning", parts.Warnings)
 	}
 
-	opts.MessageTypes[0].KeyBinding = nil
+	opts.MessageTypes[0].Key = nil
 	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -337,7 +337,7 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 func avroTypes(names ...string) []asyncapi.MessageType {
 	var types []asyncapi.MessageType
 	for _, n := range names {
-		types = append(types, asyncapi.MessageType{Name: n, Avsc: []byte(`{"type":"record","name":"` + n + `","fields":[{"name":"id","type":"string"}]}`)})
+		types = append(types, asyncapi.MessageType{Name: n, Payload: asyncapi.Avsc(`{"type":"record","name":"` + n + `","fields":[{"name":"id","type":"string"}]}`)})
 	}
 	return types
 }
@@ -346,7 +346,7 @@ func avroTypes(names ...string) []asyncapi.MessageType {
 func keyedAvroTypes(names ...string) []asyncapi.MessageType {
 	types := avroTypes(names...)
 	for i := range types {
-		types[i].KeyAvsc = []byte(`"string"`)
+		types[i].Key = asyncapi.Avsc(`"string"`)
 	}
 	return types
 }

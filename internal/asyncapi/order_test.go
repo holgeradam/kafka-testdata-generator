@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
 // orderIn is the property order recorded on a schema object.
 func orderIn(schema map[string]any) any {
-	return schema[generator.OrderKeyword]
+	return schema[ordered.Keyword]
 }
 
 // TestPropertyOrderRecorded proves the reader records the order a spec
@@ -44,9 +44,9 @@ components:
 		schema map[string]any
 		want   []any
 	}{
-		"payload":              {mt.Payload, []any{"zeta", "billing", "alpha"}},
-		"payload through $ref": {mt.Payload["properties"].(map[string]any)["billing"].(map[string]any), []any{"street", "city"}},
-		"key":                  {mt.KeyBinding, []any{"tenant", "id"}},
+		"payload":              {jsonPayload(mt), []any{"zeta", "billing", "alpha"}},
+		"payload through $ref": {jsonPayload(mt)["properties"].(map[string]any)["billing"].(map[string]any), []any{"street", "city"}},
+		"key":                  {jsonKey(mt), []any{"tenant", "id"}},
 		"headers":              {mt.Headers, []any{"zone", "attempt"}},
 	}
 	for name, c := range checks {
@@ -71,7 +71,7 @@ func TestPropertyOrderRecordedFromJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := orderIn(mt.Payload), []any{"zeta", "alpha"}; !reflect.DeepEqual(got, want) {
+	if got, want := orderIn(jsonPayload(mt)), []any{"zeta", "alpha"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("order %v, want %v", got, want)
 	}
 }
@@ -91,8 +91,8 @@ channels:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(mt.Avsc), generator.OrderKeyword) {
-		t.Errorf("avsc %s carries the recorded order", mt.Avsc)
+	if strings.Contains(string(avroPayload(mt)), ordered.Keyword) {
+		t.Errorf("avsc %s carries the recorded order", avroPayload(mt))
 	}
 }
 
@@ -105,7 +105,7 @@ func withoutOrder(schema map[string]any) map[string]any {
 		case map[string]any:
 			out := make(map[string]any, len(v))
 			for k, e := range v {
-				if k != generator.OrderKeyword {
+				if k != ordered.Keyword {
 					out[k] = strip(e)
 				}
 			}

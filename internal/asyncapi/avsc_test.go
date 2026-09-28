@@ -52,10 +52,10 @@ channels:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mt.Payload != nil {
-				t.Errorf("Payload = %v, want nil: an Avro payload is no JSON Schema", mt.Payload)
+			if jsonPayload(mt) != nil {
+				t.Errorf("Payload = %v, want nil: an Avro payload is no JSON Schema", jsonPayload(mt))
 			}
-			if got := avscOf(t, mt.Avsc); !reflect.DeepEqual(got, wantAvsc(t)) {
+			if got := avscOf(t, avroPayload(mt)); !reflect.DeepEqual(got, wantAvsc(t)) {
 				t.Errorf("avsc = %v, want %v", got, wantAvsc(t))
 			}
 		})
@@ -83,7 +83,7 @@ components:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := avscOf(t, mt.Avsc); !reflect.DeepEqual(got, wantAvsc(t)) {
+	if got := avscOf(t, avroPayload(mt)); !reflect.DeepEqual(got, wantAvsc(t)) {
 		t.Errorf("avsc = %v, want %v", got, wantAvsc(t))
 	}
 }
@@ -139,7 +139,7 @@ components:
 		{"name":"billing","type":{"type":"record","name":"Address","fields":[{"name":"city","type":"string"}]}},
 		{"name":"shipping","type":"com.acme.Address"},
 		{"name":"status","type":{"type":"enum","name":"Status","namespace":"com.acme.status","symbols":["NEW","PAID"]}}]}`))
-	if got := avscOf(t, mt.Avsc); !reflect.DeepEqual(got, want) {
+	if got := avscOf(t, avroPayload(mt)); !reflect.DeepEqual(got, want) {
 		t.Errorf("avsc = %v\nwant %v", got, want)
 	}
 }
@@ -191,10 +191,10 @@ components:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mt.KeyBinding != nil {
-				t.Errorf("KeyBinding = %v, want nil beside an Avro payload", mt.KeyBinding)
+			if jsonKey(mt) != nil {
+				t.Errorf("KeyBinding = %v, want nil beside an Avro payload", jsonKey(mt))
 			}
-			if got, want := avscOf(t, mt.KeyAvsc), avscOf(t, []byte(c.want)); !reflect.DeepEqual(got, want) {
+			if got, want := avscOf(t, avroKey(mt)), avscOf(t, []byte(c.want)); !reflect.DeepEqual(got, want) {
 				t.Errorf("key avsc = %v, want %v", got, want)
 			}
 		})
@@ -212,8 +212,8 @@ channels:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mt.KeyAvsc != nil || mt.Avsc != nil {
-		t.Errorf("a JSON Schema message has an avsc: payload %s, key %s", mt.Avsc, mt.KeyAvsc)
+	if avroKey(mt) != nil || avroPayload(mt) != nil {
+		t.Errorf("a JSON Schema message has an avsc: payload %s, key %s", avroPayload(mt), avroKey(mt))
 	}
 }
 
@@ -264,7 +264,7 @@ components:
 	if err != nil {
 		t.Fatal(err)
 	}
-	fields := avscOf(t, mt.Avsc).(map[string]any)["fields"].([]any)
+	fields := avscOf(t, avroPayload(mt)).(map[string]any)["fields"].([]any)
 	if got := fields[1].(map[string]any)["type"]; got != "com.acme.Tag" {
 		t.Errorf("second Tag = %v, want com.acme.Tag, the codec's full name for it", got)
 	}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
@@ -27,7 +28,7 @@ func options() buildOptions {
 	}
 }
 
-func orderSchema() map[string]any {
+func orderSchema() asyncapi.JSONSchema {
 	return map[string]any{
 		"type":       "object",
 		"required":   []any{"orderId"},
@@ -37,7 +38,7 @@ func orderSchema() map[string]any {
 
 // kindSchema is a Payload schema whose kind field is the constant name, so a
 // generated Payload shows which Message type it is of.
-func kindSchema(name string, required ...string) map[string]any {
+func kindSchema(name string, required ...string) asyncapi.JSONSchema {
 	props := map[string]any{"kind": map[string]any{"const": name}}
 	req := []any{"kind"}
 	for _, r := range required {
@@ -76,7 +77,7 @@ func TestBuildKey(t *testing.T) {
 		t.Errorf("no key binding: Keyed %v, Key %v, %v; want a null Key", parts.Keyed, g.Key, err)
 	}
 
-	opts.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
+	opts.MessageTypes[0].Key = asyncapi.JSONSchema{"type": "string"}
 	parts, err = build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -128,7 +129,7 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 // about the flags wins over what the spec declares and over a Planting.
 func TestBuildFlagRules(t *testing.T) {
 	bound := func(o buildOptions) buildOptions {
-		o.MessageTypes[0].KeyBinding = map[string]any{"type": "string"}
+		o.MessageTypes[0].Key = asyncapi.JSONSchema{"type": "string"}
 		return o
 	}
 	with := func(change func(*buildOptions)) buildOptions {
@@ -250,14 +251,14 @@ func TestBuildSingleTypeDrawsNothingExtra(t *testing.T) {
 // topic share one Key binding, or none, since a Key identifies one Entity
 // across them (#34 decision 3).
 func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
-	uuidKey := map[string]any{"type": "string", "format": "uuid"}
+	uuidKey := asyncapi.JSONSchema{"type": "string", "format": "uuid"}
 	cases := map[string][]asyncapi.MessageType{
 		"different schemas": {
-			{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
-			{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: map[string]any{"type": "integer"}},
+			{Name: "OrderCreated", Payload: kindSchema("created"), Key: uuidKey},
+			{Name: "OrderUpdated", Payload: kindSchema("updated"), Key: asyncapi.JSONSchema{"type": "integer"}},
 		},
 		"one without": {
-			{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
+			{Name: "OrderCreated", Payload: kindSchema("created"), Key: uuidKey},
 			{Name: "OrderUpdated", Payload: kindSchema("updated")},
 		},
 	}
@@ -277,8 +278,8 @@ func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
 	}
 
 	same := []asyncapi.MessageType{
-		{Name: "OrderCreated", Payload: kindSchema("created"), KeyBinding: uuidKey},
-		{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: map[string]any{"type": "string", "format": "uuid"}},
+		{Name: "OrderCreated", Payload: kindSchema("created"), Key: uuidKey},
+		{Name: "OrderUpdated", Payload: kindSchema("updated"), Key: asyncapi.JSONSchema{"type": "string", "format": "uuid"}},
 	}
 	parts, err := build(mixOptions(1, same...))
 	if err != nil {
@@ -292,10 +293,10 @@ func TestBuildRejectsDifferingKeyBindings(t *testing.T) {
 // TestBuildChecksKeyPathInEveryType proves -keyPath must be guaranteed in
 // every Message type's Payload, and a rejection names the type it fails in.
 func TestBuildChecksKeyPathInEveryType(t *testing.T) {
-	key := map[string]any{"type": "string"}
+	key := asyncapi.JSONSchema{"type": "string"}
 	opts := mixOptions(1,
-		asyncapi.MessageType{Name: "OrderCreated", Payload: kindSchema("created", "orderId"), KeyBinding: key},
-		asyncapi.MessageType{Name: "OrderUpdated", Payload: kindSchema("updated"), KeyBinding: key},
+		asyncapi.MessageType{Name: "OrderCreated", Payload: kindSchema("created", "orderId"), Key: key},
+		asyncapi.MessageType{Name: "OrderUpdated", Payload: kindSchema("updated"), Key: key},
 	)
 	opts.KeyPath = "orderId"
 	_, err := build(opts)
@@ -311,7 +312,7 @@ func TestBuildChecksKeyPathInEveryType(t *testing.T) {
 
 // regionSchema is a Payload schema of one Message type, kind name, whose
 // required region field only takes two lowercase letters.
-func regionSchema(name string) map[string]any {
+func regionSchema(name string) asyncapi.JSONSchema {
 	s := kindSchema(name)
 	s["required"] = append(s["required"].([]any), "region", "meta")
 	props := s["properties"].(map[string]any)
@@ -389,7 +390,7 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			for i := range c.types {
-				c.types[i].KeyBinding = map[string]any{"type": "string"}
+				c.types[i].Key = asyncapi.JSONSchema{"type": "string"}
 			}
 			opts := mixOptions(1, c.types...)
 			opts.TopicParameters = []asyncapi.TopicParameter{c.param}
@@ -429,7 +430,7 @@ func generate(parts *wire.Parts) (any, error) {
 }
 
 // tenantHeaders is a headers schema with one constant header, tenant=name.
-func tenantHeaders(name string) map[string]any {
+func tenantHeaders(name string) asyncapi.JSONSchema {
 	return map[string]any{"type": "object", "required": []any{"tenant"}, "properties": map[string]any{"tenant": map[string]any{"const": name}}}
 }
 
@@ -470,19 +471,19 @@ func TestBuildGeneratesHeaders(t *testing.T) {
 // object Key in the order its Key binding does (#96).
 func TestEncoderFollowsDeclaredOrder(t *testing.T) {
 	str := map[string]any{"type": "string", "const": "v"}
-	schema := func(names ...string) map[string]any {
+	schema := func(names ...string) asyncapi.JSONSchema {
 		props := map[string]any{}
 		var order []any
 		for _, n := range names {
 			props[n] = str
 			order = append(order, n)
 		}
-		return map[string]any{"type": "object", "required": order, "properties": props, generator.OrderKeyword: order}
+		return map[string]any{"type": "object", "required": order, "properties": props, ordered.Keyword: order}
 	}
 	opts := options()
 	opts.MessageTypes = []asyncapi.MessageType{
-		{Name: "A", Payload: schema("zeta", "alpha"), KeyBinding: schema("tenant", "id")},
-		{Name: "B", Payload: schema("mid", "beta", "zulu"), KeyBinding: schema("tenant", "id")},
+		{Name: "A", Payload: schema("zeta", "alpha"), Key: schema("tenant", "id")},
+		{Name: "B", Payload: schema("mid", "beta", "zulu"), Key: schema("tenant", "id")},
 	}
 	parts, err := build(opts)
 	if err != nil {

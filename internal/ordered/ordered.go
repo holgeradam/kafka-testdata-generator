@@ -8,6 +8,12 @@ import (
 	"encoding/json"
 )
 
+// Keyword is the extension keyword under which the spec reader records the
+// order a schema declares its properties in (#96): a decoded map forgets the
+// order its keys were written in. Validators ignore unknown keywords, so it
+// changes nothing but the order records encode in.
+const Keyword = "x-kafka-testdata-generator-property-order"
+
 // Object is a JSON object whose keys encode in order. Values may be Objects
 // themselves, or anything encoding/json encodes.
 type Object struct {

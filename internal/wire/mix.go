@@ -124,38 +124,36 @@ func (m *Mix[E]) Generate() (pipeline.Generated, error) {
 	return g, err
 }
 
-// SharedKeyBinding returns the Key binding every Message type declares, as
-// binding reads it in the Message types' format, the zero value when none
-// declares one, or an error naming the Message types grouped by the binding
-// they declare: a Key identifies one Entity across them (#34 decision 3).
-func SharedKeyBinding[K any](types []asyncapi.MessageType, binding func(asyncapi.MessageType) K) (K, error) {
-	var bindings []K
+// SharedKeyBinding returns the Key binding every Message type declares, in
+// the Message types' format, nil when none declares one, or an error naming
+// the Message types grouped by the binding they declare: a Key identifies one
+// Entity across them (#34 decision 3).
+func SharedKeyBinding(types []asyncapi.MessageType) (asyncapi.Schema, error) {
+	var bindings []asyncapi.Schema
 	var groups [][]string
 	for _, mt := range types {
-		k := binding(mt)
 		i := 0
-		for i < len(bindings) && !reflect.DeepEqual(bindings[i], k) {
+		for i < len(bindings) && !reflect.DeepEqual(bindings[i], mt.Key) {
 			i++
 		}
 		if i == len(bindings) {
-			bindings = append(bindings, k)
+			bindings = append(bindings, mt.Key)
 			groups = append(groups, nil)
 		}
 		groups[i] = append(groups[i], mt.Name)
 	}
-	var none K
-	if len(bindings) <= 1 {
-		if len(bindings) == 1 {
-			return bindings[0], nil
-		}
-		return none, nil
+	switch len(bindings) {
+	case 0:
+		return nil, nil
+	case 1:
+		return bindings[0], nil
 	}
 	described := make([]string, len(groups))
 	for i, g := range groups {
 		described[i] = strings.Join(g, ", ")
-		if reflect.ValueOf(&bindings[i]).Elem().IsZero() {
+		if bindings[i] == nil {
 			described[i] += " (none)"
 		}
 	}
-	return none, &Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
+	return nil, &Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
 }
