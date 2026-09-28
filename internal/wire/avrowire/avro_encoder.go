@@ -177,8 +177,8 @@ func versionOf(ctx context.Context, client *registry.Client, subject string, id 
 // registered key avsc without a generated key, is a programming error - rejected
 // rather than silently dropping data or sending a null key where the schema
 // contract promises one.
-func (e *AvroEncoder) Encode(key any, generated pipeline.Generated) ([]byte, []byte, error) {
-	payload := generated.Payload
+func (e *AvroEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
+	key, payload := generated.Key, generated.Payload
 	if e.keySchema == nil {
 		if key != nil {
 			return nil, nil, fmt.Errorf("avro: a message key was provided but no key avsc is registered (-avro-key-schema)")

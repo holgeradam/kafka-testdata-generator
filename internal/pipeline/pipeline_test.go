@@ -13,23 +13,20 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
-	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 // fakeGenerator is a controlled PayloadGenerator: it returns a fixed Payload
 // (and optional error) for every Generate call, so pipeline tests exercise Pipeline
-// mechanics without loading a schema or driving an RNG. Tests that need real
-// generation semantics (key-binding synthesis, schema-error aborts) bind a
-// schema to *generator.Generator with boundGenerator instead.
+// mechanics without loading a schema or driving an RNG.
 type fakeGenerator struct {
+	key     any
 	payload any
 	headers []Header
 	err     error
 }
 
 func (f *fakeGenerator) Generate() (Generated, error) {
-	return Generated{Payload: f.payload, Headers: f.headers}, f.err
+	return Generated{Key: f.key, Payload: f.payload, Headers: f.headers}, f.err
 }
 
 // fakeEncoder is the Encoder seam's test adapter: the Payload as JSON and the
@@ -37,17 +34,13 @@ func (f *fakeGenerator) Generate() (Generated, error) {
 // in internal/wire and are tested there.
 type fakeEncoder struct{}
 
-func (fakeEncoder) Encode(key any, generated Generated) ([]byte, []byte, error) {
+func (fakeEncoder) Encode(generated Generated) ([]byte, []byte, error) {
 	var keyBytes []byte
-	if key != nil {
-		keyBytes = []byte(fmt.Sprint(key))
+	if generated.Key != nil {
+		keyBytes = []byte(fmt.Sprint(generated.Key))
 	}
 	payloadBytes, err := json.Marshal(generated.Payload)
 	return keyBytes, payloadBytes, err
-}
-
-func testNow() time.Time {
-	return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 }
 
 type fakeSink struct {
@@ -279,30 +272,13 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	}
 }
 
-// fakePlan is the Key seam's test adapter: it reports a fixed Key (or error)
-// and records the payloads it was applied to.
-type fakePlan struct {
-	key     any
-	err     error
-	applied []any
-}
-
-func (p *fakePlan) Apply(payload any) (any, error) {
-	p.applied = append(p.applied, payload)
-	if p.err != nil {
-		return nil, p.err
-	}
-	return p.key, nil
-}
-
-// TestRunKeyPlanProducesKey proves the Pipeline attaches whatever the Key plan
-// returns, and applies it to the generated Payload.
-func TestRunKeyPlanProducesKey(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	plan := &fakePlan{key: "planned-key"}
+// TestRunCarriesTheKey proves the Pipeline encodes the Key each generated
+// message carries, and announces no null Key when the run is keyed.
+func TestRunCarriesTheKey(t *testing.T) {
+	gen := &fakeGenerator{key: "generated-key", payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
-	p := New(Config{Generator: gen, Count: 2, KeyPlan: plan, Encoder: fakeEncoder{}, Warn: &warn}, sink)
+	p := New(Config{Generator: gen, Count: 2, Keyed: true, Encoder: fakeEncoder{}, Warn: &warn}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -312,118 +288,13 @@ func TestRunKeyPlanProducesKey(t *testing.T) {
 		t.Errorf("expected 2 acked, got %d", stats.Acked)
 	}
 	for _, o := range sink.recorded {
-		if string(o.Key) != "planned-key" {
-			t.Errorf("key bytes = %q, want the planned Key encoded", o.Key)
+		if string(o.Key) != "generated-key" {
+			t.Errorf("key bytes = %q, want the message's Key encoded", o.Key)
 		}
-	}
-	if len(plan.applied) != 2 {
-		t.Errorf("plan applied %d times, want 2", len(plan.applied))
 	}
 	if strings.Contains(warn.String(), "no key configured") {
-		t.Errorf("a Key plan is configured: must not warn about a null key, got %q", warn.String())
+		t.Errorf("a keyed run must not announce a null key, got %q", warn.String())
 	}
-}
-
-// TestRunKeyPlanErrorAborts proves a Key the plan cannot produce stops the run
-// before the record is counted: it is true of every record, not just this one.
-func TestRunKeyPlanErrorAborts(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Count: 3,
-		KeyPlan: &fakePlan{err: errors.New("key schema cannot be honoured")}, Encoder: fakeEncoder{}}, sink)
-
-	stats, err := p.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected the Key plan error to abort the run")
-	}
-	if stats.Total != 0 || stats.Acked != 0 {
-		t.Errorf("expected zero stats on abort, got %+v", stats)
-	}
-	if sink.count() != 0 {
-		t.Errorf("expected no sink calls, got %d", sink.count())
-	}
-}
-
-// TestRunPlantsKeyIntoPayload drives the real keyplan.Plan over a binding
-// schema: the Key the record carries is the value the Payload carries at the
-// path.
-func TestRunPlantsKeyIntoPayload(t *testing.T) {
-	schema := map[string]any{
-		"type":     "object",
-		"required": []any{"customer"},
-		"properties": map[string]any{
-			"customer": map[string]any{
-				"type":       "object",
-				"required":   []any{"id"},
-				"properties": map[string]any{"id": map[string]any{"type": "string"}},
-			},
-		},
-	}
-	binding := map[string]any{"type": "string", "format": "uuid"}
-	gen := generator.New(synth.New(1, testNow()))
-	plan, err := keyplan.New(&boundGenerator{gen: gen, schema: binding},
-		generator.NewKeyChecker(schema, binding), "customer.id")
-	if err != nil {
-		t.Fatalf("keyplan.New: %v", err)
-	}
-	sink := &fakeSink{}
-	p := New(Config{Generator: &boundGenerator{gen: gen, schema: schema}, Count: 3, KeyPlan: plan, Encoder: fakeEncoder{}}, sink)
-
-	stats, err := p.Run(context.Background())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if stats.Acked != 3 {
-		t.Fatalf("expected 3 acked, got %+v", stats)
-	}
-	for i, o := range sink.recorded {
-		var payload map[string]any
-		if err := json.Unmarshal(o.Payload, &payload); err != nil {
-			t.Fatalf("record %d: unmarshal payload: %v", i, err)
-		}
-		planted := payload["customer"].(map[string]any)["id"]
-		if planted != string(o.Key) {
-			t.Errorf("record %d: Key %q, payload holds %v at customer.id", i, o.Key, planted)
-		}
-	}
-}
-
-// TestRunUnhonorableKeySchemaAborts proves a key schema the generator cannot
-// honour surfaces its typed error through the plan and stops the run.
-func TestRunUnhonorableKeySchemaAborts(t *testing.T) {
-	gen := generator.New(synth.New(1, testNow()))
-	plan, err := keyplan.New(&boundGenerator{gen: gen, schema: map[string]any{"type": "widget"}}, nil, "")
-	if err != nil {
-		t.Fatalf("keyplan.New: %v", err)
-	}
-	sink := &fakeSink{}
-	p := New(Config{Generator: &boundGenerator{gen: gen, schema: map[string]any{"type": "string"}}, Count: 1, KeyPlan: plan, Encoder: fakeEncoder{}}, sink)
-
-	stats, err := p.Run(context.Background())
-	var ue *generator.UnsupportedSchemaError
-	if !errors.As(err, &ue) {
-		t.Fatalf("expected *generator.UnsupportedSchemaError, got %v", err)
-	}
-	if ue.Keyword != "type" {
-		t.Errorf("keyword = %q, want type", ue.Keyword)
-	}
-	if stats.Total != 0 || stats.Acked != 0 {
-		t.Errorf("expected zero stats on abort, got %+v", stats)
-	}
-}
-
-// boundGenerator binds a schema to the generator, the way the JSON Wire format
-// does for the Payload and the Key.
-type boundGenerator struct {
-	gen    *generator.Generator
-	schema map[string]any
-}
-
-func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
-
-func (g *boundGenerator) Generate() (Generated, error) {
-	v, err := g.Value()
-	return Generated{Payload: v}, err
 }
 
 // TestRunCarriesHeaders proves the Headers a Wire format generated reach the

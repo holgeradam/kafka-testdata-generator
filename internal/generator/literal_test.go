@@ -52,7 +52,7 @@ func TestPlantingRefusesStepsIntoLiterals(t *testing.T) {
 			if err := checkPath(t, c.schema, stringKey(), "customer.id"); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("Check: %v, want it to mention %q", err, c.want)
 			}
-			if _, _, err := Locate(c.schema, []string{"customer", "id"}); err == nil || !strings.Contains(err.Error(), c.want) {
+			if _, _, err := locate(c.schema, []string{"customer", "id"}); err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Errorf("Locate: %v, want it to mention %q", err, c.want)
 			}
 		})
@@ -92,12 +92,12 @@ func TestPlantingOverLiteralsAtThePathEnd(t *testing.T) {
 	if err := checkPath(t, schema, stringKey(), "note"); err != nil {
 		t.Errorf("Check(note): %v, want an example at the end accepted", err)
 	}
-	_, field, err := Locate(schema, []string{"region"})
+	_, field, err := locate(schema, []string{"region"})
 	if err != nil {
-		t.Fatalf("Locate(region): %v, want an enum at the end accepted", err)
+		t.Fatalf("locate(region): %v, want an enum at the end accepted", err)
 	}
 	if Conforms(field, "eu") != nil || Conforms(field, "asia") == nil {
-		t.Errorf("Locate(region) field = %v, want it to hold eu and refuse asia", field)
+		t.Errorf("locate(region) field = %v, want it to hold eu and refuse asia", field)
 	}
 }
 

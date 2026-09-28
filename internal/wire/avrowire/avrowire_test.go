@@ -64,16 +64,16 @@ func TestBuildGeneratesFromValueAvsc(t *testing.T) {
 }
 
 // TestBuildKey proves the Key comes from the key avsc alone: without one the
-// Key is null even when the spec declares a binding, and a Checker exists only
-// when -keyPath asks for planting.
+// Key is null even when the spec declares a binding, and with -keyPath the
+// Key is planted into the Payload.
 func TestBuildKey(t *testing.T) {
 	opts := options(t)
 	parts, err := Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.KeyGen != nil || parts.Checker != nil {
-		t.Error("no key avsc: want a null Key and no Checker, whatever the binding says")
+	if g, err := parts.Values.Generate(); parts.Keyed || err != nil || g.Key != nil {
+		t.Errorf("no key avsc: Keyed %v, Key %v, %v; want a null Key, whatever the binding says", parts.Keyed, g.Key, err)
 	}
 
 	opts.AvroKeySchema = writeAvsc(t, `{"type":"long"}`)
@@ -81,27 +81,22 @@ func TestBuildKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.KeyGen == nil {
-		t.Fatal("a key avsc must produce a Key generator")
-	}
-	k, err := parts.KeyGen.Value()
+	g, err := parts.Values.Generate()
 	if err != nil {
-		t.Fatalf("Key: %v", err)
+		t.Fatal(err)
 	}
-	if _, ok := k.(int64); !ok {
-		t.Errorf("key = %T, want int64 from the long key avsc", k)
-	}
-	if parts.Checker != nil {
-		t.Error("no -keyPath: want no Checker")
+	if _, ok := g.Key.(int64); !parts.Keyed || !ok {
+		t.Errorf("key avsc: Keyed %v, Key %T; want int64 from the long key avsc", parts.Keyed, g.Key)
 	}
 
+	opts.AvroKeySchema = writeAvsc(t, `"string"`)
 	opts.KeyPath = "id"
 	parts, err = Format{}.Build(opts)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if parts.Checker == nil {
-		t.Error("-keyPath with a key avsc must produce a Checker")
+	if g, err = parts.Values.Generate(); err != nil || g.Payload.(map[string]any)["id"] != g.Key {
+		t.Errorf("-keyPath id: Key %v, Payload %v, %v; want the Key planted", g.Key, g.Payload, err)
 	}
 }
 
@@ -295,11 +290,11 @@ func TestBuildRejectsTopicParameters(t *testing.T) {
 		"missing field": {parameter("x", "x", "nope"), "", "topic",
 			`Topic parameter x: location $message.payload#/nope: at "/nope": record Order has no field "nope"`},
 		"not a string": {parameter("count", "7", "count"), "", "topic",
-			"Topic parameter count: the Payload field at $message.payload#/count is int, which cannot hold the parameter's string value"},
+			"Topic parameter count: value 7 does not conform to the Payload field at $message.payload#/count: int cannot hold a string"},
 		"not a symbol": {parameter("zone", "apac", "zone"), "", "topic",
-			"Topic parameter zone: value apac is not a symbol of enum Zone [eu, us]"},
+			"Topic parameter zone: value apac does not conform to the Payload field at $message.payload#/zone: not a symbol of enum Zone [eu, us]"},
 		"not a uuid": {parameter("ref", "eu", "ref"), "", "topic",
-			"Topic parameter ref: value eu is not a uuid, which the Payload field at $message.payload#/ref (string (uuid)) requires"},
+			"Topic parameter ref: value eu does not conform to the Payload field at $message.payload#/ref: string (uuid) requires a uuid"},
 		"clash with -keyPath": {parameter("tenant", "acme", "meta", "tenant"), "meta", "keyPath",
 			"Topic parameter tenant: location $message.payload#/meta/tenant overlaps -keyPath meta; both would plant into the same field"},
 	}
@@ -346,4 +341,19 @@ func keyedAvroTypes(names ...string) []asyncapi.MessageType {
 func generate(parts *wire.Parts) (any, error) {
 	g, err := parts.Values.Generate()
 	return g.Payload, err
+}
+
+// TestBuildRefusesHeaderLocationUnderAvroSchema proves a Topic parameter
+// located in the Headers stops a run under -avro-schema, whose records are of
+// no Message type in the spec and so have no Headers to plant into.
+func TestBuildRefusesHeaderLocationUnderAvroSchema(t *testing.T) {
+	opts := options(t)
+	opts.AvroSchema = writeAvsc(t, regionAvsc)
+	opts.TopicParameters = []asyncapi.TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/tenant", Pointer: []string{"tenant"}, InHeaders: true}}
+	_, err := Format{}.Build(opts)
+	var we *wire.Error
+	want := "Topic parameter tenant: location $message.header#/tenant: under -avro-schema the records are of no Message type in the spec, so they have no Headers"
+	if !errors.As(err, &we) || we.Flag != "topic" || err.Error() != want {
+		t.Errorf("err = %v, want a topic error %q", err, want)
+	}
 }

@@ -2,60 +2,88 @@ package generator
 
 import (
 	"fmt"
+	"maps"
 	"slices"
+	"strconv"
 	"strings"
 
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
-// KeyChecker validates a key path against a Message schema: that generation
-// puts a value at that path in every record, and that the type there can hold
-// the Key the key schema produces (ADR-0009). It is the JSON Schema adapter of
-// keyplan.Checker; the avsc adapter lives in internal/avro.
+// Walk is the JSON Schema adapter of planting.Walk: where generation puts a
+// value in every record of a Message schema, or of a headers schema, and
+// whether the field there holds what is planted into it (ADR-0009, #83).
 //
-// "Guaranteed" means what this generator guarantees: a property listed in its
-// parent's required, an array index below minItems, no alternative branch along
-// the way, and a depth within the $ref budget (ADR-0005). Anything else is
-// present in some records and absent in others, which would leave the Key and
-// the Payload disagreeing, so it is refused before the run starts.
-type KeyChecker struct {
-	schema    map[string]any
-	keySchema map[string]any
-	defs      map[string]any
+// "Guaranteed" means what this generator guarantees, read as Generator.value
+// reads the schema: a property listed in its parent's required, an array index
+// below minItems, no alternative branch along the way, no literal the
+// generator returns as-is (#107), and a depth within the $ref budget
+// (ADR-0005). Anything else is present in some records and absent in others,
+// so it is refused before the run starts.
+type Walk struct {
+	schema map[string]any
+	key    map[string]any
+	defs   map[string]any
 }
 
-// NewKeyChecker builds the checker from the Message schema and the key schema
-// (the resolved bindings.kafka.key node). Both are self-contained: a $ref in
-// the Message schema points into its own $defs (#73).
-func NewKeyChecker(schema, keySchema map[string]any) *KeyChecker {
+// NewWalk walks schema, a Message schema or a headers schema, judging the
+// Key against key, the resolved bindings.kafka.key node, which is nil where no
+// Key is planted. Both are self-contained: a $ref in schema points into its
+// own $defs (#73).
+func NewWalk(schema, key map[string]any) *Walk {
 	defs, _ := schema["$defs"].(map[string]any)
-	return &KeyChecker{schema: schema, keySchema: keySchema, defs: defs}
+	return &Walk{schema: schema, key: key, defs: defs}
 }
 
-// Check reports whether path is usable, naming the offending step otherwise.
-func (c *KeyChecker) Check(path []keyplan.Step) error {
-	current := c.schema
-	depth := 0
+// Locate follows path through the schema. A token indexes an array where the
+// schema is one, and names a property elsewhere.
+func (w *Walk) Locate(path []planting.Step) ([]planting.Step, planting.Field, error) {
+	steps := make([]planting.Step, len(path))
+	current, depth := w.schema, 0
 	for i, step := range path {
-		resolved, d, err := resolveGuaranteed(c.defs, current, depth, true)
+		resolved, d, err := resolveGuaranteed(w.defs, current, depth, true)
 		if err != nil {
-			return pathError(path, i, err)
+			return nil, nil, &planting.StepError{Step: i, Err: err}
 		}
 		depth = d
-		next, err := descend(resolved, step)
-		if err != nil {
-			return pathError(path, i, err)
+		steps[i] = step
+		if step.Token {
+			steps[i] = planting.Step{Field: step.Field, Index: -1}
+			if n, err := strconv.Atoi(step.Field); err == nil && n >= 0 && strconv.Itoa(n) == step.Field && allows(resolved, "array") {
+				steps[i] = planting.Step{Index: n}
+			}
 		}
-		current = next
+		if current, err = descend(resolved, steps[i]); err != nil {
+			return nil, nil, &planting.StepError{Step: i, Err: err}
+		}
 	}
-	final, _, err := resolveGuaranteed(c.defs, current, depth, false)
+	final, _, err := resolveGuaranteed(w.defs, current, depth, false)
 	if err != nil {
-		return pathError(path, len(path)-1, err)
+		return nil, nil, &planting.StepError{Step: len(path) - 1, Err: err}
 	}
-	if err := c.holds(final); err != nil {
-		return pathError(path, len(path)-1, err)
+	return steps, &field{schema: final, walk: w}, nil
+}
+
+// field is the schema at the end of a located path.
+type field struct {
+	schema map[string]any
+	walk   *Walk
+}
+
+// Holds validates value against the field, carrying the walked schema's
+// $defs, so a $ref inside the field still resolves.
+func (f *field) Holds(value string) error {
+	return Conforms(f.selfContained(), value)
+}
+
+// selfContained is the field's schema with the walked schema's $defs.
+func (f *field) selfContained() map[string]any {
+	if f.walk.defs == nil {
+		return f.schema
 	}
-	return nil
+	s := maps.Clone(f.schema)
+	s["$defs"] = f.walk.defs
+	return s
 }
 
 // resolveGuaranteed follows $ref nodes into defs and merges allOf, so the
@@ -121,7 +149,7 @@ func literalKeyword(schema map[string]any) string {
 }
 
 // descend takes one step into the schema, requiring the step to be guaranteed.
-func descend(schema map[string]any, step Step) (map[string]any, error) {
+func descend(schema map[string]any, step planting.Step) (map[string]any, error) {
 	if step.Index >= 0 {
 		if err := always(schema, "array"); err != nil {
 			return nil, err
@@ -154,9 +182,6 @@ func descend(schema map[string]any, step Step) (map[string]any, error) {
 	return field, nil
 }
 
-// Step is keyplan's path step, aliased so this file reads as one walk.
-type Step = keyplan.Step
-
 func isRequired(schema map[string]any, field string) bool {
 	required, _ := schema["required"].([]any)
 	for _, r := range required {
@@ -183,16 +208,16 @@ func always(schema map[string]any, want string) error {
 	return fmt.Errorf("the schema here is %s, not %s", describeType(schema), withArticle(want))
 }
 
-// holds reports whether a value generated from the key schema conforms to the
-// schema at the key path: every type the Key may take must be one the field
-// allows, an integer Key also fitting a number field. A field whose type list
-// allows null takes a planted Key of another type it lists (#99 decision 5).
-func (c *KeyChecker) holds(at map[string]any) error {
-	keyTypes, err := typeList(c.keySchema)
+// HoldsKey reports whether a value generated from the key schema conforms to
+// the field: every type the Key may take must be one the field allows, an
+// integer Key also fitting a number field. A field whose type list allows
+// null takes a planted Key of another type it lists (#99 decision 5).
+func (f *field) HoldsKey() error {
+	keyTypes, err := typeList(f.walk.key)
 	if err != nil {
 		return fmt.Errorf("the key schema declares no type, so the Key cannot be planted")
 	}
-	fieldTypes, err := typeList(at)
+	fieldTypes, err := typeList(f.schema)
 	if err != nil {
 		return fmt.Errorf("the schema here declares no type, so the Key cannot be planted")
 	}
@@ -201,9 +226,9 @@ func (c *KeyChecker) holds(at map[string]any) error {
 			continue
 		}
 		if kt == "null" {
-			return fmt.Errorf("the key schema may be null, but the schema here is %s", describeType(at))
+			return fmt.Errorf("the key schema may be null, but the schema here is %s", describeType(f.schema))
 		}
-		return fmt.Errorf("the schema here is %s but the key schema is %s", describeType(at), describeType(c.keySchema))
+		return fmt.Errorf("the schema here is %s but the key schema is %s", describeType(f.schema), describeType(f.walk.key))
 	}
 	return nil
 }
@@ -229,11 +254,8 @@ func withArticle(typ string) string {
 	return "a " + typ
 }
 
-// pathError names the step that failed, so the message points at the part of
-// the path that is wrong rather than the whole of it.
-func pathError(path []Step, i int, err error) error {
-	return &keyplan.PathError{
-		Path:   keyplan.PathString(path),
-		Detail: fmt.Sprintf("at %q: %v", keyplan.PathString(path[:i+1]), err),
-	}
+// allows reports whether the schema's type is typ or lists it.
+func allows(schema map[string]any, typ string) bool {
+	types, err := typeList(schema)
+	return err == nil && slices.Contains(types, typ)
 }

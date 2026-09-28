@@ -14,7 +14,10 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -100,9 +103,9 @@ func specAvro(types []asyncapi.MessageType) []asyncapi.MessageType {
 // binding, which the Message types must share, else the -avro-key-schema
 // file. The models drive generation; their raw avsc is what the AvroEncoder
 // registers. A spec whose payloads are JSON Schema is not consulted:
-// -avro-schema governs. A Topic parameter's payload location is walked
-// through every value avsc instead, and its value planted into every Payload
-// (#83).
+// -avro-schema governs. Every Planting - the Key at -keyPath, each Topic
+// parameter at its location - is walked through every value avsc instead
+// (#83, #108).
 //
 // Several Avro Message types are mixed per record, as JSON mode mixes (#74),
 // and register as a union under <topic>-value (#84 decision 4). -keyPath and
@@ -117,7 +120,7 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	if err != nil {
 		return nil, err
 	}
-	plants, err := topicParameters(values, names, opts)
+	plantings, err := plantingsOf(opts, spec, values, names, key)
 	if err != nil {
 		return nil, err
 	}
@@ -129,16 +132,17 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	}
 
 	gen := avro.NewGenerator(opts.Synth)
-	payloads := make([]*boundGenerator, len(values))
+	payloads := make([]wire.ValueSource, len(values))
 	for i, v := range values {
-		payloads[i] = &boundGenerator{gen: gen, model: v, plants: plants[i]}
+		payloads[i] = &boundGenerator{gen: gen, model: v}
 	}
-	headers, err := wire.NewHeaderSource(opts.Synth, spec, opts.TopicParameters)
-	if err != nil {
-		return nil, err
+	mix := &wire.Mix{Synth: opts.Synth, Types: payloads, Headers: wire.NewHeaderSource(opts.Synth, spec), Plantings: plantings}
+	if key != nil {
+		mix.Key = keyplan.Reuse(&boundGenerator{gen: gen, model: key}, opts.RecordsPerKey, opts.Synth)
 	}
 	parts := &wire.Parts{
-		Values:  &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: headers},
+		Values:  mix,
+		Keyed:   key != nil,
 		Encoder: encoderFor(opts, values, u, key),
 	}
 	// Records from -avro-schema are of no Message type in the spec, so no
@@ -156,17 +160,29 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 			break
 		}
 	}
-	if key != nil {
-		parts.KeyGen = &boundGenerator{gen: gen, model: key}
-		if opts.KeyPath != "" {
-			checker := make(wire.EveryType, len(values))
-			for i, v := range values {
-				checker[i] = wire.NamedChecker{Name: names[i], Checker: avro.NewKeyChecker(v, key)}
+	return parts, nil
+}
+
+// plantingsOf checks every Planting against each value avsc, and against the
+// spec Message type's headers schema, which is JSON Schema in every Wire
+// format (#85 decision 1). Records from -avro-schema are of no Message type in
+// the spec, so they have no Headers to plant into.
+func plantingsOf(opts wire.Options, spec []asyncapi.MessageType, values []*avro.Schema, names []string, key *avro.Schema) ([]*planting.Set, error) {
+	if len(spec) == 0 {
+		for _, tp := range opts.TopicParameters {
+			if tp.InHeaders {
+				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Name, tp.Location)}
 			}
-			parts.Checker = checker
 		}
 	}
-	return parts, nil
+	walks := make([]planting.MessageType, len(values))
+	for i, v := range values {
+		walks[i] = planting.MessageType{Name: names[i], Payload: avro.NewWalk(v, key)}
+		if len(spec) > 0 && spec[i].Headers != nil {
+			walks[i].Headers = generator.NewWalk(spec[i].Headers, nil)
+		}
+	}
+	return wire.Plantings(walks, opts.KeyPath, opts.TopicParameters)
 }
 
 // valueAvscs parses the Payload's avscs, one per Message type, with the
@@ -298,62 +314,11 @@ func loadAvsc(path string) (*avro.Schema, error) {
 	return avro.Parse(b)
 }
 
-// topicParameters checks each Topic parameter's payload location against
-// every value avsc, before any record exists: the location must be
-// guaranteed, as a -keyPath must under AVRO, the type there must hold the
-// value, and no two plantings, the Key's included, may land in the same
-// field. It returns what to plant into each Message type's Payloads.
-func topicParameters(values []*avro.Schema, names []string, opts wire.Options) ([]wire.Plants, error) {
-	plants := make([]wire.Plants, len(values))
-	for _, tp := range opts.TopicParameters {
-		if tp.Pointer == nil || tp.InHeaders {
-			continue
-		}
-		for i, value := range values {
-			inType := ""
-			if len(values) > 1 {
-				inType = "in Message type " + names[i] + ": "
-			}
-			steps, at, err := avro.Locate(value, tp.Pointer)
-			if err != nil {
-				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: %s%v", tp.Name, tp.Location, inType, err)}
-			}
-			if err := avro.HoldsString(at, tp.Value, tp.Location); err != nil {
-				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: %s%v", tp.Name, inType, err)}
-			}
-			if plants[i], err = plants[i].Add(tp, steps, opts.KeyPath); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return plants, nil
-}
-
 // boundGenerator binds an avsc model to the generator: the value avsc for the
-// Payload, with the Topic parameter values planted into each, the key avsc
-// for the Key (ADR-0007 decision 3).
+// Payload, the key avsc for the Key (ADR-0007 decision 3).
 type boundGenerator struct {
-	gen    *avro.Generator
-	model  *avro.Schema
-	plants wire.Plants
+	gen   *avro.Generator
+	model *avro.Schema
 }
 
-func (g *boundGenerator) Value() (any, error) {
-	v, err := g.gen.Value(g.model.Root)
-	if err != nil {
-		return nil, err
-	}
-	if err := g.plants.Apply(v); err != nil {
-		return nil, err
-	}
-	return v, nil
-}
-
-// sources are the Message types' Payload generators, for the mix.
-func sources(payloads []*boundGenerator) []wire.ValueSource {
-	out := make([]wire.ValueSource, len(payloads))
-	for i, p := range payloads {
-		out[i] = p
-	}
-	return out
-}
+func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }

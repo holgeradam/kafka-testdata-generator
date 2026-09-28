@@ -8,8 +8,10 @@ import (
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -18,10 +20,12 @@ type ValueSource interface {
 	Value() (any, error)
 }
 
-// Mix generates each Payload from one Message type picked from the seeded
-// stream (#74), then its Headers. A single Message type draws no pick, so its
-// output is exactly what generating from it alone gives. Both Wire formats
-// mix this way, each binding its own schemas.
+// Mix generates each message whole (#108): it picks a Message type from the
+// seeded stream (#74), generates that type's Payload, then its Headers, then
+// the Key, and plants every Planting of the type before encoding the Headers.
+// A single Message type draws no pick, so its output is exactly what
+// generating from it alone gives. Both Wire formats mix this way, each binding
+// its own schemas.
 type Mix struct {
 	Synth *synth.Synthesizer
 	// Types generate each Message type's Payload, in Message type order.
@@ -29,6 +33,11 @@ type Mix struct {
 	// Headers generate each Message type's Headers; nil when none declares
 	// any.
 	Headers *HeaderSource
+	// Key generates each message's Key; nil when the run has no key schema,
+	// and every record carries a null Key.
+	Key keyplan.Generator
+	// Plantings are each Message type's Plantings, in Message type order.
+	Plantings []*planting.Set
 }
 
 func (m *Mix) Generate() (pipeline.Generated, error) {
@@ -36,12 +45,25 @@ func (m *Mix) Generate() (pipeline.Generated, error) {
 	if len(m.Types) > 1 {
 		i = m.Synth.Pick(len(m.Types))
 	}
-	v, err := m.Types[i].Value()
+	payload, err := m.Types[i].Value()
 	if err != nil {
 		return pipeline.Generated{}, err
 	}
-	headers, err := m.Headers.Generate(i)
-	return pipeline.Generated{Type: i, Payload: v, Headers: headers}, err
+	headers, err := m.Headers.value(i)
+	if err != nil {
+		return pipeline.Generated{}, err
+	}
+	var key any
+	if m.Key != nil {
+		if key, err = m.Key.Value(); err != nil {
+			return pipeline.Generated{}, err
+		}
+	}
+	if err := m.Plantings[i].Plant(payload, headers, key); err != nil {
+		return pipeline.Generated{}, err
+	}
+	encoded, err := m.Headers.encode(i, headers)
+	return pipeline.Generated{Type: i, Key: key, Payload: payload, Headers: encoded}, err
 }
 
 // HeaderSource generates each record's Headers from its Message type's
@@ -51,79 +73,28 @@ type HeaderSource struct {
 	gen     *generator.Generator
 	types   []asyncapi.MessageType
 	schemas []map[string]any
-	// plants are the Topic parameter values planted into each Message
-	// type's Headers (#93).
-	plants []Plants
 }
 
-// NewHeaderSource returns the Headers source for the Message types, in the
-// order the Wire format holds them, or nil when none declares headers: such a
-// run draws nothing for Headers from the seeded stream, so its records are
-// what they were before Headers existed.
-//
-// Each Topic parameter with a header location is checked against every
-// Message type's headers schema before any record exists, as a payload
-// location is against the Payload's (#83): the location must be guaranteed,
-// the value must conform to the header's schema there, and no two plantings
-// may land in the same header. Headers are no place for the Key, so -keyPath
-// never clashes with them.
-func NewHeaderSource(s *synth.Synthesizer, types []asyncapi.MessageType, params []asyncapi.TopicParameter) (*HeaderSource, error) {
+// NewHeaderSource binds each Message type's headers schema to the generator,
+// in the order the Wire format holds them, or returns nil when none declares
+// headers: such a run draws nothing for Headers from the seeded stream, so its
+// records are what they were before Headers existed.
+func NewHeaderSource(s *synth.Synthesizer, types []asyncapi.MessageType) *HeaderSource {
 	schemas := make([]map[string]any, len(types))
 	declared := false
 	for i, mt := range types {
 		schemas[i] = mt.Headers
 		declared = declared || mt.Headers != nil
 	}
-	plants, err := headerPlants(types, params)
-	if err != nil {
-		return nil, err
-	}
 	if !declared {
-		return nil, nil
+		return nil
 	}
-	return &HeaderSource{gen: generator.New(s), types: types, schemas: schemas, plants: plants}, nil
+	return &HeaderSource{gen: generator.New(s), types: types, schemas: schemas}
 }
 
-// headerPlants checks each header location against every Message type and
-// returns what to plant into each type's Headers.
-func headerPlants(types []asyncapi.MessageType, params []asyncapi.TopicParameter) ([]Plants, error) {
-	plants := make([]Plants, len(types))
-	for _, tp := range params {
-		if !tp.InHeaders {
-			continue
-		}
-		refuse := func(format string, args ...any) error {
-			return &Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: ", tp.Name) + fmt.Sprintf(format, args...)}
-		}
-		if len(types) == 0 {
-			return nil, refuse("location %s: under -avro-schema the records are of no Message type in the spec, so they have no Headers", tp.Location)
-		}
-		for i, mt := range types {
-			inType := ""
-			if len(types) > 1 {
-				inType = "in Message type " + mt.Name + ": "
-			}
-			if mt.Headers == nil {
-				return nil, refuse("location %s: %s%s declares no headers", tp.Location, inType, mt.Name)
-			}
-			steps, field, err := generator.Locate(mt.Headers, tp.Pointer)
-			if err != nil {
-				return nil, refuse("location %s: %s%v", tp.Location, inType, err)
-			}
-			if err := generator.Conforms(field, tp.Value); err != nil {
-				return nil, refuse("value %s does not conform to the header at %s: %s%v", tp.Value, tp.Location, inType, err)
-			}
-			if plants[i], err = plants[i].Add(tp, steps, ""); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return plants, nil
-}
-
-// Generate returns the encoded Headers of a record of Message type i: none
-// when that type declares no headers.
-func (h *HeaderSource) Generate(i int) ([]pipeline.Header, error) {
+// value generates the Headers of a record of Message type i, as an object
+// yet to be planted into and encoded: nil when that type declares none.
+func (h *HeaderSource) value(i int) (any, error) {
 	if h == nil || h.schemas[i] == nil {
 		return nil, nil
 	}
@@ -131,8 +102,14 @@ func (h *HeaderSource) Generate(i int) ([]pipeline.Header, error) {
 	if err != nil {
 		return nil, fmt.Errorf("headers of %s: %w", h.types[i].Name, err)
 	}
-	if err := h.plants[i].Apply(v); err != nil {
-		return nil, fmt.Errorf("headers of %s: %w", h.types[i].Name, err)
+	return v, nil
+}
+
+// encode turns the Headers of a record of Message type i into Kafka record
+// headers.
+func (h *HeaderSource) encode(i int, v any) ([]pipeline.Header, error) {
+	if h == nil || h.schemas[i] == nil {
+		return nil, nil
 	}
 	values, _ := v.(map[string]any)
 	return EncodeHeaders(h.schemas[i], values)

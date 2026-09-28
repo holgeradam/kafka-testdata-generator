@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
-	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire/avrowire"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
@@ -127,8 +127,8 @@ func TestPlanAccepts(t *testing.T) {
 				if r.Config.Count != 10 {
 					t.Errorf("Count = %d, want the default 10", r.Config.Count)
 				}
-				if r.Config.KeyPlan != nil {
-					t.Error("no key schema: KeyPlan must be nil, so records carry a null Key")
+				if r.Config.Keyed {
+					t.Error("no key schema: the run must not be keyed, so records carry a null Key")
 				}
 				if r.Config.Generator == nil {
 					t.Error("plan must carry a generator")
@@ -139,16 +139,15 @@ func TestPlanAccepts(t *testing.T) {
 			name: "key plan from binding",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "orderId"},
 			check: func(t *testing.T, r *Run) {
-				if r.Config.KeyPlan == nil {
-					t.Fatal("a key binding and -keyPath must produce a KeyPlan")
+				if !r.Config.Keyed {
+					t.Fatal("a key binding and -keyPath must key the run")
 				}
-				payload := map[string]any{"orderId": "before"}
-				k, err := r.Config.KeyPlan.Apply(payload)
+				g, err := r.Config.Generator.Generate()
 				if err != nil {
-					t.Fatalf("Apply: %v", err)
+					t.Fatalf("Generate: %v", err)
 				}
-				if payload["orderId"] != k {
-					t.Errorf("planted %v, key %v; want the Key planted at -keyPath", payload["orderId"], k)
+				if g.Payload.(map[string]any)["orderId"] != g.Key {
+					t.Errorf("payload %v, key %v; want the Key planted at -keyPath", g.Payload, g.Key)
 				}
 			},
 		},
@@ -158,15 +157,14 @@ func TestPlanAccepts(t *testing.T) {
 			check: func(t *testing.T, r *Run) {
 				distinct := map[any]bool{}
 				for i := 0; i < 400; i++ {
-					payload := map[string]any{"orderId": "before"}
-					k, err := r.Config.KeyPlan.Apply(payload)
+					g, err := r.Config.Generator.Generate()
 					if err != nil {
-						t.Fatalf("Apply: %v", err)
+						t.Fatalf("Generate: %v", err)
 					}
-					if payload["orderId"] != k {
-						t.Fatalf("record %d: planted %v, key %v; want the reused Key planted", i, payload["orderId"], k)
+					if g.Payload.(map[string]any)["orderId"] != g.Key {
+						t.Fatalf("record %d: payload %v, key %v; want the reused Key planted", i, g.Payload, g.Key)
 					}
-					distinct[k] = true
+					distinct[g.Key] = true
 				}
 				if avg := 400.0 / float64(len(distinct)); avg < 3 || avg > 5 {
 					t.Errorf("400 records over %d Keys = %.1f per Key, want about 4", len(distinct), avg)
@@ -177,8 +175,8 @@ func TestPlanAccepts(t *testing.T) {
 			name: "binding without a path still keys",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run"},
 			check: func(t *testing.T, r *Run) {
-				if r.Config.KeyPlan == nil {
-					t.Error("a key binding alone must still produce a KeyPlan")
+				if !r.Config.Keyed {
+					t.Error("a key binding alone must still key the run")
 				}
 			},
 		},
@@ -189,8 +187,8 @@ func TestPlanAccepts(t *testing.T) {
 				if r.Format != "avro" {
 					t.Errorf("Format = %q, want avro", r.Format)
 				}
-				if r.Config.KeyPlan != nil {
-					t.Error("no key avsc: KeyPlan must be nil")
+				if r.Config.Keyed {
+					t.Error("no key avsc: the run must not be keyed")
 				}
 			},
 		},
@@ -198,8 +196,8 @@ func TestPlanAccepts(t *testing.T) {
 			name: "avro key avsc",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key},
 			check: func(t *testing.T, r *Run) {
-				if r.Config.KeyPlan == nil {
-					t.Error("a key avsc must produce a KeyPlan")
+				if !r.Config.Keyed {
+					t.Error("a key avsc must key the run")
 				}
 			},
 		},
@@ -341,7 +339,7 @@ channels:
 		{"no topic", []string{"-spec", spec}, "topic", "-topic is required", nil},
 		{"renamed channel flag", []string{"-spec", spec, "-channel", "orders"}, "channel", "-channel was renamed to -topic", nil},
 		{"Message types with different Key bindings", []string{"-spec", mixedKeys, "-topic", "orders", "-dry-run"}, "topic", "different Key bindings (OrderCreated vs OrderUpdated (none))", nil},
-		{"key path missing in one Message type", []string{"-spec", keyedMix, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "in Message type OrderUpdated", new(*keyplan.PathError)},
+		{"key path missing in one Message type", []string{"-spec", keyedMix, "-topic", "orders", "-dry-run", "-keyPath", "orderId"}, "keyPath", "in Message type OrderUpdated", new(*planting.PathError)},
 		{"unusable key binding", []string{"-spec", badBinding, "-topic", "orders", "-dry-run"}, "topic", "bindings.kafka.key must be a schema object", nil},
 		{"records per key below 1", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-records-per-key", "0"}, "records-per-key", "-records-per-key must be at least 1", nil},
 		{"key reuse without a key schema", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-records-per-key", "2"}, "records-per-key", "-records-per-key above 1 requires a key schema", nil},
@@ -356,12 +354,12 @@ channels:
 		{"spec file missing", []string{"-spec", filepath.Join(t.TempDir(), "gone.yaml"), "-topic", "orders"}, "spec", "", nil},
 		{"Kafka topic missing from spec", []string{"-spec", spec, "-topic", "nope", "-dry-run"}, "topic", "", nil},
 		{"malformed avsc", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", broken}, "avro-schema", "", new(*avro.ParseError)},
-		{"key path not guaranteed", []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "nickname"}, "keyPath", "not required", new(*keyplan.PathError)},
+		{"key path not guaranteed", []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "nickname"}, "keyPath", "not required", new(*planting.PathError)},
 		{"unknown flag", []string{"-spec", spec, "-topic", "orders", "-nope"}, "", "not defined", nil},
 		{"invalid format", []string{"-spec", spec, "-topic", "orders", "-format", "xml"}, "", "invalid -format", nil},
 		{"invalid acks", []string{"-spec", spec, "-topic", "orders", "-acks", "two"}, "", "invalid -acks", nil},
 		{"invalid now", []string{"-spec", spec, "-topic", "orders", "-now", "yesterday"}, "", "invalid -now", nil},
-		{"avro key path not guaranteed", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key, "-keyPath", "missing"}, "keyPath", "no field", new(*keyplan.PathError)},
+		{"avro key path not guaranteed", []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key, "-keyPath", "missing"}, "keyPath", "no field", new(*planting.PathError)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

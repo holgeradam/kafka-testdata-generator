@@ -13,6 +13,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
@@ -39,9 +40,9 @@ func (Format) Check(opts wire.Options) error {
 // of one of the Kafka topic's Message types, picked per record from the
 // seeded stream (#74). The Key comes from the Key binding, which every Message
 // type must declare identically, since a Key identifies one Entity across them
-// (#34 decision 3), and which -keyPath therefore requires. A -keyPath is checked
-// against every Message type's Payload schema, and so is each Topic
-// parameter's location, whose value is planted into every Payload (#83).
+// (#34 decision 3), and which -keyPath therefore requires. Every Planting - the
+// Key at -keyPath, each Topic parameter at its location - is checked against
+// every Message type before any record exists (#83, #108).
 func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 	types := opts.MessageTypes
 	if len(types) == 0 {
@@ -55,38 +56,36 @@ func (Format) Build(opts wire.Options) (*wire.Parts, error) {
 		return nil, &wire.Error{Usage: true, Flag: "keyPath", Detail: "-keyPath requires a key schema: declare message.bindings.kafka.key in the spec, so there is a Key to plant"}
 	}
 
-	plants, err := topicParameters(types, opts)
+	walks := make([]planting.MessageType, len(types))
+	for i, mt := range types {
+		walks[i] = planting.MessageType{Name: mt.Name, Payload: generator.NewWalk(mt.Payload, keyBinding)}
+		if mt.Headers != nil {
+			walks[i].Headers = generator.NewWalk(mt.Headers, nil)
+		}
+	}
+	plantings, err := wire.Plantings(walks, opts.KeyPath, opts.TopicParameters)
 	if err != nil {
 		return nil, err
 	}
 
 	gen := generator.New(opts.Synth)
 	schemas := make([]map[string]any, len(types))
+	payloads := make([]wire.ValueSource, len(types))
 	for i, mt := range types {
 		schemas[i] = mt.Payload
+		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload}
 	}
-	payloads := make([]*boundGenerator, len(types))
-	for i, mt := range types {
-		payloads[i] = &boundGenerator{gen: gen, schema: mt.Payload, plants: plants[i]}
+	mix := &wire.Mix{Synth: opts.Synth, Types: payloads, Headers: wire.NewHeaderSource(opts.Synth, types), Plantings: plantings}
+	if keyBinding != nil {
+		mix.Key = keyplan.Reuse(&boundGenerator{gen: gen, schema: keyBinding}, opts.RecordsPerKey, opts.Synth)
 	}
-
-	headers, err := wire.NewHeaderSource(opts.Synth, types, opts.TopicParameters)
-	if err != nil {
-		return nil, err
-	}
-	parts := &wire.Parts{
-		Values: &wire.Mix{Synth: opts.Synth, Types: sources(payloads), Headers: headers},
+	return &wire.Parts{
+		Values: mix,
+		Keyed:  keyBinding != nil,
 		Encoder: func(context.Context) (pipeline.Encoder, error) {
 			return JsonEncoder{Payloads: schemas, Key: keyBinding}, nil
 		},
-	}
-	if keyBinding != nil {
-		parts.KeyGen = &boundGenerator{gen: gen, schema: keyBinding}
-		if opts.KeyPath != "" {
-			parts.Checker = everyType(types, keyBinding)
-		}
-	}
-	return parts, nil
+	}, nil
 }
 
 // sharedKeyBinding returns the Key binding every Message type declares, nil
@@ -121,72 +120,11 @@ func sharedKeyBinding(types []asyncapi.MessageType) (map[string]any, error) {
 	return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("the Message types of the Kafka topic declare different Key bindings (%s); a Key identifies one Entity across them, so they must declare the same one, or none", strings.Join(described, " vs "))}
 }
 
-// everyType checks a key path against each Message type's Payload schema,
-// naming the Message type a rejection comes from.
-func everyType(types []asyncapi.MessageType, keyBinding map[string]any) keyplan.Checker {
-	c := make(wire.EveryType, len(types))
-	for i, mt := range types {
-		c[i] = wire.NamedChecker{Name: mt.Name, Checker: generator.NewKeyChecker(mt.Payload, keyBinding)}
-	}
-	return c
-}
-
-// topicParameters checks each Topic parameter's payload location against
-// every Message type, before any record exists: the location must be
-// guaranteed, as a -keyPath must, the value must conform to the field's schema
-// there, and no two plantings, the Key's included, may land in the same
-// field. It returns what to plant into each Message type's Payloads.
-func topicParameters(types []asyncapi.MessageType, opts wire.Options) ([]wire.Plants, error) {
-	plants := make([]wire.Plants, len(types))
-	for _, tp := range opts.TopicParameters {
-		if tp.Pointer == nil || tp.InHeaders {
-			continue
-		}
-		for i, mt := range types {
-			inType := ""
-			if len(types) > 1 {
-				inType = "in Message type " + mt.Name + ": "
-			}
-			steps, field, err := generator.Locate(mt.Payload, tp.Pointer)
-			if err != nil {
-				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: location %s: %s%v", tp.Name, tp.Location, inType, err)}
-			}
-			if err := generator.Conforms(field, tp.Value); err != nil {
-				return nil, &wire.Error{Flag: "topic", Detail: fmt.Sprintf("Topic parameter %s: value %s does not conform to the Payload field at %s: %s%v", tp.Name, tp.Value, tp.Location, inType, err)}
-			}
-			if plants[i], err = plants[i].Add(tp, steps, opts.KeyPath); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return plants, nil
-}
-
 // boundGenerator binds a JSON Schema to the generator: a Message type's
-// Payload schema, with the Topic parameter values planted into each Payload,
-// or the Key binding.
+// Payload schema, or the Key binding.
 type boundGenerator struct {
 	gen    *generator.Generator
 	schema map[string]any
-	plants wire.Plants
 }
 
-func (g *boundGenerator) Value() (any, error) {
-	v, err := g.gen.Value(g.schema)
-	if err != nil {
-		return nil, err
-	}
-	if err := g.plants.Apply(v); err != nil {
-		return nil, err
-	}
-	return v, nil
-}
-
-// sources are the Message types' Payload generators, for the mix.
-func sources(payloads []*boundGenerator) []wire.ValueSource {
-	out := make([]wire.ValueSource, len(payloads))
-	for i, p := range payloads {
-		out[i] = p
-	}
-	return out
-}
+func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.schema) }
