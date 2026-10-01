@@ -1,14 +1,15 @@
-package jsonwire
+package jsonwire_test
 
 import (
 	"encoding/json"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 	"testing"
 )
 
 // Compile-time check: JsonEncoder must satisfy the Encoder interface. If the
 // Encoder interface or JsonEncoder is deleted, this file will not compile.
-var _ pipeline.Encoder = JsonEncoder{}
+var _ pipeline.Encoder = jsonwire.JsonEncoder{}
 
 // TestJsonEncoderPayloadBytesAreJsonMarshal proves byte-identical output:
 // the encoder must produce the exact same bytes as a direct json.Marshal of
@@ -20,7 +21,7 @@ func TestJsonEncoderPayloadBytesAreJsonMarshal(t *testing.T) {
 		"items":   []any{"a", "b"},
 	}
 
-	enc := JsonEncoder{}
+	enc := jsonwire.JsonEncoder{}
 	_, payloadBytes, err := enc.Encode(pipeline.Generated{Payload: payload})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -52,7 +53,7 @@ func TestJsonEncoderKeyPlainScalar(t *testing.T) {
 		{"array", []any{1, 2}, "[1,2]"},
 	}
 
-	enc := JsonEncoder{}
+	enc := jsonwire.JsonEncoder{}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			keyBytes, _, err := enc.Encode(pipeline.Generated{Key: tc.key, Payload: map[string]any{"x": 1}})
@@ -70,7 +71,7 @@ func TestJsonEncoderKeyPlainScalar(t *testing.T) {
 // keyBytes (the pipeline skips sending when key is nil before calling Encode,
 // but the encoder must also handle it gracefully).
 func TestJsonEncoderNilKeyReturnsNilKeyBytes(t *testing.T) {
-	enc := JsonEncoder{}
+	enc := jsonwire.JsonEncoder{}
 	keyBytes, payloadBytes, err := enc.Encode(pipeline.Generated{Payload: map[string]any{"x": 1}})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -87,7 +88,7 @@ func TestJsonEncoderNilKeyReturnsNilKeyBytes(t *testing.T) {
 // simultaneously and the pipeline receives them as separate fields in Outgoing.
 func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 	payload := map[string]any{"orderId": "abc-123"}
-	enc := JsonEncoder{}
+	enc := jsonwire.JsonEncoder{}
 
 	keyBytes, payloadBytes, err := enc.Encode(pipeline.Generated{Key: "abc-123", Payload: payload})
 	if err != nil {
@@ -106,7 +107,7 @@ func TestJsonEncoderKeyAndPayloadTogether(t *testing.T) {
 // interface or JsonEncoder is removed, the compile-time assertion above
 // catches it; this test verifies the interface is referenced at runtime.
 func TestEncoderDeletionGuard(t *testing.T) {
-	var enc pipeline.Encoder = JsonEncoder{}
+	var enc pipeline.Encoder = jsonwire.JsonEncoder{}
 	key, payload, err := enc.Encode(pipeline.Generated{Key: "k", Payload: map[string]any{"v": 1}})
 	if err != nil {
 		t.Fatal(err)

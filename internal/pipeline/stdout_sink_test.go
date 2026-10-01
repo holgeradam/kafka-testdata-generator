@@ -1,20 +1,21 @@
-package pipeline
+package pipeline_test
 
 import (
 	"bytes"
 	"context"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"strings"
 	"testing"
 )
 
 func TestStdoutSinkWritesNDJSON(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	s := NewStdoutSink(&out, &errBuf)
+	s := pipeline.NewStdoutSink(&out, &errBuf)
 
-	if err := s.Send(context.Background(), Outgoing{Payload: []byte(`{"orderId":"abc"}`)}); err != nil {
+	if err := s.Send(context.Background(), pipeline.Outgoing{Payload: []byte(`{"orderId":"abc"}`)}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := s.Send(context.Background(), Outgoing{Payload: []byte(`{"orderId":"def"}`)}); err != nil {
+	if err := s.Send(context.Background(), pipeline.Outgoing{Payload: []byte(`{"orderId":"def"}`)}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -32,9 +33,9 @@ func TestStdoutSinkWritesNDJSON(t *testing.T) {
 
 func TestStdoutSinkEchoesKeyToStderr(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	s := NewStdoutSink(&out, &errBuf)
+	s := pipeline.NewStdoutSink(&out, &errBuf)
 
-	o := Outgoing{Key: []byte(`cust-1`), Payload: []byte(`{"id":"cust-1"}`)}
+	o := pipeline.Outgoing{Key: []byte(`cust-1`), Payload: []byte(`{"id":"cust-1"}`)}
 	if err := s.Send(context.Background(), o); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,10 +54,10 @@ func TestStdoutSinkEchoesKeyToStderr(t *testing.T) {
 // (#92, ADR-0003).
 func TestStdoutSinkEchoesHeadersToStderr(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	s := NewStdoutSink(&out, &errBuf)
-	o := Outgoing{
+	s := pipeline.NewStdoutSink(&out, &errBuf)
+	o := pipeline.Outgoing{
 		Key:     []byte(`cust-1`),
-		Headers: []Header{{Name: "tenant", Value: []byte("acme")}, {Name: "trace", Value: nil}, {Name: "attempt", Value: []byte("3")}},
+		Headers: []pipeline.Header{{Name: "tenant", Value: []byte("acme")}, {Name: "trace", Value: nil}, {Name: "attempt", Value: []byte("3")}},
 		Payload: []byte(`{"id":"cust-1"}`),
 	}
 	if err := s.Send(context.Background(), o); err != nil {
