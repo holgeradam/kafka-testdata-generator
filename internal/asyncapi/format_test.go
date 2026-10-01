@@ -2,9 +2,10 @@ package asyncapi_test
 
 import (
 	"errors"
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 )
 
 const avroFormat = `'application/vnd.apache.avro;version=1.9.0'`

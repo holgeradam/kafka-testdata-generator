@@ -1,9 +1,10 @@
-package generator
+package generator_test
 
 import (
 	"encoding/json"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -39,7 +40,7 @@ func linkDepth(root any) (deepest map[string]any, depth int) {
 }
 
 func TestValueRecursiveTerminates(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 
 	result, err := plainValue(gen, selfRefSchema())
 	if err != nil {
@@ -53,13 +54,13 @@ func TestValueRecursiveTerminates(t *testing.T) {
 	if depth == 0 {
 		t.Error("expected recursion to produce nested children")
 	}
-	if depth > maxRecursionDepth {
-		t.Errorf("link depth %d exceeds budget %d", depth, maxRecursionDepth)
+	if depth > generator.MaxRecursionDepth {
+		t.Errorf("link depth %d exceeds budget %d", depth, generator.MaxRecursionDepth)
 	}
 }
 
 func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
-	gen := New(synth.New(7, fixedNow()))
+	gen := generator.New(synth.New(7, fixedNow()))
 
 	result, err := plainValue(gen, selfRefSchema())
 	if err != nil {
@@ -76,8 +77,8 @@ func TestValueRecursiveBudgetExhaustionSkippedField(t *testing.T) {
 func TestValueRecursiveDeterministic(t *testing.T) {
 	root := selfRefSchema()
 
-	gen1 := New(synth.New(99, fixedNow()))
-	gen2 := New(synth.New(99, fixedNow()))
+	gen1 := generator.New(synth.New(99, fixedNow()))
+	gen2 := generator.New(synth.New(99, fixedNow()))
 
 	for i := 0; i < 10; i++ {
 		r1, err := plainValue(gen1, root)
@@ -112,7 +113,7 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 			},
 		},
 	}
-	gen := New(synth.New(3, fixedNow()))
+	gen := generator.New(synth.New(3, fixedNow()))
 
 	result, err := plainValue(gen, map[string]any{"$ref": "#/$defs/Node", "$defs": map[string]any{"Node": node}})
 	if err != nil {
@@ -122,7 +123,7 @@ func TestValueRecursiveArrayEmpties(t *testing.T) {
 	// Descend through first-child chains; the deepest array must be empty.
 	cur := result.(map[string]any)
 	seenEmpty := false
-	for depth := 0; depth < maxRecursionDepth+2; depth++ {
+	for depth := 0; depth < generator.MaxRecursionDepth+2; depth++ {
 		children, _ := cur["children"].([]any)
 		if len(children) == 0 {
 			seenEmpty = true

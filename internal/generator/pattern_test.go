@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -48,7 +49,7 @@ func TestPatternSupportProperty(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(synth.New(42, fixedNow()))
+			gen := generator.New(synth.New(42, fixedNow()))
 			schema := map[string]any{
 				"type":    "string",
 				"pattern": fx.pattern,
@@ -88,7 +89,7 @@ func TestPatternUnsupportedError(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(synth.New(42, fixedNow()))
+			gen := generator.New(synth.New(42, fixedNow()))
 			schema := map[string]any{
 				"type":    "string",
 				"pattern": fx.pattern,
@@ -97,7 +98,7 @@ func TestPatternUnsupportedError(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for unsupported pattern %q", fx.pattern)
 			}
-			var pe *UnsupportedPatternError
+			var pe *generator.UnsupportedPatternError
 			if !errors.As(err, &pe) {
 				t.Fatalf("expected *UnsupportedPatternError, got %T (%v)", err, err)
 			}
@@ -118,8 +119,8 @@ func TestPatternDeterministic(t *testing.T) {
 	pattern := `^[A-Z]{3}-[A-Z]{2}-\d{4}$`
 	schema := map[string]any{"type": "string", "pattern": pattern}
 
-	gen1 := New(synth.New(99, now))
-	gen2 := New(synth.New(99, now))
+	gen1 := generator.New(synth.New(99, now))
+	gen2 := generator.New(synth.New(99, now))
 
 	a, err := plainValue(gen1, schema)
 	if err != nil {

@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -97,7 +98,7 @@ func TestPlantingOverLiteralsAtThePathEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("locate(region): %v, want an enum at the end accepted", err)
 	}
-	if Conforms(field, "eu") != nil || Conforms(field, "asia") == nil {
+	if generator.Conforms(field, "eu") != nil || generator.Conforms(field, "asia") == nil {
 		t.Errorf("locate(region) field = %v, want it to hold eu and refuse asia", field)
 	}
 }
@@ -114,7 +115,7 @@ func TestValueReturnsItsOwnLiteral(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			want := map[string]any{"id": "x", "tags": []any{"a"}}
-			gen := New(synth.New(1, fixedNow()))
+			gen := generator.New(synth.New(1, fixedNow()))
 			first, err := gen.Value(schema)
 			if err != nil {
 				t.Fatal(err)

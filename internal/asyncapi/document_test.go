@@ -2,11 +2,12 @@ package asyncapi_test
 
 import (
 	"fmt"
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 )
 
 // writeSpec writes a spec string to a temp .yaml file and returns its path.

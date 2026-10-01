@@ -1,10 +1,11 @@
 package asyncapi_test
 
 import (
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 )
 
 const head3 = "asyncapi: '3.0.0'\ninfo: {title: T, version: '1'}\n"

@@ -2,7 +2,6 @@ package wire_test
 
 import (
 	"errors"
-	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // source is a ValueSource that logs its draw and yields a fresh value.

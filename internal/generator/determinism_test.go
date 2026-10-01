@@ -1,14 +1,15 @@
-package generator
+package generator_test
 
 import (
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func TestBasicDeterminism(t *testing.T) {
-	gen1 := New(synth.New(42, fixedNow()))
-	gen2 := New(synth.New(42, fixedNow()))
+	gen1 := generator.New(synth.New(42, fixedNow()))
+	gen2 := generator.New(synth.New(42, fixedNow()))
 
 	for i := 0; i < 10; i++ {
 		schema := map[string]any{

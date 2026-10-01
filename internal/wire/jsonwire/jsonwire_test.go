@@ -1,13 +1,10 @@
 package jsonwire_test
 
 import (
-	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
-	"reflect"
-
 	"context"
 	"errors"
 	"fmt"
-	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +12,11 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 )
 
 var _ wire.Format = jsonwire.Format{}

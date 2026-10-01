@@ -2,9 +2,10 @@ package jsonwire_test
 
 import (
 	"encoding/json"
+	"testing"
+
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
-	"testing"
 )
 
 // Compile-time check: JsonEncoder must satisfy the Encoder interface. If the

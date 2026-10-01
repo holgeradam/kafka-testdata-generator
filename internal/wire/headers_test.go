@@ -1,12 +1,12 @@
 package wire_test
 
 import (
-	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 	"reflect"
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
 // TestEncodeHeaders proves each property becomes one Kafka record header, in

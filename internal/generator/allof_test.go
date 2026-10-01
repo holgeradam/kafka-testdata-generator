@@ -1,8 +1,9 @@
-package generator
+package generator_test
 
 import (
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -67,7 +68,7 @@ func TestAllOfProperty(t *testing.T) {
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(fx.name, func(t *testing.T) {
-			gen := New(synth.New(42, fixedNow()))
+			gen := generator.New(synth.New(42, fixedNow()))
 			for i := 0; i < 50; i++ {
 				v, err := plainValue(gen, fx.schema)
 				if err != nil {
@@ -106,9 +107,9 @@ func TestAllOfConflict(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			gen := New(synth.New(42, fixedNow()))
+			gen := generator.New(synth.New(42, fixedNow()))
 			_, err := plainValue(gen, c.schema)
-			assertUnsupported(t, err, "allOf", RootPath)
+			assertUnsupported(t, err, "allOf", generator.RootPath)
 		})
 	}
 }

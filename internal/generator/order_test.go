@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -28,7 +29,7 @@ func c(v any) map[string]any { return map[string]any{"const": v} }
 // generator, as the JSON Encoder does: without a schema.
 func generated(t *testing.T, schema map[string]any, n int) []string {
 	t.Helper()
-	gen := New(synth.New(5, fixedNow()))
+	gen := generator.New(synth.New(5, fixedNow()))
 	out := make([]string, n)
 	for i := range out {
 		v, err := gen.Value(schema)
@@ -163,7 +164,7 @@ func TestValueEncodesAsJSONDoes(t *testing.T) {
 
 // plainValue generates from schema, with every object a map, for tests about
 // what is generated rather than its order.
-func plainValue(g *Generator, schema map[string]any) (any, error) {
+func plainValue(g *generator.Generator, schema map[string]any) (any, error) {
 	v, err := g.Value(schema)
 	return ordered.Plain(v), err
 }

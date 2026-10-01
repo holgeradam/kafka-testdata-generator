@@ -2,9 +2,10 @@ package asyncapi_test
 
 import (
 	"encoding/json"
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 )
 
 // avscOf decodes an avsc the reader produced, so tests compare structure

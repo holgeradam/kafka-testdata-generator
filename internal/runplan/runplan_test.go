@@ -5,8 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
-	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,9 +15,11 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
+	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire/avrowire"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 )

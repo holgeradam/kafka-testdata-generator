@@ -1,10 +1,11 @@
-package producer
+package producer_test
 
 import (
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -12,20 +13,20 @@ import (
 func TestParseAcks(t *testing.T) {
 	cases := []struct {
 		in   string
-		want Acks
+		want producer.Acks
 		err  bool
 	}{
-		{in: "1", want: AcksLeader},
-		{in: "all", want: AcksAll},
-		{in: "ALL", want: AcksAll},
-		{in: "All", want: AcksAll},
-		{in: "aLl", want: AcksAll},
-		{in: "aLL", want: AcksAll},
+		{in: "1", want: producer.AcksLeader},
+		{in: "all", want: producer.AcksAll},
+		{in: "ALL", want: producer.AcksAll},
+		{in: "All", want: producer.AcksAll},
+		{in: "aLl", want: producer.AcksAll},
+		{in: "aLL", want: producer.AcksAll},
 		{in: "garbage", err: true},
 	}
 
 	for _, tt := range cases {
-		got, err := ParseAcks(tt.in)
+		got, err := producer.ParseAcks(tt.in)
 		if tt.err {
 			if err == nil {
 				t.Errorf("ParseAcks(%q): expected error, got %v", tt.in, got)
@@ -49,19 +50,19 @@ func TestParseAcks(t *testing.T) {
 func TestAckConfigInvariant(t *testing.T) {
 	cases := []struct {
 		name            string
-		acks            Acks
+		acks            producer.Acks
 		wantAcks        kgo.Acks
 		wantDisableIdem bool
 	}{
 		{
 			name:            "acks-all-enables-idempotency",
-			acks:            AcksAll,
+			acks:            producer.AcksAll,
 			wantAcks:        kgo.AllISRAcks(),
 			wantDisableIdem: false,
 		},
 		{
 			name:            "acks-leader-disables-idempotency",
-			acks:            AcksLeader,
+			acks:            producer.AcksLeader,
 			wantAcks:        kgo.LeaderAck(),
 			wantDisableIdem: true,
 		},
@@ -69,7 +70,7 @@ func TestAckConfigInvariant(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			gotAcks, gotDisable := ackConfig(Options{Acks: tt.acks})
+			gotAcks, gotDisable := producer.AckConfig(producer.Options{Acks: tt.acks})
 			if gotAcks != tt.wantAcks {
 				t.Errorf("expected acks %v, got %v", tt.wantAcks, gotAcks)
 			}
@@ -83,8 +84,8 @@ func TestAckConfigInvariant(t *testing.T) {
 // TestDefaultOptionsMatchToday ensures the defaults preserve the pre-#16
 // hardcoded behavior: acks=1, linger 10ms, max buffered records 1000.
 func TestDefaultOptionsMatchToday(t *testing.T) {
-	o := DefaultOptions()
-	if o.Acks != AcksLeader {
+	o := producer.DefaultOptions()
+	if o.Acks != producer.AcksLeader {
 		t.Errorf("expected default acks AcksLeader, got %v", o.Acks)
 	}
 	if o.Linger != 10*time.Millisecond {
@@ -99,7 +100,7 @@ func TestDefaultOptionsMatchToday(t *testing.T) {
 // configures eagerly without connecting, so a non-routable broker still yields a
 // usable Producer (proving the generated opts are wire-compatible).
 func TestNewBuildsWithoutDialing(t *testing.T) {
-	p, err := New("localhost:1", DefaultOptions())
+	p, err := producer.New("localhost:1", producer.DefaultOptions())
 	if err != nil {
 		t.Fatalf("New with non-dialing broker should succeed: %v", err)
 	}
@@ -112,16 +113,13 @@ func TestNewBuildsWithoutDialing(t *testing.T) {
 // TestNewRoutesOptionsThroughBuildOpts uses the injected client constructor to
 // confirm New forwards Options into the kgo option set it builds.
 func TestNewRoutesOptionsThroughBuildOpts(t *testing.T) {
-	orig := newClient
-	defer func() { newClient = orig }()
-
 	var gotOpts []kgo.Opt
-	newClient = func(opts ...kgo.Opt) (*kgo.Client, error) {
+	defer producer.SetNewClient(func(opts ...kgo.Opt) (*kgo.Client, error) {
 		gotOpts = opts
 		return nil, nil
-	}
+	})()
 
-	p, err := New("localhost:1", Options{Acks: AcksLeader, Linger: time.Second, MaxBufferedRecords: 7})
+	p, err := producer.New("localhost:1", producer.Options{Acks: producer.AcksLeader, Linger: time.Second, MaxBufferedRecords: 7})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -132,28 +130,25 @@ func TestNewRoutesOptionsThroughBuildOpts(t *testing.T) {
 		t.Error("expected New to pass buildOpts options to the constructor")
 	}
 	// New prepends the seed-broker opt, so the constructor sees buildOpts + 1.
-	want := len(buildOpts(Options{Acks: AcksLeader, Linger: time.Second, MaxBufferedRecords: 7})) + 1
+	want := len(producer.BuildOpts(producer.Options{Acks: producer.AcksLeader, Linger: time.Second, MaxBufferedRecords: 7})) + 1
 	if len(gotOpts) != want {
 		t.Errorf("constructor received %d opts, want %d (buildOpts + seed broker)", len(gotOpts), want)
 	}
 
 	// The stored Options must reflect what was passed in.
-	if p.opts.Acks != AcksLeader || p.opts.Linger != time.Second || p.opts.MaxBufferedRecords != 7 {
-		t.Errorf("Producer did not store the provided Options: %+v", p.opts)
+	if p.Opts().Acks != producer.AcksLeader || p.Opts().Linger != time.Second || p.Opts().MaxBufferedRecords != 7 {
+		t.Errorf("Producer did not store the provided Options: %+v", p.Opts())
 	}
 }
 
 // TestNewRejectsInjectedConstructorError makes New propagate a construction
 // failure from the constructor.
 func TestNewRejectsInjectedConstructorError(t *testing.T) {
-	orig := newClient
-	defer func() { newClient = orig }()
-
-	newClient = func(_ ...kgo.Opt) (*kgo.Client, error) {
+	defer producer.SetNewClient(func(_ ...kgo.Opt) (*kgo.Client, error) {
 		return nil, errors.New("boom")
-	}
+	})()
 
-	_, err := New("localhost:1", DefaultOptions())
+	_, err := producer.New("localhost:1", producer.DefaultOptions())
 	if err == nil {
 		t.Fatal("expected New to propagate constructor error")
 	}

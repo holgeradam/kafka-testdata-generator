@@ -1,4 +1,4 @@
-package generator
+package generator_test
 
 import (
 	"encoding/json"
@@ -6,11 +6,12 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
 func TestGenerateObject(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -41,7 +42,7 @@ func TestGenerateObject(t *testing.T) {
 }
 
 func TestGenerateArray(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "array",
 		"items":    map[string]any{"type": "string"},
@@ -67,7 +68,7 @@ func TestGenerateArray(t *testing.T) {
 }
 
 func TestGenerateStringFormats(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 
 	tests := []struct {
 		format string
@@ -94,7 +95,7 @@ func TestGenerateStringFormats(t *testing.T) {
 }
 
 func TestGenerateIntegerBounds(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":    "integer",
 		"minimum": float64(10),
@@ -114,7 +115,7 @@ func TestGenerateIntegerBounds(t *testing.T) {
 }
 
 func TestGenerateEnum(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type": "string",
 		"enum": []any{"a", "b", "c"},
@@ -146,8 +147,8 @@ func TestDeterministic(t *testing.T) {
 		},
 	}
 
-	gen1 := New(synth.New(12345, fixedNow()))
-	gen2 := New(synth.New(12345, fixedNow()))
+	gen1 := generator.New(synth.New(12345, fixedNow()))
+	gen2 := generator.New(synth.New(12345, fixedNow()))
 
 	for i := 0; i < 10; i++ {
 		r1, _ := plainValue(gen1, schema)
@@ -167,7 +168,7 @@ func TestDeterministic(t *testing.T) {
 // never an index fragment such as "0]".
 func TestNestedValuesInheritFieldName(t *testing.T) {
 	emailRe := regexp.MustCompile(`^[a-z]+\.[a-z]+@[a-z]+\.[a-z]+$`)
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"emails", "contactEmail", "backupEmail"},
@@ -202,14 +203,14 @@ func TestNestedValuesInheritFieldName(t *testing.T) {
 // TestPatternErrorCarriesPath proves the walker attaches the JSON Path to an
 // unsupported pattern reported by the Synthesizer.
 func TestPatternErrorCarriesPath(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":       "object",
 		"required":   []any{"code"},
 		"properties": map[string]any{"code": map[string]any{"type": "string", "pattern": `a.c`}},
 	}
 	_, err := plainValue(gen, schema)
-	var pe *UnsupportedPatternError
+	var pe *generator.UnsupportedPatternError
 	if !errors.As(err, &pe) {
 		t.Fatalf("expected *UnsupportedPatternError, got %T (%v)", err, err)
 	}
@@ -221,7 +222,7 @@ func TestPatternErrorCarriesPath(t *testing.T) {
 // TestNullType proves type null generates null, the one value it allows,
 // wherever it stands: a Payload field or a null header (#92).
 func TestNullType(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	v, err := plainValue(gen, map[string]any{"type": "object", "required": []any{"trace"}, "properties": map[string]any{"trace": map[string]any{"type": "null"}}})
 	if err != nil {
 		t.Fatalf("Value: %v", err)
@@ -230,7 +231,7 @@ func TestNullType(t *testing.T) {
 	if got, ok := obj["trace"]; !ok || got != nil {
 		t.Errorf("trace = %v (present %v), want a null field", got, ok)
 	}
-	if err := Conforms(map[string]any{"type": "object", "properties": map[string]any{"trace": map[string]any{"type": "null"}}}, obj); err != nil {
+	if err := generator.Conforms(map[string]any{"type": "object", "properties": map[string]any{"trace": map[string]any{"type": "null"}}}, obj); err != nil {
 		t.Errorf("the value does not conform: %v", err)
 	}
 }

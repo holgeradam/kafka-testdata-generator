@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
-	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
+	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 )
 
 // avroSpec declares its Payload, and optionally its Key, in Avro (#84): the

@@ -1,9 +1,11 @@
-package keyplan
+package keyplan_test
 
 import (
 	"fmt"
 	"math/rand"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
 )
 
 // counter is a Key Generator producing a fresh, numbered Key per call, so a
@@ -27,7 +29,7 @@ type countingPicker struct{ draws int }
 
 func (p *countingPicker) Pick(int) int { p.draws++; return 0 }
 
-func keys(t *testing.T, g Generator, n int) []string {
+func keys(t *testing.T, g keyplan.Generator, n int) []string {
 	t.Helper()
 	out := make([]string, n)
 	for i := range out {
@@ -45,7 +47,7 @@ func keys(t *testing.T, g Generator, n int) []string {
 func TestReuseOfOneIsTheGenerator(t *testing.T) {
 	g := &counter{}
 	p := &countingPicker{}
-	if got := Reuse(g, 1, p); got != Generator(g) {
+	if got := keyplan.Reuse(g, 1, p); got != keyplan.Generator(g) {
 		t.Errorf("Reuse(g, 1) = %v, want g itself", got)
 	}
 	if p.draws != 0 {
@@ -58,7 +60,7 @@ func TestReuseOfOneIsTheGenerator(t *testing.T) {
 func TestReuseAveragesRecordsPerKey(t *testing.T) {
 	const records, perKey = 20000, 4
 	distinct := map[string]bool{}
-	for _, k := range keys(t, Reuse(&counter{}, perKey, newPicker(1)), records) {
+	for _, k := range keys(t, keyplan.Reuse(&counter{}, perKey, newPicker(1)), records) {
 		distinct[k] = true
 	}
 	avg := float64(records) / float64(len(distinct))
@@ -69,8 +71,8 @@ func TestReuseAveragesRecordsPerKey(t *testing.T) {
 
 // TestReuseIsDeterministic proves the same stream gives the same Key sequence.
 func TestReuseIsDeterministic(t *testing.T) {
-	a := keys(t, Reuse(&counter{}, 3, newPicker(9)), 500)
-	b := keys(t, Reuse(&counter{}, 3, newPicker(9)), 500)
+	a := keys(t, keyplan.Reuse(&counter{}, 3, newPicker(9)), 500)
+	b := keys(t, keyplan.Reuse(&counter{}, 3, newPicker(9)), 500)
 	for i := range a {
 		if a[i] != b[i] {
 			t.Fatalf("record %d: %s vs %s, want the same sequence", i, a[i], b[i])
@@ -83,18 +85,18 @@ func TestReuseIsDeterministic(t *testing.T) {
 func TestReuseKeepsRecentEntities(t *testing.T) {
 	created := map[string]int{} // Key -> how many Entities existed when it was made
 	entities := 0
-	for i, k := range keys(t, Reuse(&counter{}, 2, newPicker(5)), 30000) {
+	for i, k := range keys(t, keyplan.Reuse(&counter{}, 2, newPicker(5)), 30000) {
 		at, seen := created[k]
 		if !seen {
 			created[k] = entities
 			entities++
 			continue
 		}
-		if entities-at > maxEntities {
-			t.Fatalf("record %d reuses %s, created %d Entities ago; want at most %d", i, k, entities-at, maxEntities)
+		if entities-at > keyplan.MaxEntities {
+			t.Fatalf("record %d reuses %s, created %d Entities ago; want at most %d", i, k, entities-at, keyplan.MaxEntities)
 		}
 	}
-	if entities <= maxEntities {
-		t.Fatalf("only %d Entities created; the test must exceed the bound of %d", entities, maxEntities)
+	if entities <= keyplan.MaxEntities {
+		t.Fatalf("only %d Entities created; the test must exceed the bound of %d", entities, keyplan.MaxEntities)
 	}
 }

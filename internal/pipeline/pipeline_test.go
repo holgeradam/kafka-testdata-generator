@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"reflect"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 // fakeGenerator is a controlled PayloadGenerator: it returns a fixed Payload

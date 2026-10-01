@@ -2,9 +2,10 @@ package ordered_test
 
 import (
 	"encoding/json"
-	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 
 func object(kv ...any) ordered.Object {

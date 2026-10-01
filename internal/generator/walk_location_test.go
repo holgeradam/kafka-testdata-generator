@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
@@ -80,10 +81,10 @@ func TestLocateFieldIsSelfContained(t *testing.T) {
 	if !reflect.DeepEqual(field["$defs"], schema["$defs"]) {
 		t.Errorf("field = %v, want the Payload schema's $defs attached", field)
 	}
-	if err := Conforms(field, "eu"); err != nil {
+	if err := generator.Conforms(field, "eu"); err != nil {
 		t.Errorf("Conforms(eu) = %v, want nil", err)
 	}
-	if err := Conforms(field, "EU"); err == nil {
+	if err := generator.Conforms(field, "EU"); err == nil {
 		t.Error("Conforms(EU) = nil, want the pattern refused")
 	}
 }
@@ -106,7 +107,7 @@ func TestConforms(t *testing.T) {
 		{map[string]any{"const": "eu"}, "us", "value must be"},
 	}
 	for _, c := range cases {
-		err := Conforms(c.schema, c.value)
+		err := generator.Conforms(c.schema, c.value)
 		switch {
 		case c.want == "" && err != nil:
 			t.Errorf("Conforms(%v, %q) = %v, want nil", c.schema, c.value, err)
@@ -123,10 +124,10 @@ func TestConformsReadsOrderedObjects(t *testing.T) {
 	var ok, bad ordered.Object
 	ok.Add("id", "x")
 	bad.Add("id", 7.0)
-	if err := Conforms(schema, ok); err != nil {
+	if err := generator.Conforms(schema, ok); err != nil {
 		t.Errorf("Conforms(ordered id x) = %v, want nil", err)
 	}
-	if err := Conforms(schema, bad); err == nil {
+	if err := generator.Conforms(schema, bad); err == nil {
 		t.Error("Conforms(ordered id 7) = nil, want the type refused")
 	}
 }
