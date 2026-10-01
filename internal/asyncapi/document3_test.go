@@ -1,6 +1,7 @@
-package asyncapi
+package asyncapi_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -12,9 +13,9 @@ const head3 = "asyncapi: '3.0.0'\ninfo: {title: T, version: '1'}\n"
 // schema and Key binding as the 2.x example it restates, so both produce the
 // same seeded output.
 func TestV3ExampleMatchesV2(t *testing.T) {
-	read := func(name string) MessageType {
+	read := func(name string) asyncapi.MessageType {
 		t.Helper()
-		doc, err := Load(filepath.Join("..", "..", "examples", name))
+		doc, err := asyncapi.Load(filepath.Join("..", "..", "examples", name))
 		if err != nil {
 			t.Fatalf("Load %s: %v", name, err)
 		}

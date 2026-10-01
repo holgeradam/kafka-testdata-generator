@@ -1,9 +1,10 @@
-package planting
+package planting_test
 
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"reflect"
 	"strconv"
 	"strings"
@@ -22,32 +23,32 @@ type fakeField struct {
 	keyErr error
 }
 
-func (w fakeWalk) Locate(path []Step) ([]Step, Field, error) {
-	steps := make([]Step, len(path))
+func (w fakeWalk) Locate(path []planting.Step) ([]planting.Step, planting.Field, error) {
+	steps := make([]planting.Step, len(path))
 	for i, s := range path {
 		steps[i] = s
 		if s.Token {
-			steps[i] = Step{Field: s.Field, Index: -1}
+			steps[i] = planting.Step{Field: s.Field, Index: -1}
 			if n, err := strconv.Atoi(s.Field); err == nil {
-				if _, ok := w.prefix(append(steps[:i:i], Step{Index: n})); ok {
-					steps[i] = Step{Index: n}
+				if _, ok := w.prefix(append(steps[:i:i], planting.Step{Index: n})); ok {
+					steps[i] = planting.Step{Index: n}
 				}
 			}
 		}
 		if _, ok := w.prefix(steps[:i+1]); !ok {
-			return nil, nil, &StepError{Step: i, Err: errors.New("no such field")}
+			return nil, nil, &planting.StepError{Step: i, Err: errors.New("no such field")}
 		}
 	}
-	f, ok := w[PathString(steps)]
+	f, ok := w[planting.PathString(steps)]
 	if !ok {
-		return nil, nil, &StepError{Step: len(path) - 1, Err: errors.New("no such field")}
+		return nil, nil, &planting.StepError{Step: len(path) - 1, Err: errors.New("no such field")}
 	}
 	return steps, f, nil
 }
 
 // prefix reports whether some guaranteed path starts with steps.
-func (w fakeWalk) prefix(steps []Step) (string, bool) {
-	p := PathString(steps)
+func (w fakeWalk) prefix(steps []planting.Step) (string, bool) {
+	p := planting.PathString(steps)
 	for k := range w {
 		if k == p || strings.HasPrefix(k, p+".") || strings.HasPrefix(k, p+"[") {
 			return k, true
@@ -78,23 +79,23 @@ func orderWalk() fakeWalk {
 
 func tenantHeaders() fakeWalk { return fakeWalk{"tenant": {values: []string{"acme"}}} }
 
-func payloadParam(name, value string, pointer ...string) Parameter {
-	return Parameter{Name: name, Value: value, Location: "$message.payload#/" + strings.Join(pointer, "/"), Pointer: pointer}
+func payloadParam(name, value string, pointer ...string) planting.Parameter {
+	return planting.Parameter{Name: name, Value: value, Location: "$message.payload#/" + strings.Join(pointer, "/"), Pointer: pointer}
 }
 
-func headerParam(name, value string, pointer ...string) Parameter {
-	return Parameter{Name: name, Value: value, Location: "$message.header#/" + strings.Join(pointer, "/"), Pointer: pointer, InHeaders: true}
+func headerParam(name, value string, pointer ...string) planting.Parameter {
+	return planting.Parameter{Name: name, Value: value, Location: "$message.header#/" + strings.Join(pointer, "/"), Pointer: pointer, InHeaders: true}
 }
 
 // TestPlantEveryPlanting proves each Message type's Set plants the Key at the
 // Key path and every Topic parameter at its location, in the Payload or the
 // Headers, reading a pointer token as an index where the schema has an array.
 func TestPlantEveryPlanting(t *testing.T) {
-	types := []MessageType{
+	types := []planting.MessageType{
 		{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()},
 		{Name: "B", Payload: orderWalk(), Headers: tenantHeaders()},
 	}
-	sets, err := New(types, "id", []Parameter{
+	sets, err := planting.New(types, "id", []planting.Parameter{
 		payloadParam("region", "eu", "meta", "region"),
 		payloadParam("sku", "s1", "items", "0", "sku"),
 		headerParam("tenant", "acme", "tenant"),
@@ -122,7 +123,7 @@ func TestPlantEveryPlanting(t *testing.T) {
 // TestPlantWithoutPlantings proves a run with no Key path and no located
 // Topic parameter leaves every value as generated, the Key included.
 func TestPlantWithoutPlantings(t *testing.T) {
-	sets, err := New([]MessageType{{Name: "A", Payload: orderWalk()}}, "", []Parameter{{Name: "env", Value: "prod"}})
+	sets, err := planting.New([]planting.MessageType{{Name: "A", Payload: orderWalk()}}, "", []planting.Parameter{{Name: "env", Value: "prod"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,31 +137,31 @@ func TestPlantWithoutPlantings(t *testing.T) {
 // any record exists, owned by the flag it comes from, naming the Message type
 // when there are several.
 func TestNewRefuses(t *testing.T) {
-	both := []MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}, {Name: "B", Payload: fakeWalk{"id": {}}, Headers: tenantHeaders()}}
+	both := []planting.MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}, {Name: "B", Payload: fakeWalk{"id": {}}, Headers: tenantHeaders()}}
 	one := both[:1]
-	keyTooWide := []MessageType{{Name: "A", Payload: fakeWalk{"id": {keyErr: errors.New("the schema here is an integer but the key schema is a string")}}}}
+	keyTooWide := []planting.MessageType{{Name: "A", Payload: fakeWalk{"id": {keyErr: errors.New("the schema here is an integer but the key schema is a string")}}}}
 	cases := map[string]struct {
-		types   []MessageType
+		types   []planting.MessageType
 		keyPath string
-		params  []Parameter
+		params  []planting.Parameter
 		flag    string
 		want    string
 	}{
-		"location not guaranteed in one type": {both, "", []Parameter{payloadParam("region", "eu", "meta", "region")}, "topic",
+		"location not guaranteed in one type": {both, "", []planting.Parameter{payloadParam("region", "eu", "meta", "region")}, "topic",
 			`Topic parameter region: location $message.payload#/meta/region: in Message type B: at "/meta": no such field`},
-		"value the field refuses": {one, "", []Parameter{payloadParam("region", "asia", "meta", "region")}, "topic",
+		"value the field refuses": {one, "", []planting.Parameter{payloadParam("region", "asia", "meta", "region")}, "topic",
 			"Topic parameter region: value asia does not conform to the Payload field at $message.payload#/meta/region: not one of [eu us]"},
-		"value the header refuses": {one, "", []Parameter{headerParam("tenant", "other", "tenant")}, "topic",
+		"value the header refuses": {one, "", []planting.Parameter{headerParam("tenant", "other", "tenant")}, "topic",
 			"Topic parameter tenant: value other does not conform to the header at $message.header#/tenant: not one of [acme]"},
-		"a Message type without headers": {[]MessageType{one[0], {Name: "B", Payload: orderWalk()}}, "", []Parameter{headerParam("tenant", "acme", "tenant")}, "topic",
+		"a Message type without headers": {[]planting.MessageType{one[0], {Name: "B", Payload: orderWalk()}}, "", []planting.Parameter{headerParam("tenant", "acme", "tenant")}, "topic",
 			"Topic parameter tenant: location $message.header#/tenant: in Message type B: B declares no headers"},
-		"header location not guaranteed": {one, "", []Parameter{headerParam("trace", "t", "trace")}, "topic",
+		"header location not guaranteed": {one, "", []planting.Parameter{headerParam("trace", "t", "trace")}, "topic",
 			`Topic parameter trace: location $message.header#/trace: at "/trace": no such field`},
-		"two parameters in one field": {one, "", []Parameter{payloadParam("region", "eu", "meta", "region"), payloadParam("area", "us", "meta", "region")}, "topic",
+		"two parameters in one field": {one, "", []planting.Parameter{payloadParam("region", "eu", "meta", "region"), payloadParam("area", "us", "meta", "region")}, "topic",
 			"Topic parameters region and area plant into the same field ($message.payload#/meta/region and $message.payload#/meta/region)"},
-		"two parameters in one header": {one, "", []Parameter{headerParam("tenant", "acme", "tenant"), headerParam("org", "acme", "tenant")}, "topic",
+		"two parameters in one header": {one, "", []planting.Parameter{headerParam("tenant", "acme", "tenant"), headerParam("org", "acme", "tenant")}, "topic",
 			"Topic parameters tenant and org plant into the same field"},
-		"a parameter over the Key path": {one, "meta", []Parameter{payloadParam("region", "eu", "meta", "region")}, "keyPath",
+		"a parameter over the Key path": {one, "meta", []planting.Parameter{payloadParam("region", "eu", "meta", "region")}, "keyPath",
 			"Topic parameter region: location $message.payload#/meta/region overlaps -keyPath meta; both would plant into the same field"},
 		"malformed Key path": {one, "items[", nil, "keyPath",
 			`-keyPath "items[": an array index is missing its closing bracket`},
@@ -171,8 +172,8 @@ func TestNewRefuses(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := New(c.types, c.keyPath, c.params)
-			var pe *Error
+			_, err := planting.New(c.types, c.keyPath, c.params)
+			var pe *planting.Error
 			if !errors.As(err, &pe) || pe.Flag != c.flag {
 				t.Fatalf("err = %v, want a *planting.Error of -%s", err, c.flag)
 			}
@@ -180,7 +181,7 @@ func TestNewRefuses(t *testing.T) {
 				t.Errorf("err = %q, want it to mention %q", err, c.want)
 			}
 			if c.flag == "keyPath" && !strings.Contains(name, "over") {
-				var path *PathError
+				var path *planting.PathError
 				if !errors.As(err, &path) {
 					t.Errorf("err = %v, want a *PathError for a Key path refusal", err)
 				}
@@ -192,8 +193,8 @@ func TestNewRefuses(t *testing.T) {
 // TestNewKeyPathBesideHeaders proves the Key never clashes with a header
 // location: the Key is planted into the Payload only.
 func TestNewKeyPathBesideHeaders(t *testing.T) {
-	types := []MessageType{{Name: "A", Payload: fakeWalk{"tenant": {}}, Headers: tenantHeaders()}}
-	if _, err := New(types, "tenant", []Parameter{headerParam("tenant", "acme", "tenant")}); err != nil {
+	types := []planting.MessageType{{Name: "A", Payload: fakeWalk{"tenant": {}}, Headers: tenantHeaders()}}
+	if _, err := planting.New(types, "tenant", []planting.Parameter{headerParam("tenant", "acme", "tenant")}); err != nil {
 		t.Errorf("New = %v, want a Key path and a header location of one name accepted", err)
 	}
 }
@@ -201,7 +202,7 @@ func TestNewKeyPathBesideHeaders(t *testing.T) {
 // TestNewEscapesPointers proves a refused location names its failing token as
 // a JSON Pointer, escaping ~ and / as RFC 6901 does.
 func TestNewEscapesPointers(t *testing.T) {
-	_, err := New([]MessageType{{Name: "A", Payload: orderWalk()}}, "", []Parameter{{Name: "p", Value: "v", Location: "$message.payload#/a~1b/c~0d", Pointer: []string{"a/b", "c~d"}}})
+	_, err := planting.New([]planting.MessageType{{Name: "A", Payload: orderWalk()}}, "", []planting.Parameter{{Name: "p", Value: "v", Location: "$message.payload#/a~1b/c~0d", Pointer: []string{"a/b", "c~d"}}})
 	if want := `at "/a~1b": no such field`; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("err = %v, want it to mention %q", err, want)
 	}
@@ -211,12 +212,12 @@ func TestNewEscapesPointers(t *testing.T) {
 // path, a defect, is reported against the Planting it belongs to: a Topic
 // parameter never as -keyPath, the Key as -keyPath (#107).
 func TestPlantMissNamesItsOwner(t *testing.T) {
-	sets, err := New([]MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}}, "id", []Parameter{payloadParam("region", "eu", "meta", "region")})
+	sets, err := planting.New([]planting.MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}}, "id", []planting.Parameter{payloadParam("region", "eu", "meta", "region")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = sets[0].Plant(map[string]any{"id": "x", "meta": map[string]any{"source": "web"}}, nil, "k1")
-	var pe *Error
+	var pe *planting.Error
 	if !errors.As(err, &pe) || pe.Flag != "topic" {
 		t.Fatalf("Plant = %v, want a *planting.Error of -topic", err)
 	}
@@ -230,7 +231,7 @@ func TestPlantMissNamesItsOwner(t *testing.T) {
 	}
 
 	err = sets[0].Plant(map[string]any{"meta": map[string]any{"region": "xx"}}, nil, "k1")
-	var path *PathError
+	var path *planting.PathError
 	if !errors.As(err, &pe) || pe.Flag != "keyPath" || !errors.As(err, &path) || !strings.Contains(err.Error(), `the Payload has no field "id"`) {
 		t.Errorf("Plant = %v, want a -keyPath *PathError saying the Payload has no field id", err)
 	}
@@ -239,7 +240,7 @@ func TestPlantMissNamesItsOwner(t *testing.T) {
 // TestPlantMissingPath covers what New rules out: a value that does not carry
 // a checked path. Planting must stop with a typed error, not miss silently.
 func TestPlantMissingPath(t *testing.T) {
-	sets, err := New([]MessageType{{Name: "A", Payload: fakeWalk{"customer.id": {}}}}, "customer.id", nil)
+	sets, err := planting.New([]planting.MessageType{{Name: "A", Payload: fakeWalk{"customer.id": {}}}}, "customer.id", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestPlantMissingPath(t *testing.T) {
 		map[string]any{"customer": "not an object"},
 		[]any{},
 	} {
-		var pe *PathError
+		var pe *planting.PathError
 		if err := sets[0].Plant(payload, nil, "k"); !errors.As(err, &pe) {
 			t.Errorf("Plant(%v) = %v, want a *PathError", payload, err)
 		}
@@ -260,7 +261,7 @@ func TestPlantMissingPath(t *testing.T) {
 // objects the JSON Schema generator emits (#112) as into plain maps, keeping
 // every key where it is.
 func TestPlantIntoOrderedObjects(t *testing.T) {
-	sets, err := New([]MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}}, "id", []Parameter{
+	sets, err := planting.New([]planting.MessageType{{Name: "A", Payload: orderWalk(), Headers: tenantHeaders()}}, "id", []planting.Parameter{
 		payloadParam("region", "eu", "meta", "region"),
 		payloadParam("sku", "s1", "items", "0", "sku"),
 		headerParam("tenant", "acme", "tenant"),

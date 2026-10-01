@@ -1,6 +1,7 @@
-package asyncapi
+package asyncapi_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 const head2 = "asyncapi: '2.6.0'\ninfo: {title: T, version: '1'}\n"
 
 // parameterValues reads the Topic parameters of a Kafka topic as name=value.
-func parameterValues(t *testing.T, doc *Document, name string) map[string]string {
+func parameterValues(t *testing.T, doc *asyncapi.Document, name string) map[string]string {
 	t.Helper()
 	got := map[string]string{}
 	for _, p := range readTopic(t, doc, name).Parameters {
@@ -132,7 +133,7 @@ components:
 // TestTopicParameter2Strings proves a Topic parameter is a string: a schema
 // that does not allow one stops the run, and one that does may allow more.
 func TestTopicParameter2Strings(t *testing.T) {
-	load := func(schema string) *Document {
+	load := func(schema string) *asyncapi.Document {
 		return loadSpec(t, head2+`
 channels:
   users.{userId}:
@@ -168,12 +169,12 @@ channels:
     publish: {message: {name: joined, payload: {type: object}}}
 `)
 	got := readTopic(t, doc, "orders.eu").Parameters
-	want := []TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/meta/region", Pointer: []string{"meta", "region"}}}
+	want := []asyncapi.TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/meta/region", Pointer: []string{"meta", "region"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}
 	got = readTopic(t, doc, "tenants.acme").Parameters
-	want = []TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/meta/tenant", Pointer: []string{"meta", "tenant"}, InHeaders: true}}
+	want = []asyncapi.TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/meta/tenant", Pointer: []string{"meta", "tenant"}, InHeaders: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}

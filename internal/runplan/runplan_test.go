@@ -1,4 +1,4 @@
-package runplan
+package runplan_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
+	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -94,12 +95,12 @@ func TestPlanAccepts(t *testing.T) {
 	cases := []struct {
 		name  string
 		args  []string
-		check func(*testing.T, *Run)
+		check func(*testing.T, *runplan.Run)
 	}{
 		{
 			name: "two Message types mix",
 			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if _, err := generate(r); err != nil {
 					t.Errorf("generating from the mix: %v", err)
 				}
@@ -108,7 +109,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "avro ignores the Message types",
 			args: []string{"-spec", twoEntries, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				v, err := generate(r)
 				if err != nil {
 					t.Fatalf("generating: %v", err)
@@ -121,7 +122,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "json dry run",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if !r.DryRun || r.Format != "json" || r.Topic != "orders" {
 					t.Errorf("got %+v, want a json dry run on orders", r)
 				}
@@ -139,7 +140,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "key plan from binding",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "orderId"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if !r.Config.Keyed {
 					t.Fatal("a key binding and -keyPath must key the run")
 				}
@@ -155,7 +156,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "keys reused across records",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run", "-keyPath", "orderId", "-records-per-key", "4", "-seed", "3"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				distinct := map[any]bool{}
 				for i := 0; i < 400; i++ {
 					g, err := r.Config.Generator.Generate()
@@ -175,7 +176,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "binding without a path still keys",
 			args: []string{"-spec", bound, "-topic", "orders", "-dry-run"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if !r.Config.Keyed {
 					t.Error("a key binding alone must still key the run")
 				}
@@ -184,7 +185,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "avro dry run",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if r.Format != "avro" {
 					t.Errorf("Format = %q, want avro", r.Format)
 				}
@@ -196,7 +197,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "avro key avsc",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-avro-key-schema", key},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if !r.Config.Keyed {
 					t.Error("a key avsc must key the run")
 				}
@@ -205,7 +206,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "acks accepts any case",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-acks", "aLL"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if r.Acks != producer.AcksAll {
 					t.Errorf("Acks = %v, want all", r.Acks)
 				}
@@ -214,7 +215,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "explicit json format matches the default",
 			args: []string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "json"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if r.Format != "json" {
 					t.Errorf("Format = %q, want json", r.Format)
 				}
@@ -223,7 +224,7 @@ func TestPlanAccepts(t *testing.T) {
 		{
 			name: "kafka options",
 			args: []string{"-spec", spec, "-topic", "orders", "-broker", "kafka:9092", "-acks", "all", "-count", "3"},
-			check: func(t *testing.T, r *Run) {
+			check: func(t *testing.T, r *runplan.Run) {
 				if r.DryRun {
 					t.Error("DryRun must be false without -dry-run")
 				}
@@ -235,7 +236,7 @@ func TestPlanAccepts(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := Plan(c.args)
+			r, err := runplan.Plan(c.args)
 			if err != nil {
 				t.Fatalf("Plan(%v) = %v, want a plan", c.args, err)
 			}
@@ -262,7 +263,7 @@ func TestPlanWarnings(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := Plan(c.args)
+			r, err := runplan.Plan(c.args)
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -272,7 +273,7 @@ func TestPlanWarnings(t *testing.T) {
 		})
 	}
 
-	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
+	r, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -364,11 +365,11 @@ channels:
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := Plan(c.args)
+			r, err := runplan.Plan(c.args)
 			if err == nil {
 				t.Fatalf("Plan(%v) = %+v, want an error", c.args, r)
 			}
-			var pe *Error
+			var pe *runplan.Error
 			if !errors.As(err, &pe) {
 				t.Fatalf("error %v is %T, want *runplan.Error", err, err)
 			}
@@ -391,11 +392,11 @@ func TestPlanIsDeterministic(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
 	args := []string{"-spec", spec, "-topic", "orders", "-dry-run", "-seed", "42", "-now", "2026-09-22T00:00:00Z"}
 
-	first, err := Plan(args)
+	first, err := runplan.Plan(args)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	second, err := Plan(args)
+	second, err := runplan.Plan(args)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -416,7 +417,7 @@ func TestPlanIsDeterministic(t *testing.T) {
 // writers, and only the produce path dials a broker.
 func TestNewSink(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
-	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
+	r, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -440,7 +441,7 @@ func TestNewEncoder(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
 	value := write(t, "value.avsc", valueAvsc)
 
-	json, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
+	json, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -452,7 +453,7 @@ func TestNewEncoder(t *testing.T) {
 		t.Errorf("json encoder = %T, want jsonwire.JsonEncoder", enc)
 	}
 
-	avroDry, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
+	avroDry, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -469,7 +470,7 @@ func TestNewEncoder(t *testing.T) {
 		fmt.Fprint(w, `{"id":7}`)
 	}))
 	defer srv.Close()
-	produce, err := Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", srv.URL})
+	produce, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", srv.URL})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -481,7 +482,7 @@ func TestNewEncoder(t *testing.T) {
 		t.Errorf("avro produce encoder = %T, want *avrowire.AvroEncoder", enc)
 	}
 
-	dead, err := Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
+	dead, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-format", "avro", "-avro-schema", value, "-registry", "http://127.0.0.1:1"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -499,7 +500,7 @@ func TestNewEncoder(t *testing.T) {
 // package-level stderr.
 func TestUsage(t *testing.T) {
 	var buf strings.Builder
-	Usage(&buf, "ktg")
+	runplan.Usage(&buf, "ktg")
 	out := buf.String()
 	for _, want := range []string{"Usage: ktg", "-topic", "-keyPath", "-records-per-key", "-avro-schema", "Examples:", "ktg -spec order.yaml -topic orders.created"} {
 		if !strings.Contains(out, want) {
@@ -507,7 +508,7 @@ func TestUsage(t *testing.T) {
 		}
 	}
 	var discard io.Writer = io.Discard
-	Usage(discard, "ktg") // must not panic on a plain writer
+	runplan.Usage(discard, "ktg") // must not panic on a plain writer
 }
 
 // TestUsageStatesEachDefaultOnceAndTruly proves every default in the help block
@@ -517,7 +518,7 @@ func TestUsage(t *testing.T) {
 // says what the value is.
 func TestUsageStatesEachDefaultOnceAndTruly(t *testing.T) {
 	var buf strings.Builder
-	Usage(&buf, "ktg")
+	runplan.Usage(&buf, "ktg")
 	out := buf.String()
 	for _, want := range []string{
 		"  -acks level\n    \tAcks level: 1 (leader) or all (all in-sync replicas) (default 1)\n",
@@ -538,14 +539,14 @@ func TestUsageStatesEachDefaultOnceAndTruly(t *testing.T) {
 // edge can treat it as a request rather than a failure.
 func TestPlanHelp(t *testing.T) {
 	for _, arg := range []string{"-h", "-help"} {
-		if _, err := Plan([]string{arg}); !errors.Is(err, flag.ErrHelp) {
+		if _, err := runplan.Plan([]string{arg}); !errors.Is(err, flag.ErrHelp) {
 			t.Errorf("Plan(%s) error = %v, want flag.ErrHelp", arg, err)
 		}
 	}
 }
 
 // generate draws one Payload from the plan's generator.
-func generate(r *Run) (any, error) {
+func generate(r *runplan.Run) (any, error) {
 	g, err := r.Config.Generator.Generate()
 	return ordered.Plain(g.Payload), err
 }

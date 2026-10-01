@@ -1,12 +1,13 @@
-package asyncapi
+package asyncapi_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
 )
 
 // readTopic reads a Kafka topic, failing the test on an error.
-func readTopic(t *testing.T, doc *Document, name string) *Topic {
+func readTopic(t *testing.T, doc *asyncapi.Document, name string) *asyncapi.Topic {
 	t.Helper()
 	topic, err := doc.Topic(name)
 	if err != nil {
@@ -132,7 +133,7 @@ channels:
 	if got := names(topic.MessageTypes); got != "created, updated" {
 		t.Errorf("Message types = %s, want both entries'", got)
 	}
-	want := []TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/region", Pointer: []string{"region"}}}
+	want := []asyncapi.TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/region", Pointer: []string{"region"}}}
 	if !reflect.DeepEqual(topic.Parameters, want) {
 		t.Errorf("parameters = %+v, want %+v", topic.Parameters, want)
 	}
@@ -173,7 +174,7 @@ channels:
     messages: {created: {payload: {type: object}}}
 `)
 	got := readTopic(t, doc, "orders.eu").Parameters
-	want := []TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/meta/a~1b~0c", Pointer: []string{"meta", "a/b~c"}}}
+	want := []asyncapi.TopicParameter{{Name: "region", Value: "eu", Location: "$message.payload#/meta/a~1b~0c", Pointer: []string{"meta", "a/b~c"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}
@@ -242,7 +243,7 @@ channels:
     messages: {created: {payload: {type: object}}}
 `)
 	got := readTopic(t, doc, "orders.acme").Parameters
-	want := []TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/x~1tenant", Pointer: []string{"x/tenant"}, InHeaders: true}}
+	want := []asyncapi.TopicParameter{{Name: "tenant", Value: "acme", Location: "$message.header#/x~1tenant", Pointer: []string{"x/tenant"}, InHeaders: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("parameters = %+v, want %+v", got, want)
 	}

@@ -1,6 +1,7 @@
-package asyncapi
+package asyncapi_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -63,7 +64,7 @@ func TestPropertyOrderRecordedFromJSON(t *testing.T) {
 	if err := os.WriteFile(path, []byte(spec), 0644); err != nil {
 		t.Fatal(err)
 	}
-	doc, err := Load(path)
+	doc, err := asyncapi.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,8 @@
-package asyncapi
+package asyncapi_test
 
 import (
 	"errors"
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
 )
@@ -20,14 +21,14 @@ channels:
         bindings: {kafka: {key: {type: string}}}
         payload: {type: object}
 `), "orders")
-	if json.Format != JSONSchemaFormat {
+	if json.Format != asyncapi.JSONSchemaFormat {
 		t.Errorf("JSON Schema payloads: Topic.Format = %v, want JSONSchemaFormat", json.Format)
 	}
 	mt := json.MessageTypes[0]
-	if p, ok := mt.Payload.(JSONSchema); !ok || p["type"] != "object" {
+	if p, ok := mt.Payload.(asyncapi.JSONSchema); !ok || p["type"] != "object" {
 		t.Errorf("Payload = %#v, want the JSONSchema", mt.Payload)
 	}
-	if k, ok := mt.Key.(JSONSchema); !ok || k["type"] != "string" {
+	if k, ok := mt.Key.(asyncapi.JSONSchema); !ok || k["type"] != "string" {
 		t.Errorf("Key = %#v, want the JSONSchema", mt.Key)
 	}
 
@@ -42,14 +43,14 @@ channels:
       paid:
         payload: {schemaFormat: `+avroFormat+`, schema: {type: record, name: Paid, fields: []}}
 `), "orders")
-	if avro.Format != AvroFormat {
+	if avro.Format != asyncapi.AvroFormat {
 		t.Errorf("Avro payloads: Topic.Format = %v, want AvroFormat", avro.Format)
 	}
 	created, paid := avro.MessageTypes[0], avro.MessageTypes[1]
-	if _, ok := created.Payload.(Avsc); !ok {
+	if _, ok := created.Payload.(asyncapi.Avsc); !ok {
 		t.Errorf("Payload = %#v, want an Avsc", created.Payload)
 	}
-	if k, ok := created.Key.(Avsc); !ok || string(k) != `{"type":"string"}` {
+	if k, ok := created.Key.(asyncapi.Avsc); !ok || string(k) != `{"type":"string"}` {
 		t.Errorf("Key = %s, want the Avsc {\"type\":\"string\"}", created.Key)
 	}
 	if paid.Key != nil {
@@ -71,7 +72,7 @@ channels:
           - {name: B, payload: {type: object}}
           - {name: C, schemaFormat: `+avroFormat+`, payload: {type: record, name: C, fields: []}}
 `).Topic("orders")
-	var mixed *MixedFormatsError
+	var mixed *asyncapi.MixedFormatsError
 	if !errors.As(err, &mixed) {
 		t.Fatalf("err = %v, want a *MixedFormatsError", err)
 	}
@@ -85,28 +86,28 @@ channels:
 
 // jsonPayload is a Message type's Payload as a JSON Schema map, nil when it is
 // not the JSONSchema case.
-func jsonPayload(mt MessageType) map[string]any {
-	p, _ := mt.Payload.(JSONSchema)
+func jsonPayload(mt asyncapi.MessageType) map[string]any {
+	p, _ := mt.Payload.(asyncapi.JSONSchema)
 	return p
 }
 
 // jsonKey is a Message type's Key binding as a JSON Schema map, nil when it
 // declares none or it is not the JSONSchema case.
-func jsonKey(mt MessageType) map[string]any {
-	k, _ := mt.Key.(JSONSchema)
+func jsonKey(mt asyncapi.MessageType) map[string]any {
+	k, _ := mt.Key.(asyncapi.JSONSchema)
 	return k
 }
 
 // avroPayload is a Message type's Payload avsc, nil when it is not the Avsc
 // case.
-func avroPayload(mt MessageType) []byte {
-	p, _ := mt.Payload.(Avsc)
+func avroPayload(mt asyncapi.MessageType) []byte {
+	p, _ := mt.Payload.(asyncapi.Avsc)
 	return p
 }
 
 // avroKey is a Message type's Key binding avsc, nil when it declares none or
 // it is not the Avsc case.
-func avroKey(mt MessageType) []byte {
-	k, _ := mt.Key.(Avsc)
+func avroKey(mt asyncapi.MessageType) []byte {
+	k, _ := mt.Key.(asyncapi.Avsc)
 	return k
 }
