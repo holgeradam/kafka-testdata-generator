@@ -3,9 +3,10 @@ package pipeline_test
 import (
 	"bytes"
 	"context"
-	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"strings"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
 func TestStdoutSinkWritesNDJSON(t *testing.T) {

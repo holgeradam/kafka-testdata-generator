@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -35,7 +36,7 @@ func kindOf(v any) string {
 // them by kind.
 func draws(t *testing.T, schema map[string]any, n int) map[string]int {
 	t.Helper()
-	gen := New(synth.New(7, fixedNow()))
+	gen := generator.New(synth.New(7, fixedNow()))
 	counts := map[string]int{}
 	for i := 0; i < n; i++ {
 		v, err := plainValue(gen, schema)
@@ -77,7 +78,7 @@ func TestTypeListDraw(t *testing.T) {
 // type, drawing nothing more from the seeded stream (#99 decision 3).
 func TestTypeListOfOneType(t *testing.T) {
 	sequence := func(schema map[string]any) []any {
-		gen := New(synth.New(3, fixedNow()))
+		gen := generator.New(synth.New(3, fixedNow()))
 		var out []any
 		for i := 0; i < 50; i++ {
 			v, err := plainValue(gen, schema)
@@ -107,7 +108,7 @@ func TestTypeListKeywordsPerDraw(t *testing.T) {
 		"items":      map[string]any{"type": []any{"integer", "null"}, "minimum": float64(1), "maximum": float64(2)},
 		"minItems":   float64(1),
 	}
-	gen := New(synth.New(11, fixedNow()))
+	gen := generator.New(synth.New(11, fixedNow()))
 	kinds := map[string]bool{}
 	for i := 0; i < 500; i++ {
 		v, err := plainValue(gen, schema)
@@ -115,7 +116,7 @@ func TestTypeListKeywordsPerDraw(t *testing.T) {
 			t.Fatalf("Value: %v", err)
 		}
 		kinds[kindOf(v)] = true
-		if err := Conforms(schema, v); err != nil {
+		if err := generator.Conforms(schema, v); err != nil {
 			t.Fatalf("draw %d (%v) does not conform: %v", i, v, err)
 		}
 	}
@@ -135,13 +136,13 @@ func TestTypeListRecursionEndsInNull(t *testing.T) {
 			"properties": map[string]any{"next": map[string]any{"$ref": "#/$defs/Node"}},
 		}},
 	}
-	gen := New(synth.New(1, fixedNow()))
+	gen := generator.New(synth.New(1, fixedNow()))
 	for i := 0; i < 50; i++ {
 		v, err := plainValue(gen, schema)
 		if err != nil {
 			t.Fatalf("Value: %v", err)
 		}
-		if err := Conforms(schema, v); err != nil {
+		if err := generator.Conforms(schema, v); err != nil {
 			t.Fatalf("value %v does not conform: %v", v, err)
 		}
 	}
@@ -157,9 +158,9 @@ func TestTypeListAllOfIntersects(t *testing.T) {
 	if counts["string"] != 200 {
 		t.Errorf("allOf of [string, null] and [integer, string]: %v, want strings only", counts)
 	}
-	gen := New(synth.New(1, fixedNow()))
+	gen := generator.New(synth.New(1, fixedNow()))
 	_, err := plainValue(gen, map[string]any{"allOf": []any{map[string]any{"type": []any{"string", "null"}}, map[string]any{"type": "integer"}}})
-	assertUnsupported(t, err, "allOf", RootPath)
+	assertUnsupported(t, err, "allOf", generator.RootPath)
 }
 
 // TestTypeListMalformed proves a type list the generator cannot read stops
@@ -172,7 +173,7 @@ func TestTypeListMalformed(t *testing.T) {
 		"not a name": {"string", float64(7)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			gen := New(synth.New(1, fixedNow()))
+			gen := generator.New(synth.New(1, fixedNow()))
 			_, err := plainValue(gen, map[string]any{"type": "object", "required": []any{"f"}, "properties": map[string]any{"f": map[string]any{"type": types}}})
 			assertUnsupported(t, err, "type", "$.f")
 		})
@@ -216,7 +217,7 @@ func TestTypeListPlanting(t *testing.T) {
 		})
 	}
 
-	if _, field, err := locate(payload, []string{"id"}); err != nil || Conforms(field, "eu") != nil {
+	if _, field, err := locate(payload, []string{"id"}); err != nil || generator.Conforms(field, "eu") != nil {
 		t.Errorf("Locate at a nullable end: %v, want the field accepting a string", err)
 	}
 	if _, _, err := locate(payload, []string{"customer", "cid"}); err == nil || !strings.Contains(err.Error(), "may be null") {

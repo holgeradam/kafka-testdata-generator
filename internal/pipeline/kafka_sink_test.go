@@ -2,11 +2,11 @@ package pipeline_test
 
 import (
 	"context"
-	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"

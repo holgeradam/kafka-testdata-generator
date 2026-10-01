@@ -1,9 +1,10 @@
-package generator
+package generator_test
 
 import (
 	"errors"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
 
@@ -15,7 +16,7 @@ func assertUnsupported(t *testing.T, err error, keyword, path string) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var ue *UnsupportedSchemaError
+	var ue *generator.UnsupportedSchemaError
 	if !errors.As(err, &ue) {
 		t.Fatalf("expected *UnsupportedSchemaError, got %T (%v)", err, err)
 	}
@@ -28,19 +29,19 @@ func assertUnsupported(t *testing.T, err error, keyword, path string) {
 }
 
 func TestValueUnsupportedType(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	_, err := plainValue(gen, map[string]any{"type": "widget"})
-	assertUnsupported(t, err, "type", RootPath)
+	assertUnsupported(t, err, "type", generator.RootPath)
 }
 
 func TestValueNoType(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	_, err := plainValue(gen, map[string]any{"minimum": 5})
-	assertUnsupported(t, err, "type", RootPath)
+	assertUnsupported(t, err, "type", generator.RootPath)
 }
 
 func TestValueNestedUnsupportedPath(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"widget"},
@@ -49,11 +50,11 @@ func TestValueNestedUnsupportedPath(t *testing.T) {
 		},
 	}
 	_, err := plainValue(gen, schema)
-	assertUnsupported(t, err, "type", RootPath+".widget")
+	assertUnsupported(t, err, "type", generator.RootPath+".widget")
 }
 
 func TestValueArrayUnsupportedItemPath(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "array",
 		"items":    map[string]any{"type": "thing"},
@@ -61,20 +62,20 @@ func TestValueArrayUnsupportedItemPath(t *testing.T) {
 		"maxItems": float64(3),
 	}
 	_, err := plainValue(gen, schema)
-	var ue *UnsupportedSchemaError
+	var ue *generator.UnsupportedSchemaError
 	if !errors.As(err, &ue) {
 		t.Fatalf("expected *UnsupportedSchemaError, got %T (%v)", err, err)
 	}
 	if ue.Keyword != "type" {
 		t.Errorf("keyword = %q, want type", ue.Keyword)
 	}
-	if ue.Path[:len(RootPath)+1] != RootPath+"[" {
-		t.Errorf("path %q should be an array element under %q", ue.Path, RootPath)
+	if ue.Path[:len(generator.RootPath)+1] != generator.RootPath+"[" {
+		t.Errorf("path %q should be an array element under %q", ue.Path, generator.RootPath)
 	}
 }
 
 func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schemas := []map[string]any{
 		{"type": "widget"},
 		{"minimum": 5},
@@ -102,7 +103,7 @@ func TestValueNoPanicOnWeirdButValidShapes(t *testing.T) {
 }
 
 func TestValueNonMapPropertySchema(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"a"},
@@ -111,33 +112,33 @@ func TestValueNonMapPropertySchema(t *testing.T) {
 		},
 	}
 	_, err := plainValue(gen, schema)
-	assertUnsupported(t, err, "properties", RootPath+".a")
+	assertUnsupported(t, err, "properties", generator.RootPath+".a")
 }
 
 // TestValueRefMissingDef covers a local $ref whose $defs entry is absent: the
 // schema cannot be honoured, so generation stops with a typed error.
 func TestValueRefMissingDef(t *testing.T) {
-	gen := New(synth.New(1, fixedNow()))
+	gen := generator.New(synth.New(1, fixedNow()))
 	_, err := plainValue(gen, map[string]any{
 		"$ref":  "#/$defs/Missing",
 		"$defs": map[string]any{"Node": map[string]any{"type": "string"}},
 	})
-	assertUnsupported(t, err, "$ref", RootPath)
+	assertUnsupported(t, err, "$ref", generator.RootPath)
 }
 
 // TestValueRefOutsideSchema covers a $ref that does not point into the
 // schema's own $defs: schemas arrive self-contained (#73), so there is nothing
 // else to resolve it against.
 func TestValueRefOutsideSchema(t *testing.T) {
-	gen := New(synth.New(1, fixedNow()))
+	gen := generator.New(synth.New(1, fixedNow()))
 	_, err := plainValue(gen, map[string]any{"$ref": "#/components/schemas/Node"})
-	assertUnsupported(t, err, "$ref", RootPath)
+	assertUnsupported(t, err, "$ref", generator.RootPath)
 }
 
 // TestValueDefsIsNotAKeyword proves $defs is a definitions container: an
 // object schema carrying it generates exactly its properties.
 func TestValueDefsIsNotAKeyword(t *testing.T) {
-	gen := New(synth.New(1, fixedNow()))
+	gen := generator.New(synth.New(1, fixedNow()))
 	v, err := plainValue(gen, map[string]any{
 		"type":       "object",
 		"required":   []any{"id"},

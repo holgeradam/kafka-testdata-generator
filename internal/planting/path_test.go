@@ -2,9 +2,10 @@ package planting_test
 
 import (
 	"errors"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
 func TestParsePath(t *testing.T) {

@@ -1,13 +1,13 @@
 package asyncapi_test
 
 import (
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 )
 

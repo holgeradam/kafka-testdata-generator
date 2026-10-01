@@ -1,10 +1,11 @@
-package generator
+package generator_test
 
 import (
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
@@ -12,7 +13,7 @@ import (
 // schema and a key schema through the Planting module, exactly as a run does.
 func checkPath(t *testing.T, payload, key map[string]any, path string) error {
 	t.Helper()
-	_, err := planting.New([]planting.MessageType{{Name: "T", Payload: NewWalk(payload, key)}}, path, nil)
+	_, err := planting.New([]planting.MessageType{{Name: "T", Payload: generator.NewWalk(payload, key)}}, path, nil)
 	return err
 }
 
@@ -24,14 +25,14 @@ func locate(schema map[string]any, pointer []string) ([]planting.Step, map[strin
 	for i, token := range pointer {
 		path[i] = planting.Step{Field: token, Index: -1, Token: true}
 	}
-	steps, f, err := NewWalk(schema, nil).Locate(path)
+	steps, f, err := generator.NewWalk(schema, nil).Locate(path)
 	if se, ok := err.(*planting.StepError); ok {
 		return nil, nil, fmt.Errorf("at %q: %w", "/"+strings.Join(pointer[:se.Step+1], "/"), se.Err)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
-	return steps, f.(*field).selfContained(), nil
+	return steps, generator.SelfContained(f), nil
 }
 
 func stringKey() map[string]any { return map[string]any{"type": "string"} }
@@ -159,7 +160,7 @@ func TestWalkKeyPathFollowsRefs(t *testing.T) {
 		t.Errorf("Check through a $ref = %v, want nil", err)
 	}
 
-	deep := "root" + strings.Repeat(".child", maxRecursionDepth+1) + ".name"
+	deep := "root" + strings.Repeat(".child", generator.MaxRecursionDepth+1) + ".name"
 	err := checkPath(t, schema, stringKey(), deep)
 	if err == nil || !strings.Contains(err.Error(), "depth") {
 		t.Errorf("Check(%q) = %v, want an error mentioning the depth budget", deep, err)

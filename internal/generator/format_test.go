@@ -1,13 +1,13 @@
-package generator
+package generator_test
 
 import (
 	"bytes"
 	"encoding/json"
 	"testing"
 
-	"github.com/santhosh-tekuri/jsonschema/v5"
-
+	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
+	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 // standardFormats are the string formats JSON Schema 2020-12 defines. Every one
@@ -57,7 +57,7 @@ func mustConformFormat(t *testing.T, format string, value any) {
 func TestStandardFormatsProperty(t *testing.T) {
 	for _, format := range standardFormats {
 		t.Run(format, func(t *testing.T) {
-			gen := New(synth.New(42, fixedNow()))
+			gen := generator.New(synth.New(42, fixedNow()))
 			schema := map[string]any{"type": "string", "format": format}
 			for i := 0; i < 30; i++ {
 				v, err := plainValue(gen, schema)
@@ -78,7 +78,7 @@ func TestStandardFormatsProperty(t *testing.T) {
 // annotation: generation succeeds and falls through to pattern, then to the
 // field-name heuristics (#31 decision 10).
 func TestNonStandardFormatIgnored(t *testing.T) {
-	gen := New(synth.New(42, fixedNow()))
+	gen := generator.New(synth.New(42, fixedNow()))
 	schema := map[string]any{
 		"type":     "object",
 		"required": []any{"secret", "code", "city"},

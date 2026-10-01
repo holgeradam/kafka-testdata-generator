@@ -1,9 +1,10 @@
 package asyncapi_test
 
 import (
-	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 )
 
 // readTopic reads a Kafka topic, failing the test on an error.

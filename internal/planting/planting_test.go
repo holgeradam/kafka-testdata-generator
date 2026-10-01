@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 )
 
 // fakeWalk stands in for a schema language: the paths it guarantees, by their
