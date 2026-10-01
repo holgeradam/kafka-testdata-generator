@@ -1,6 +1,7 @@
-package jsonwire
+package jsonwire_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 	"reflect"
 
 	"context"
@@ -19,7 +20,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
 
-var _ wire.Format = Format{}
+var _ wire.Format = jsonwire.Format{}
 
 func options() buildOptions {
 	return buildOptions{
@@ -117,7 +118,7 @@ func TestBuildEncoderIgnoresDryRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Encoder: %v", err)
 		}
-		if _, ok := enc.(JsonEncoder); !ok {
+		if _, ok := enc.(jsonwire.JsonEncoder); !ok {
 			t.Errorf("dry run %v: encoder = %T, want JsonEncoder", dry, enc)
 		}
 	}

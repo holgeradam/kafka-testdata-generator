@@ -1,7 +1,8 @@
-package asyncapi
+package asyncapi_test
 
 import (
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func writeSpec(t *testing.T, spec string) string {
 
 // payloadSchema and keyBinding read the one Message type of a Kafka topic,
 // the shape every single-message test here uses.
-func payloadSchema(doc *Document, topic string) (map[string]any, error) {
+func payloadSchema(doc *asyncapi.Document, topic string) (map[string]any, error) {
 	mt, err := onlyType(doc, topic)
 	if err != nil {
 		return nil, err
@@ -28,7 +29,7 @@ func payloadSchema(doc *Document, topic string) (map[string]any, error) {
 	return jsonPayload(mt), nil
 }
 
-func keyBinding(doc *Document, topic string) (map[string]any, error) {
+func keyBinding(doc *asyncapi.Document, topic string) (map[string]any, error) {
 	mt, err := onlyType(doc, topic)
 	if err != nil {
 		return nil, err
@@ -36,19 +37,19 @@ func keyBinding(doc *Document, topic string) (map[string]any, error) {
 	return jsonKey(mt), nil
 }
 
-func onlyType(doc *Document, topic string) (MessageType, error) {
+func onlyType(doc *asyncapi.Document, topic string) (asyncapi.MessageType, error) {
 	types, err := messageTypes(doc, topic)
 	if err != nil {
-		return MessageType{}, err
+		return asyncapi.MessageType{}, err
 	}
 	if len(types) != 1 {
-		return MessageType{}, fmt.Errorf("Kafka topic %q has %d Message types (%s), want 1", topic, len(types), names(types))
+		return asyncapi.MessageType{}, fmt.Errorf("Kafka topic %q has %d Message types (%s), want 1", topic, len(types), names(types))
 	}
 	return types[0], nil
 }
 
 // messageTypes reads the Message types of a Kafka topic.
-func messageTypes(doc *Document, topic string) ([]MessageType, error) {
+func messageTypes(doc *asyncapi.Document, topic string) ([]asyncapi.MessageType, error) {
 	t, err := doc.Topic(topic)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func messageTypes(doc *Document, topic string) ([]MessageType, error) {
 }
 
 // names lists Message type names the way the tests compare them.
-func names(types []MessageType) string {
+func names(types []asyncapi.MessageType) string {
 	var out []string
 	for _, mt := range types {
 		out = append(out, mt.Name)
@@ -99,7 +100,7 @@ func TestLoadJSONSpec(t *testing.T) {
     }
   }
 }`
-	doc, err := Load(writeJSONSpec(t, spec))
+	doc, err := asyncapi.Load(writeJSONSpec(t, spec))
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
@@ -136,7 +137,7 @@ channels:
             id:
               type: string
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
@@ -190,7 +191,7 @@ channels:
             orderId:
               type: string
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +214,7 @@ info:
   version: '1.0.0'
 channels: {}
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +251,7 @@ channels:
             work:
               $ref: '#/components/schemas/Address'
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ channels:
         payload:
           $ref: '#/components/schemas/Envelope'
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +385,7 @@ channels:
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			doc, err := Load(writeSpec(t, tt.spec))
+			doc, err := asyncapi.Load(writeSpec(t, tt.spec))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -467,7 +468,7 @@ channels:
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			doc, err := Load(writeSpec(t, tt.spec))
+			doc, err := asyncapi.Load(writeSpec(t, tt.spec))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,7 +541,7 @@ channels:
       message:
         $ref: '#/components/messages/OrderMessage'
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +575,7 @@ channels:
             id:
               type: string
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +608,7 @@ channels:
             id:
               type: string
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +647,7 @@ channels:
             id:
               type: string
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +678,7 @@ info:
   version: '1.0.0'
 channels: {}
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +708,7 @@ channels:
       message:
         payload: {type: object, properties: {paymentId: {type: string}}}
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +745,7 @@ channels:
   orders:
     publish: {message: {payload: {type: object}}}
 `
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -760,9 +761,9 @@ channels:
 }
 
 // loadSpec writes and loads a spec, failing the test on a load error.
-func loadSpec(t *testing.T, spec string) *Document {
+func loadSpec(t *testing.T, spec string) *asyncapi.Document {
 	t.Helper()
-	doc, err := Load(writeSpec(t, spec))
+	doc, err := asyncapi.Load(writeSpec(t, spec))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

@@ -1,6 +1,7 @@
-package wire
+package wire_test
 
 import (
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 	"reflect"
 	"testing"
 
@@ -22,7 +23,7 @@ func TestEncodeHeaders(t *testing.T) {
 	}{{"tenant", "acme"}, {"attempt", float64(3)}, {"ratio", 0.5}, {"retry", true}, {"trace", nil}, {"tags", []any{"a", "b"}}, {"origin", origin}} {
 		obj.Add(kv.k, kv.v)
 	}
-	got, err := EncodeHeaders(obj)
+	got, err := wire.EncodeHeaders(obj)
 	if err != nil {
 		t.Fatal(err)
 	}

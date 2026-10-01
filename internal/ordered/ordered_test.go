@@ -1,13 +1,14 @@
-package ordered
+package ordered_test
 
 import (
 	"encoding/json"
+	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"reflect"
 	"testing"
 )
 
-func object(kv ...any) Object {
-	var o Object
+func object(kv ...any) ordered.Object {
+	var o ordered.Object
 	for i := 0; i < len(kv); i += 2 {
 		o.Add(kv[i].(string), kv[i+1])
 	}
@@ -52,7 +53,7 @@ func TestObjectGetSet(t *testing.T) {
 // TestPlain proves Plain turns every Object into a map, recursively, for a
 // consumer that reads plain JSON values, such as a validator.
 func TestPlain(t *testing.T) {
-	got := Plain([]any{object("a", object("b", 1)), "s", map[string]any{"m": object("c", 2)}})
+	got := ordered.Plain([]any{object("a", object("b", 1)), "s", map[string]any{"m": object("c", 2)}})
 	want := []any{map[string]any{"a": map[string]any{"b": 1}}, "s", map[string]any{"m": map[string]any{"c": 2}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Plain = %#v, want %#v", got, want)

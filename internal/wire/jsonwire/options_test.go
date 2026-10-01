@@ -1,9 +1,10 @@
-package jsonwire
+package jsonwire_test
 
 import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
+	"github.com/holgeradam/kafka-testdata-generator/internal/wire/jsonwire"
 )
 
 // buildOptions gathers what a test hands Build in one place: the flags, what the
@@ -24,7 +25,7 @@ type buildOptions struct {
 // build runs the format's Build on o, as a run does.
 func build(o buildOptions) (*wire.Parts, error) {
 	flags := wire.Flags{DryRun: o.DryRun, Topic: o.Topic, KeyPath: o.KeyPath, RecordsPerKey: o.RecordsPerKey, RegistryURL: o.RegistryURL, AvroSchema: o.AvroSchema, AvroKeySchema: o.AvroKeySchema}
-	return Format{}.Build(flags, &asyncapi.Topic{Format: formatOf(o.MessageTypes), MessageTypes: o.MessageTypes, Parameters: o.TopicParameters}, o.Synth)
+	return jsonwire.Format{}.Build(flags, &asyncapi.Topic{Format: formatOf(o.MessageTypes), MessageTypes: o.MessageTypes, Parameters: o.TopicParameters}, o.Synth)
 }
 
 // formatOf is the payload format of the Message types, as the spec reader

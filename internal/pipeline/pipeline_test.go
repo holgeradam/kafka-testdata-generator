@@ -1,4 +1,4 @@
-package pipeline
+package pipeline_test
 
 import (
 	"bytes"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,12 +22,12 @@ import (
 type fakeGenerator struct {
 	key     any
 	payload any
-	headers []Header
+	headers []pipeline.Header
 	err     error
 }
 
-func (f *fakeGenerator) Generate() (Generated, error) {
-	return Generated{Key: f.key, Payload: f.payload, Headers: f.headers}, f.err
+func (f *fakeGenerator) Generate() (pipeline.Generated, error) {
+	return pipeline.Generated{Key: f.key, Payload: f.payload, Headers: f.headers}, f.err
 }
 
 // fakeEncoder is the Encoder seam's test adapter: the Payload as JSON and the
@@ -34,7 +35,7 @@ func (f *fakeGenerator) Generate() (Generated, error) {
 // in internal/wire and are tested there.
 type fakeEncoder struct{}
 
-func (fakeEncoder) Encode(generated Generated) ([]byte, []byte, error) {
+func (fakeEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
 	var keyBytes []byte
 	if generated.Key != nil {
 		keyBytes = []byte(fmt.Sprint(generated.Key))
@@ -45,11 +46,11 @@ func (fakeEncoder) Encode(generated Generated) ([]byte, []byte, error) {
 
 type fakeSink struct {
 	mu       sync.Mutex
-	recorded []Outgoing
+	recorded []pipeline.Outgoing
 	err      error
 }
 
-func (f *fakeSink) Send(_ context.Context, o Outgoing) error {
+func (f *fakeSink) Send(_ context.Context, o pipeline.Outgoing) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -80,7 +81,7 @@ func newBlockingSink() *blockingSink {
 	return &blockingSink{blocked: make(chan struct{})}
 }
 
-func (b *blockingSink) Send(ctx context.Context, _ Outgoing) error {
+func (b *blockingSink) Send(ctx context.Context, _ pipeline.Outgoing) error {
 	close(b.blocked)
 	<-ctx.Done()
 	return ctx.Err()
@@ -91,7 +92,7 @@ func (b *blockingSink) Close() error { return nil }
 func TestRunProducesCountPayloads(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	p := New(Config{
+	p := pipeline.New(pipeline.Config{
 		Generator: gen,
 		Count:     3,
 		Encoder:   fakeEncoder{},
@@ -121,7 +122,7 @@ func TestRunProducesCountPayloads(t *testing.T) {
 func TestRunStopsAtCount(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Count: 2, Encoder: fakeEncoder{}}, sink)
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 2, Encoder: fakeEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -136,10 +137,10 @@ func TestRunStopsAtCount(t *testing.T) {
 func TestRunCancellationMidRun(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	p := New(Config{Generator: gen, Count: 100000, Encoder: fakeEncoder{}}, sink)
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 100000, Encoder: fakeEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan Stats, 1)
+	done := make(chan pipeline.Stats, 1)
 	go func() {
 		s, _ := p.Run(ctx)
 		done <- s
@@ -171,10 +172,10 @@ func TestRunCancellationMidRun(t *testing.T) {
 func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := newBlockingSink()
-	p := New(Config{Generator: gen, Count: 100000, Encoder: fakeEncoder{}}, sink)
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 100000, Encoder: fakeEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan Stats, 1)
+	done := make(chan pipeline.Stats, 1)
 	go func() {
 		s, _ := p.Run(ctx)
 		done <- s
@@ -207,7 +208,7 @@ func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 func TestRunCountsSendFailures(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{err: errors.New("boom")}
-	p := New(Config{Generator: gen, Count: 3, Encoder: fakeEncoder{}}, sink)
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 3, Encoder: fakeEncoder{}}, sink)
 
 	stats, _ := p.Run(context.Background())
 
@@ -219,7 +220,7 @@ func TestRunCountsSendFailures(t *testing.T) {
 func TestRunAbortsOnGenerationError(t *testing.T) {
 	sink := &fakeSink{}
 	gen := &fakeGenerator{err: &generator.UnsupportedSchemaError{Keyword: "type", Path: generator.RootPath}}
-	p := New(Config{
+	p := pipeline.New(pipeline.Config{
 		Generator: gen,
 		Count:     3,
 		Encoder:   fakeEncoder{},
@@ -248,7 +249,7 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
-	p := New(Config{
+	p := pipeline.New(pipeline.Config{
 		Generator: gen,
 		Count:     1,
 		Encoder:   fakeEncoder{},
@@ -278,7 +279,7 @@ func TestRunCarriesTheKey(t *testing.T) {
 	gen := &fakeGenerator{key: "generated-key", payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	var warn bytes.Buffer
-	p := New(Config{Generator: gen, Count: 2, Keyed: true, Encoder: fakeEncoder{}, Warn: &warn}, sink)
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 2, Keyed: true, Encoder: fakeEncoder{}, Warn: &warn}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -300,9 +301,9 @@ func TestRunCarriesTheKey(t *testing.T) {
 // TestRunCarriesHeaders proves the Headers a Wire format generated reach the
 // sink with their record, untouched by the Encoder (#92).
 func TestRunCarriesHeaders(t *testing.T) {
-	headers := []Header{{Name: "tenant", Value: []byte("acme")}}
+	headers := []pipeline.Header{{Name: "tenant", Value: []byte("acme")}}
 	sink := &fakeSink{}
-	p := New(Config{Generator: &fakeGenerator{payload: map[string]any{"id": "a"}, headers: headers}, Count: 2, Encoder: fakeEncoder{}}, sink)
+	p := pipeline.New(pipeline.Config{Generator: &fakeGenerator{payload: map[string]any{"id": "a"}, headers: headers}, Count: 2, Encoder: fakeEncoder{}}, sink)
 	if _, err := p.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}

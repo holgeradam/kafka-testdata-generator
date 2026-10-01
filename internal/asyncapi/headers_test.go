@@ -1,4 +1,4 @@
-package asyncapi
+package asyncapi_test
 
 import (
 	"reflect"

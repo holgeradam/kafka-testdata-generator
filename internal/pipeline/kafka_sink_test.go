@@ -1,7 +1,8 @@
-package pipeline
+package pipeline_test
 
 import (
 	"context"
+	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"reflect"
 	"testing"
 	"time"
@@ -26,12 +27,12 @@ func TestKafkaSinkProducesHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink := NewKafkaSink("orders", prod)
+	sink := pipeline.NewKafkaSink("orders", prod)
 	defer sink.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	headers := []Header{{Name: "tenant", Value: []byte("acme")}, {Name: "trace", Value: nil}, {Name: "attempt", Value: []byte("3")}}
-	if err := sink.Send(ctx, Outgoing{Key: []byte("k"), Headers: headers, Payload: []byte(`{"id":"a"}`)}); err != nil {
+	headers := []pipeline.Header{{Name: "tenant", Value: []byte("acme")}, {Name: "trace", Value: nil}, {Name: "attempt", Value: []byte("3")}}
+	if err := sink.Send(ctx, pipeline.Outgoing{Key: []byte("k"), Headers: headers, Payload: []byte(`{"id":"a"}`)}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -48,9 +49,9 @@ func TestKafkaSinkProducesHeaders(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("read %d records, want 1", len(records))
 	}
-	var got []Header
+	var got []pipeline.Header
 	for _, h := range records[0].Headers {
-		got = append(got, Header{Name: h.Key, Value: h.Value})
+		got = append(got, pipeline.Header{Name: h.Key, Value: h.Value})
 	}
 	if !reflect.DeepEqual(got, headers) {
 		t.Errorf("headers read back = %v, want %v", got, headers)

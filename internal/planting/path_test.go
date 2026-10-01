@@ -1,13 +1,14 @@
-package planting
+package planting_test
 
 import (
 	"errors"
+	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
 	"reflect"
 	"testing"
 )
 
 func TestParsePath(t *testing.T) {
-	cases := map[string][]Step{
+	cases := map[string][]planting.Step{
 		"id":            {{Field: "id", Index: -1}},
 		"customer.id":   {{Field: "customer", Index: -1}, {Field: "id", Index: -1}},
 		"items[0].sku":  {{Field: "items", Index: -1}, {Index: 0}, {Field: "sku", Index: -1}},
@@ -15,7 +16,7 @@ func TestParsePath(t *testing.T) {
 		"a.b[1].c[2].d": {{Field: "a", Index: -1}, {Field: "b", Index: -1}, {Index: 1}, {Field: "c", Index: -1}, {Index: 2}, {Field: "d", Index: -1}},
 	}
 	for in, want := range cases {
-		got, err := ParsePath(in)
+		got, err := planting.ParsePath(in)
 		if err != nil {
 			t.Errorf("ParsePath(%q) error: %v", in, err)
 			continue
@@ -28,8 +29,8 @@ func TestParsePath(t *testing.T) {
 
 func TestParsePathRejectsMalformed(t *testing.T) {
 	for _, in := range []string{"", "items[", "items[]", "items[x]", "items[-1]"} {
-		var pe *PathError
-		if _, err := ParsePath(in); !errors.As(err, &pe) {
+		var pe *planting.PathError
+		if _, err := planting.ParsePath(in); !errors.As(err, &pe) {
 			t.Errorf("ParsePath(%q) error = %v, want a *PathError", in, err)
 		}
 	}
@@ -51,9 +52,9 @@ func TestOverlap(t *testing.T) {
 		{"region", "regions", false},
 	}
 	for _, c := range cases {
-		a, _ := ParsePath(c.a)
-		b, _ := ParsePath(c.b)
-		if got := Overlap(a, b); got != c.want {
+		a, _ := planting.ParsePath(c.a)
+		b, _ := planting.ParsePath(c.b)
+		if got := planting.Overlap(a, b); got != c.want {
 			t.Errorf("Overlap(%s, %s) = %v, want %v", c.a, c.b, got, c.want)
 		}
 	}

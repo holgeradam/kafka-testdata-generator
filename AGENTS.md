@@ -20,6 +20,8 @@ Single-context: `CONTEXT.md` at repo root + `docs/adr/`. Read before exploring; 
 
 Test-first development: write the test that fails on the bug or feature first, watch it fail (red), then implement the minimum to pass (green), then refactor. Applies to all feature work and bug fixes, not just tickets carrying an explicit TDD note.
 
+Tests live beside the code and exercise the exported API: declare `package foo_test`. Use `package foo` only where a test must reach an unexported identifier that has no public stand-in, and keep those files few.
+
 ## Delivery
 
 Branch, PR, green CI, squash-merge for every change. See `docs/agents/delivery.md`.

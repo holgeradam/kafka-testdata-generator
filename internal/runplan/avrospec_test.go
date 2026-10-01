@@ -1,10 +1,11 @@
-package runplan
+package runplan_test
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
+	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func TestPlanInfersWireFormat(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r, err := Plan(append(c.args, "-topic", "orders", "-dry-run"))
+			r, err := runplan.Plan(append(c.args, "-topic", "orders", "-dry-run"))
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
@@ -142,11 +143,11 @@ channels:
 			} else {
 				args = append(args, "-dry-run")
 			}
-			r, err := Plan(args)
+			r, err := runplan.Plan(args)
 			if err == nil {
 				t.Fatalf("Plan(%v) = %+v, want an error", args, r)
 			}
-			var pe *Error
+			var pe *runplan.Error
 			if !errors.As(err, &pe) {
 				t.Fatalf("error %v is %T, want *runplan.Error", err, err)
 			}
@@ -199,7 +200,7 @@ channels:
 		`{schemaLookupStrategy: TopicNameStrategy}`,
 		`{schemaLookupStrategy: TopicIdStrategy}`,
 	} {
-		if _, err := Plan([]string{"-spec", spec(ok), "-topic", "orders", "-dry-run"}); err != nil {
+		if _, err := runplan.Plan([]string{"-spec", spec(ok), "-topic", "orders", "-dry-run"}); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
@@ -208,8 +209,8 @@ channels:
 		`{schemaIdPayloadEncoding: apicurio-new}`:    "message OrderCreated: bindings.kafka.schemaIdPayloadEncoding is apicurio-new; the tool encodes the schema ID the Confluent way, so it honours only confluent or 4",
 		`{schemaLookupStrategy: RecordNameStrategy}`: "message OrderCreated: bindings.kafka.schemaLookupStrategy is RecordNameStrategy; the tool registers under <topic>-value, so it honours only TopicNameStrategy or TopicIdStrategy",
 	} {
-		_, err := Plan([]string{"-spec", spec(binding), "-topic", "orders", "-dry-run"})
-		var pe *Error
+		_, err := runplan.Plan([]string{"-spec", spec(binding), "-topic", "orders", "-dry-run"})
+		var pe *runplan.Error
 		if !errors.As(err, &pe) || pe.Flag != "topic" || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want a topic error mentioning %q", binding, err, want)
 		}
@@ -222,11 +223,11 @@ channels:
   orders:
     publish: {message: {bindings: {kafka: {schemaIdLocation: header}}, payload: {type: object}}}
 `)
-	if _, err := Plan([]string{"-spec", jsonSpec, "-topic", "orders", "-dry-run"}); err != nil {
+	if _, err := runplan.Plan([]string{"-spec", jsonSpec, "-topic", "orders", "-dry-run"}); err != nil {
 		t.Errorf("JSON run: %v, want the registry fields ignored", err)
 	}
 	value := write(t, "value.avsc", valueAvsc)
-	_, err := Plan([]string{"-spec", jsonSpec, "-topic", "orders", "-dry-run", "-avro-schema", value})
+	_, err := runplan.Plan([]string{"-spec", jsonSpec, "-topic", "orders", "-dry-run", "-avro-schema", value})
 	if err == nil || !strings.Contains(err.Error(), "schemaIdLocation is header") {
 		t.Errorf("AVRO run from -avro-schema: err = %v, want the header location refused", err)
 	}
@@ -253,15 +254,15 @@ channels:
         payload: {type: record, name: OrderCreated, fields: [{name: id, type: string}, {name: region, type: string}]}
 `)
 
-	plan := func(args ...string) *Run {
+	plan := func(args ...string) *runplan.Run {
 		t.Helper()
-		r, err := Plan(append(args, "-dry-run", "-seed", "1"))
+		r, err := runplan.Plan(append(args, "-dry-run", "-seed", "1"))
 		if err != nil {
 			t.Fatalf("Plan(%v): %v", args, err)
 		}
 		return r
 	}
-	payload := func(r *Run) map[string]any {
+	payload := func(r *runplan.Run) map[string]any {
 		t.Helper()
 		v, err := generate(r)
 		if err != nil {
@@ -300,7 +301,7 @@ channels:
 	if p := payload(plan("-spec", templated, "-topic", "orders.eu")); p["region"] != "eu" {
 		t.Errorf("region = %v, want the Topic parameter planted", p["region"])
 	}
-	if _, err := Plan([]string{"-spec", templated, "-topic", "orders.eu", "-dry-run", "-keyPath", "region", "-avro-key-schema", key}); err == nil ||
+	if _, err := runplan.Plan([]string{"-spec", templated, "-topic", "orders.eu", "-dry-run", "-keyPath", "region", "-avro-key-schema", key}); err == nil ||
 		!strings.Contains(err.Error(), "overlaps -keyPath") {
 		t.Errorf("err = %v, want the Topic parameter's location to clash with -keyPath", err)
 	}
@@ -329,7 +330,7 @@ func TestNewEncoderRegistersSpecAvsc(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-registry", srv.URL})
+	r, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-registry", srv.URL})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -365,7 +366,7 @@ channels:
             bindings: {kafka: {key: string}}
             payload: {type: record, name: OrderPaid, fields: [{name: amount, type: double}]}
 `)
-	r, err := Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-seed", "2"})
+	r, err := runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-seed", "2"})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
@@ -384,8 +385,8 @@ channels:
 		t.Errorf("Message types generated = %v, want both", seen)
 	}
 
-	_, err = Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-keyPath", "id"})
-	var pe *Error
+	_, err = runplan.Plan([]string{"-spec", spec, "-topic", "orders", "-dry-run", "-keyPath", "id"})
+	var pe *runplan.Error
 	if !errors.As(err, &pe) || pe.Flag != "keyPath" || !strings.Contains(err.Error(), "in Message type OrderPaid") {
 		t.Errorf("err = %v, want -keyPath refused in Message type OrderPaid", err)
 	}

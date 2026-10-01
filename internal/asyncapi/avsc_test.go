@@ -1,7 +1,8 @@
-package asyncapi
+package asyncapi_test
 
 import (
 	"encoding/json"
+	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"reflect"
 	"testing"
 )
@@ -232,7 +233,7 @@ channels:
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RegistryBinding{SchemaIDLocation: "header", SchemaIDPayloadEncoding: "4", SchemaLookupStrategy: "RecordNameStrategy"}
+	want := asyncapi.RegistryBinding{SchemaIDLocation: "header", SchemaIDPayloadEncoding: "4", SchemaLookupStrategy: "RecordNameStrategy"}
 	if !reflect.DeepEqual(mt.Registry, want) {
 		t.Errorf("Registry = %+v, want %+v", mt.Registry, want)
 	}
