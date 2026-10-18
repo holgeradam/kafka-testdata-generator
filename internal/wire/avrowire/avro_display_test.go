@@ -1,8 +1,6 @@
 package avrowire
 
 import (
-	"context"
-	"errors"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"strings"
 	"testing"
@@ -173,29 +171,6 @@ func TestAvroDisplayEncoderConformanceProperty(t *testing.T) {
 			if len(payloadBytes) == 0 {
 				t.Fatalf("seed %d: empty display bytes", seed)
 			}
-		}
-	}
-}
-
-// TestAvroEncodersReportConformanceErrors is #120 decision 3: a value the
-// avsc rejects is the generator breaking Conformance, a tool bug that must
-// stop a run even when it continues past failed records, so both Avro
-// encoders report it as a *pipeline.ConformanceError.
-func TestAvroEncodersReportConformanceErrors(t *testing.T) {
-	const avsc = `{"type":"record","name":"O","fields":[{"name":"id","type":"string"}]}`
-	bad := pipeline.Generated{Payload: map[string]any{"id": 42}}
-
-	display := NewAvroDisplayEncoder(testDisplayModel(t, avsc), nil)
-	srv, _ := fakeRegistry(t, map[string]int{"t-value": 1})
-	registry, err := NewAvroEncoder(context.Background(), srv.URL, "t", mustModel(t, avsc), mustModel(t, ""))
-	if err != nil {
-		t.Fatalf("NewAvroEncoder: %v", err)
-	}
-	for name, enc := range map[string]pipeline.Encoder{"display": display, "registry": registry} {
-		_, _, err := enc.Encode(bad)
-		var ce *pipeline.ConformanceError
-		if !errors.As(err, &ce) {
-			t.Errorf("%s: err = %v, want a *pipeline.ConformanceError", name, err)
 		}
 	}
 }

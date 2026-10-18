@@ -232,10 +232,7 @@ func (f *field) HoldsKey() error {
 		}
 		return fmt.Errorf("the schema here is %s but the key schema is %s", describeType(f.schema), describeType(f.walk.key))
 	}
-	if kw := holdsConstraints(f.schema, f.walk.key); kw != "" {
-		return keyViolation(kw)
-	}
-	return nil
+	return keyHeldBy(f.schema, f.walk.key)
 }
 
 // describeType names what a schema node is, for error messages, with its

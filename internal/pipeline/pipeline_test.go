@@ -356,7 +356,7 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 	}
 }
 
-func TestRunNullKeyInfoMessage(t *testing.T) {
+func TestRunNullKeyNotice(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
 	log := &logging.Recorder{}
@@ -375,8 +375,8 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 		t.Errorf("expected 1 acked, got %d", stats.Acked)
 	}
 	got := log.Entries()
-	if len(got) != 1 || got[0].Level != logging.Info || got[0].Msg != "no key configured, generating messages with a null key" {
-		t.Errorf("logged = %+v, want the null-key notice once, at info", got)
+	if len(got) != 1 || got[0].Level != logging.Warn || got[0].Msg != "no key configured, generating messages with a null key" {
+		t.Errorf("logged = %+v, want the null-key notice once, at warn", got)
 	}
 	for _, o := range sink.recorded {
 		if len(o.Key) != 0 {

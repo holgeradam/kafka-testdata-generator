@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -40,6 +41,8 @@ var buildSink = func(ctx context.Context, r *runplan.Run, stdout, stderr io.Writ
 // flushed and closed whether the run succeeds, fails to encode, or is
 // interrupted (ADR-0010).
 func run(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	// The signal goroutine logs while the run writes its own lines.
+	stderr = &lockedWriter{w: stderr}
 	// Until a plan names the level, diagnostics go out at the default one.
 	log := zaplog.New(stderr, logging.Info)
 	plan, err := runplan.Plan(args)
@@ -85,14 +88,14 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	sink, err := buildSink(ctx, plan, stdout, stderr)
 	if err != nil {
 		fatal(stderr, log, err)
-		return exitFailure
+		return failureCode(&interrupted)
 	}
 	defer sink.Close()
 
 	enc, err := plan.NewEncoder(ctx)
 	if err != nil {
 		fatal(stderr, log, err)
-		return exitFailure
+		return failureCode(&interrupted)
 	}
 
 	cfg := plan.Config
@@ -104,13 +107,22 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		fatal(stderr, log, err)
 	}
 	printStats(stderr, stats, plan.DryRun)
-	switch {
-	case interrupted.Load():
+	if interrupted.Load() {
 		return exitInterrupted
-	case err != nil || stats.Failed > 0:
+	}
+	if err != nil || stats.Failed > 0 {
 		return exitFailure
 	}
 	return 0
+}
+
+// failureCode is the exit code for a failure during setup: an interrupt that
+// cut the dial short is still an interrupt.
+func failureCode(interrupted *atomic.Bool) int {
+	if interrupted.Load() {
+		return exitInterrupted
+	}
+	return exitFailure
 }
 
 // Exit codes: 0 is success, a runtime failure (a rejected spec, a failed
@@ -121,6 +133,19 @@ const (
 	exitUsage       = 2
 	exitInterrupted = 130
 )
+
+// lockedWriter serialises writes, so diagnostics from the signal goroutine
+// never interleave with, or race, the run's own lines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
 
 // fatal reports a run-ending error: the plain Error line, whatever the log
 // level, and an error-level record beside it (#121 decision 7).

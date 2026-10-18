@@ -34,11 +34,7 @@ func NewAvroDisplayEncoder(value, key *avro.Schema) *AvroDisplayEncoder {
 // (#64). As for the AvroEncoder, a Key exists exactly when a key avsc does; a
 // mismatch is a programming error, rejected rather than shown.
 func (e *AvroDisplayEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
-	keyBytes, payloadBytes, err := e.encode(generated)
-	if err != nil {
-		err = &pipeline.ConformanceError{Err: err}
-	}
-	return keyBytes, payloadBytes, err
+	return conformance(e.encode(generated))
 }
 
 // encode is Encode before its failures are classed: every one is the message
