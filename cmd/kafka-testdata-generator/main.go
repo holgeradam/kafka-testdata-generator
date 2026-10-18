@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -40,6 +41,8 @@ var buildSink = func(ctx context.Context, r *runplan.Run, stdout, stderr io.Writ
 // flushed and closed whether the run succeeds, fails to encode, or is
 // interrupted (ADR-0010).
 func run(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	// The signal goroutine logs while the run writes its own lines.
+	stderr = &lockedWriter{w: stderr}
 	// Until a plan names the level, diagnostics go out at the default one.
 	log := zaplog.New(stderr, logging.Info)
 	plan, err := runplan.Plan(args)
@@ -130,6 +133,19 @@ const (
 	exitUsage       = 2
 	exitInterrupted = 130
 )
+
+// lockedWriter serialises writes, so diagnostics from the signal goroutine
+// never interleave with, or race, the run's own lines.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
 
 // fatal reports a run-ending error: the plain Error line, whatever the log
 // level, and an error-level record beside it (#121 decision 7).
