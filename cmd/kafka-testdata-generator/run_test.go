@@ -372,36 +372,60 @@ func (s *blockingSink) Send(ctx context.Context, o pipeline.Outgoing) error {
 	return ctx.Err()
 }
 
-// TestRunInterruptExits130 is #120 decision 5: SIGINT during a delivery ends
-// the run with exit 130, and the record cancelled in flight is not a failure.
+// TestRunInterruptExits130 is #120 decision 5: SIGINT or SIGTERM during a
+// delivery ends the run with exit 130, and the record cancelled in flight is
+// not a failure.
 func TestRunInterruptExits130(t *testing.T) {
-	sink := &blockingSink{blocked: make(chan struct{})}
-	withSink(t, sink)
-	var stdout, stderr strings.Builder
-	done := make(chan int, 1)
-	go func() {
-		done <- run(context.Background(), "ktg", failingRunArgs(t, "-count", "0"), &stdout, &stderr)
-	}()
+	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
+		t.Run(sig.String(), func(t *testing.T) {
+			sink := &blockingSink{blocked: make(chan struct{})}
+			withSink(t, sink)
+			var stdout, stderr strings.Builder
+			done := make(chan int, 1)
+			go func() {
+				done <- run(context.Background(), "ktg", failingRunArgs(t, "-count", "0"), &stdout, &stderr)
+			}()
 
-	select {
-	case <-sink.blocked:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Send never blocked")
-	}
-	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
+			select {
+			case <-sink.blocked:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Send never blocked")
+			}
+			if err := syscall.Kill(syscall.Getpid(), sig); err != nil {
+				t.Fatal(err)
+			}
 
-	select {
-	case code := <-done:
-		if code != 130 {
-			t.Errorf("exit code = %d, want 130", code)
+			select {
+			case code := <-done:
+				if code != 130 {
+					t.Errorf("exit code = %d, want 130", code)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("run did not return after the signal")
+			}
+			if !strings.Contains(stderr.String(), "failed=0") {
+				t.Errorf("stderr = %q, want the interrupted record not counted as failed", stderr.String())
+			}
+		})
+	}
+}
+
+// TestRunInterruptDuringSetupExits130 proves the same exit code when the
+// signal lands while the broker is being dialed, before any record exists.
+func TestRunInterruptDuringSetupExits130(t *testing.T) {
+	original := buildSink
+	buildSink = func(ctx context.Context, r *runplan.Run, stdout, stderr io.Writer) (pipeline.Sink, error) {
+		if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+			t.Error(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("run did not return after SIGINT")
+		<-ctx.Done()
+		return nil, ctx.Err()
 	}
-	if !strings.Contains(stderr.String(), "failed=0") {
-		t.Errorf("stderr = %q, want the interrupted record not counted as failed", stderr.String())
+	t.Cleanup(func() { buildSink = original })
+
+	var stdout, stderr strings.Builder
+	if code := run(context.Background(), "ktg", failingRunArgs(t), &stdout, &stderr); code != 130 {
+		t.Errorf("exit code = %d, want 130\nstderr: %s", code, stderr.String())
 	}
 }
 

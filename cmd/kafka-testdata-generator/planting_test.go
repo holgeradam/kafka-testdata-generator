@@ -215,3 +215,72 @@ func TestRunPlantsKeyWherePayloadStaysConforming(t *testing.T) {
 		})
 	}
 }
+
+// fieldKeySpec declares a Key schema and a Payload whose target field is the
+// given schema, for -keyPath target.
+func fieldKeySpec(key, field string) string {
+	return `
+asyncapi: 2.6.0
+info: {title: T, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        bindings: {kafka: {key: ` + key + `}}
+        payload:
+          type: object
+          required: [target, id]
+          properties:
+            target: ` + field + `
+            id: {type: string}
+`
+}
+
+// TestRunKeyPathNumericAndStructuredConstraints covers the keywords beyond
+// strings (#113 review): a bound is entailed only when the Key's own bound is
+// at least as strict, an exclusive field bound needs a strictly tighter Key
+// bound, and an object field's required, properties and additionalProperties
+// must match the Key schema's.
+func TestRunKeyPathNumericAndStructuredConstraints(t *testing.T) {
+	obj := `{type: object, required: [id], properties: {id: {type: string}}}`
+	cases := []struct {
+		name, key, field string
+		refused          string // keyword the refusal names; "" means accepted
+	}{
+		{"min covers min", `{type: integer, minimum: 5}`, `{type: integer, minimum: 3}`, ""},
+		{"min too weak", `{type: integer, minimum: 1}`, `{type: integer, minimum: 3}`, "minimum"},
+		{"no min at all", `{type: integer}`, `{type: integer, minimum: 3}`, "minimum"},
+		{"max covers max", `{type: integer, maximum: 5}`, `{type: integer, maximum: 9}`, ""},
+		{"max too weak", `{type: integer, maximum: 20}`, `{type: integer, maximum: 9}`, "maximum"},
+		{"exclusive min needs a strictly tighter bound", `{type: integer, minimum: 5}`, `{type: integer, exclusiveMinimum: 5}`, "exclusiveMinimum"},
+		{"exclusive min met by exclusive min", `{type: integer, exclusiveMinimum: 5}`, `{type: integer, exclusiveMinimum: 5}`, ""},
+		{"exclusive min met by higher min", `{type: integer, minimum: 6}`, `{type: integer, exclusiveMinimum: 5}`, ""},
+		{"exclusive max needs a strictly tighter bound", `{type: integer, maximum: 5}`, `{type: integer, exclusiveMaximum: 5}`, "exclusiveMaximum"},
+		{"exclusive max met by lower max", `{type: integer, maximum: 4}`, `{type: integer, exclusiveMaximum: 5}`, ""},
+		{"inclusive min met by exclusive min", `{type: integer, exclusiveMinimum: 5}`, `{type: integer, minimum: 5}`, ""},
+		{"same object", obj, obj, ""},
+		{"object demanding more required", obj, `{type: object, required: [id, name], properties: {id: {type: string}}}`, "required"},
+		{"object with other properties", obj, `{type: object, required: [id], properties: {id: {type: string, maxLength: 3}}}`, "properties"},
+		{"object forbidding additional", obj, `{type: object, required: [id], properties: {id: {type: string}}, additionalProperties: false}`, "additionalProperties"},
+		{"annotations never matter", obj, `{type: object, description: the key, required: [id], properties: {id: {type: string, description: its id}}}`, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			args := []string{"-spec", writeSpec(t, fieldKeySpec(c.key, c.field)), "-topic", "orders", "-keyPath", "target", "-dry-run", "-count", "3", "-seed", "1"}
+			code := run(context.Background(), "ktg", args, &stdout, &stderr)
+			if c.refused == "" {
+				if code != 0 {
+					t.Fatalf("exit code = %d, want 0\nstderr: %s", code, stderr.String())
+				}
+				return
+			}
+			if code != 1 || stdout.Len() != 0 {
+				t.Fatalf("exit code = %d, stdout = %q, want a refusal before any record", code, stdout.String())
+			}
+			if !strings.Contains(stderr.String(), c.refused) {
+				t.Errorf("stderr = %q, want it to name %q", stderr.String(), c.refused)
+			}
+		})
+	}
+}

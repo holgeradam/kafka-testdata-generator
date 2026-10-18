@@ -16,7 +16,7 @@ Diagnostics were ad-hoc writes to stderr: strings with "Warning:" baked in on th
 4. **`-log-level debug|info|warn|error`,** default `info`, validated in the Run plan like every flag rule (ADR-0010): a bad value is a usage error, exit 2.
 5. **Plan purity holds.** The Run plan and `wire.Parts` carry `logging.Diagnostic` values (level, message, attrs) instead of strings, and still do no I/O. `main` builds the Logger from the plan's level, emits the diagnostics, and gives the Logger to the Pipeline. `plan.Warnings` and `Config.Warn` are gone.
 6. **Fatal errors keep their plain line.** `main` always prints `Error: ...` (and the usage block where it applies) whatever the level, and also logs an error-level record. At the default level that is one duplicate line, accepted.
-7. **Levels in use:** the null-Key notice is info, ignored spec declarations and disregarded options are warn, a failed record under `-continueOnError` is error, and the interrupt notice is warn. `-log-level error` therefore hides warnings and never the `Error:` line, the Stats or the Dry run output.
+7. **Levels in use:** the null-Key notice, ignored spec declarations and disregarded options are warn, a failed record under `-continueOnError` is error, and the interrupt notice is warn. `-log-level error` therefore hides warnings and never the `Error:` line, the Stats or the Dry run output.
 
 ## Consequences
 

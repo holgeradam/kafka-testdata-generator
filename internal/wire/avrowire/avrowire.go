@@ -302,3 +302,13 @@ type boundGenerator struct {
 }
 
 func (g *boundGenerator) Value() (any, error) { return g.gen.Value(g.model.Root) }
+
+// conformance classes an Avro encoder's failure: every one is the message not
+// fitting the avsc, a Conformance violation that stops the run even when it
+// continues past failed records (#120).
+func conformance(keyBytes, payloadBytes []byte, err error) ([]byte, []byte, error) {
+	if err != nil {
+		err = &pipeline.ConformanceError{Err: err}
+	}
+	return keyBytes, payloadBytes, err
+}

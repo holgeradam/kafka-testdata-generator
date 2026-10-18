@@ -72,7 +72,7 @@ type Config struct {
 	Keyed   bool
 	Encoder Encoder
 	// ContinueOnError finishes the run past a record that cannot be encoded
-	// or delivered, reporting each cause on Warn; the default stops at the
+	// or delivered, logging each cause; the default stops at the
 	// first (#120). A ConformanceError stops the run either way.
 	ContinueOnError bool
 	// Logger receives the run's diagnostics: the null-Key notice and, under
@@ -117,7 +117,7 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	start := time.Now()
 
 	if !p.cfg.Keyed {
-		p.cfg.Logger.Info("no key configured, generating messages with a null key")
+		p.cfg.Logger.Warn("no key configured, generating messages with a null key")
 	}
 
 loop:

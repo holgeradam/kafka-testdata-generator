@@ -85,14 +85,14 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	sink, err := buildSink(ctx, plan, stdout, stderr)
 	if err != nil {
 		fatal(stderr, log, err)
-		return exitFailure
+		return failureCode(&interrupted)
 	}
 	defer sink.Close()
 
 	enc, err := plan.NewEncoder(ctx)
 	if err != nil {
 		fatal(stderr, log, err)
-		return exitFailure
+		return failureCode(&interrupted)
 	}
 
 	cfg := plan.Config
@@ -104,13 +104,22 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		fatal(stderr, log, err)
 	}
 	printStats(stderr, stats, plan.DryRun)
-	switch {
-	case interrupted.Load():
+	if interrupted.Load() {
 		return exitInterrupted
-	case err != nil || stats.Failed > 0:
+	}
+	if err != nil || stats.Failed > 0 {
 		return exitFailure
 	}
 	return 0
+}
+
+// failureCode is the exit code for a failure during setup: an interrupt that
+// cut the dial short is still an interrupt.
+func failureCode(interrupted *atomic.Bool) int {
+	if interrupted.Load() {
+		return exitInterrupted
+	}
+	return exitFailure
 }
 
 // Exit codes: 0 is success, a runtime failure (a rejected spec, a failed

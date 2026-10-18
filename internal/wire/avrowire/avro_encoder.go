@@ -180,11 +180,7 @@ func versionOf(ctx context.Context, client *registry.Client, subject string, id 
 // rather than silently dropping data or sending a null key where the schema
 // contract promises one.
 func (e *AvroEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) {
-	keyBytes, payloadBytes, err := e.encode(generated)
-	if err != nil {
-		err = &pipeline.ConformanceError{Err: err}
-	}
-	return keyBytes, payloadBytes, err
+	return conformance(e.encode(generated))
 }
 
 // encode is Encode before its failures are classed: every one is the message
