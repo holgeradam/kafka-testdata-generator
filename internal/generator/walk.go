@@ -211,7 +211,9 @@ func always(schema map[string]any, want string) error {
 // HoldsKey reports whether a value generated from the key schema conforms to
 // the field: every type the Key may take must be one the field allows, an
 // integer Key also fitting a number field. A field whose type list allows
-// null takes a planted Key of another type it lists (#99 decision 5).
+// null takes a planted Key of another type it lists (#99 decision 5). Beyond
+// type, the key schema must guarantee every constraint the field declares
+// (#113).
 func (f *field) HoldsKey() error {
 	keyTypes, err := typeList(f.walk.key)
 	if err != nil {
@@ -229,6 +231,9 @@ func (f *field) HoldsKey() error {
 			return fmt.Errorf("the key schema may be null, but the schema here is %s", describeType(f.schema))
 		}
 		return fmt.Errorf("the schema here is %s but the key schema is %s", describeType(f.schema), describeType(f.walk.key))
+	}
+	if kw := holdsConstraints(f.schema, f.walk.key); kw != "" {
+		return keyViolation(kw)
 	}
 	return nil
 }

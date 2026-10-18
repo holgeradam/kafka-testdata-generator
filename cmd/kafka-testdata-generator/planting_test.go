@@ -138,3 +138,80 @@ channels:
 		t.Errorf("example at the Key path: stdout = %q, want the Key planted over the example", stdout.String())
 	}
 }
+
+// constrainedKeySpec declares a Key schema and a Payload whose status field
+// carries the given constraints beside its type.
+func constrainedKeySpec(key, status string) string {
+	return `
+asyncapi: 2.6.0
+info: {title: T, version: '1'}
+channels:
+  orders:
+    publish:
+      message:
+        bindings: {kafka: {key: ` + key + `}}
+        payload:
+          type: object
+          required: [status, id]
+          properties:
+            status: {type: string, ` + status + `}
+            id: {type: string}
+`
+}
+
+// TestRunRefusesKeyPathIntoFieldsTheKeyMayViolate is the regression for #113:
+// a Key planted into a field whose enum, const, pattern or bounds the Key
+// schema does not guarantee would emit a non-conforming Payload, so the run
+// is refused before any record, naming -keyPath, the path and the keyword.
+func TestRunRefusesKeyPathIntoFieldsTheKeyMayViolate(t *testing.T) {
+	uuid := `{type: string, format: uuid}`
+	cases := []struct {
+		name, key, status, keyword string
+	}{
+		{"enum", uuid, `enum: [NEW, PAID]`, "enum"},
+		{"const", uuid, `const: NEW`, "const"},
+		{"pattern", uuid, `pattern: "^[A-Z]{3}$"`, "pattern"},
+		{"maxLength", uuid, `maxLength: 5`, "maxLength"},
+		{"minLength", uuid, `minLength: 40`, "minLength"},
+		{"enum not a superset", `{type: string, enum: [NEW, LOST]}`, `enum: [NEW, PAID]`, "enum"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			args := []string{"-spec", writeSpec(t, constrainedKeySpec(c.key, c.status)), "-topic", "orders", "-keyPath", "status", "-dry-run", "-count", "3", "-seed", "1"}
+			if code := run(context.Background(), "ktg", args, &stdout, &stderr); code != 1 {
+				t.Fatalf("exit code = %d, want 1\nstdout: %s", code, stdout.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout = %q, want no record: the refusal comes before the run", stdout.String())
+			}
+			for _, w := range []string{`-keyPath "status"`, c.keyword} {
+				if !strings.Contains(stderr.String(), w) {
+					t.Errorf("stderr = %q, want it to mention %q", stderr.String(), w)
+				}
+			}
+		})
+	}
+}
+
+// TestRunPlantsKeyWherePayloadStaysConforming proves the provable cases still
+// run: a Key schema whose enum is a subset of the field's, a field that
+// declares exactly the Key's format, and bounds the Key schema entails.
+func TestRunPlantsKeyWherePayloadStaysConforming(t *testing.T) {
+	cases := []struct{ name, key, status string }{
+		{"enum subset", `{type: string, enum: [NEW]}`, `enum: [NEW, PAID]`},
+		{"const in enum", `{type: string, const: PAID}`, `enum: [NEW, PAID]`},
+		{"same format", `{type: string, format: uuid}`, `format: uuid`},
+		{"entailed length", `{type: string, minLength: 3, maxLength: 4}`, `minLength: 2, maxLength: 5`},
+		{"no extra constraint", `{type: string, format: uuid}`, `description: free text`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			args := []string{"-spec", writeSpec(t, constrainedKeySpec(c.key, c.status)), "-topic", "orders", "-keyPath", "status", "-dry-run", "-count", "5", "-seed", "1"}
+			if code := run(context.Background(), "ktg", args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit code = %d, want 0\nstderr: %s", code, stderr.String())
+			}
+		})
+	}
+}

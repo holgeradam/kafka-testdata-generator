@@ -60,7 +60,7 @@ _Avoid_: aggregate, object
 Where in the Payload the generated Key is mirrored (`-keyPath`), as a dotted path with optional array indexing, e.g. `customer.id` or `items[0].sku`. The Key's Planting.
 
 **Planting**:
-A value the run writes into every message at a location in its Payload or Headers: the Key at the Key path, a Topic parameter's value at its location. Accepted only where generation guarantees a value in every message of every Message type, never through a node the schema answers with a literal (`example`, `examples`, `const`, `enum`), and only where the schema there can hold the value; no two Plantings may share a location. All of it is checked before the run starts, against whichever schema language governs.
+A value the run writes into every message at a location in its Payload or Headers: the Key at the Key path, a Topic parameter's value at its location. Accepted only where generation guarantees a value in every message of every Message type, never through a node the schema answers with a literal (`example`, `examples`, `const`, `enum`), and only where the schema there can hold the value (a Key only where the Key schema guarantees every constraint the field declares: enum, const, pattern, format, bounds); no two Plantings may share a location. All of it is checked before the run starts, against whichever schema language governs.
 _Avoid_: injection, mirroring (except for the Key)
 
 **Headers**:
