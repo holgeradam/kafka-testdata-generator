@@ -9,7 +9,7 @@ import (
 )
 
 // JsonEncoder encodes records as JSON (NDJSON-compatible). The Payload is
-// json.Marshal'd. The Key follows the plain-scalar contract (CONTEXT.md Key
+// json.Marshal'd. The Key follows the plain-scalar contract (GLOSSARY.md Key
 // entry): a string maps to UTF-8 bytes, a number to decimal text, and a
 // structured value (object/array) to JSON - never a JSON-wrapped scalar. The
 // same encoding serves Dry run and produce.
@@ -34,7 +34,7 @@ func (JsonEncoder) Encode(generated pipeline.Generated) ([]byte, []byte, error) 
 }
 
 // plainScalarKey renders a Key by JSON mode's plain-scalar contract
-// (CONTEXT.md Key), which Headers follow too. A nil Key yields nil bytes, so
+// (GLOSSARY.md Key), which Headers follow too. A nil Key yields nil bytes, so
 // the record carries a null Key. AVRO shows its Key in the Avro JSON encoding
 // of the key avsc instead.
 func plainScalarKey(key any) ([]byte, error) {

@@ -27,7 +27,7 @@ func EncodeHeaders(obj ordered.Object) ([]pipeline.Header, error) {
 	return headers, nil
 }
 
-// PlainScalar renders a value by the plain-scalar contract (CONTEXT.md Key)
+// PlainScalar renders a value by the plain-scalar contract (GLOSSARY.md Key)
 // that JSON Keys and all Headers follow: a string as UTF-8, a number as
 // decimal text, a boolean as true or false, and a structured value as JSON -
 // never a JSON-wrapped scalar. nil yields nil bytes: a null Key or header.

@@ -38,7 +38,7 @@ func TestJsonEncoderPayloadBytesAreJsonMarshal(t *testing.T) {
 }
 
 // TestJsonEncoderKeyPlainScalar proves the plain-scalar key contract (ADR-0006
-// / CONTEXT.md Key entry): a string key becomes raw UTF-8 bytes, a number
+// / GLOSSARY.md Key entry): a string key becomes raw UTF-8 bytes, a number
 // becomes decimal text, and an object/array stays JSON. Key bytes are never
 // JSON-wrapped scalars.
 func TestJsonEncoderKeyPlainScalar(t *testing.T) {
