@@ -132,6 +132,11 @@ func holdsKey(at, key Type) error {
 		if !ok || p.Kind != k.Kind || logicalKind(p.Logical) != logicalKind(k.Logical) {
 			return mismatch
 		}
+		// A decimal's precision and scale are its constraints: a Key of
+		// another precision may not fit the field (#113).
+		if p.Logical != nil && k.Logical != nil && (p.Logical.Precision != k.Logical.Precision || p.Logical.Scale != k.Logical.Scale) {
+			return mismatch
+		}
 		return nil
 	case *Record:
 		r, ok := at.(*Record)
