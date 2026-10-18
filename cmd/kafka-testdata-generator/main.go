@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -49,8 +50,9 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		var pe *runplan.Error
 		if errors.As(err, &pe) && pe.Usage {
 			runplan.Usage(stderr, name)
+			return exitUsage
 		}
-		return 1
+		return exitFailure
 	}
 	for _, w := range plan.Warnings {
 		fmt.Fprintln(stderr, w)
@@ -62,9 +64,11 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
+	var interrupted atomic.Bool
 	go func() {
 		select {
 		case <-sigCh:
+			interrupted.Store(true)
 			fmt.Fprintln(stderr, "\nInterrupted, shutting down...")
 			cancel()
 		case <-ctx.Done():
@@ -76,14 +80,14 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	sink, err := buildSink(ctx, plan, stdout, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
-		return 1
+		return exitFailure
 	}
 	defer sink.Close()
 
 	enc, err := plan.NewEncoder(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
-		return 1
+		return exitFailure
 	}
 
 	cfg := plan.Config
@@ -93,11 +97,25 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	stats, err := pipeline.New(cfg, sink).Run(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %v\n", err)
-		return 1
 	}
 	printStats(stderr, stats, plan.DryRun)
+	switch {
+	case interrupted.Load():
+		return exitInterrupted
+	case err != nil || stats.Failed > 0:
+		return exitFailure
+	}
 	return 0
 }
+
+// Exit codes: 0 is success, a runtime failure (a rejected spec, a failed
+// record, a generation error) is 1, a misuse of the flags is 2 (#120), and an
+// interrupt is 128 plus SIGINT, as shells report it.
+const (
+	exitFailure     = 1
+	exitUsage       = 2
+	exitInterrupted = 130
+)
 
 func printStats(w io.Writer, s pipeline.Stats, dryRun bool) {
 	mode := "kafka"
