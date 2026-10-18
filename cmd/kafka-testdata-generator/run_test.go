@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
@@ -218,8 +220,12 @@ channels:
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var stdout, stderr strings.Builder
-			if code := run(context.Background(), "ktg", c.args, &stdout, &stderr); code != 1 {
-				t.Fatalf("exit code = %d, want 1", code)
+			wantCode := 1
+			if c.wantUsage {
+				wantCode = 2
+			}
+			if code := run(context.Background(), "ktg", c.args, &stdout, &stderr); code != wantCode {
+				t.Fatalf("exit code = %d, want %d (2 for a usage error, 1 for a runtime one)", code, wantCode)
 			}
 			hasUsage := strings.Contains(stderr.String(), "Usage: ktg")
 			if hasUsage != c.wantUsage {
@@ -286,5 +292,115 @@ func TestRunSinkErrorReported(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "broker unreachable") {
 		t.Errorf("stderr = %q, want the sink error", stderr.String())
+	}
+}
+
+// failingRunArgs is a dry run of three records against a sink that fails them
+// all, as a broker error would.
+func failingRunArgs(t *testing.T, extra ...string) []string {
+	t.Helper()
+	return append([]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-count", "3", "-rate", "0"}, extra...)
+}
+
+// TestRunStopsOnFirstFailedRecord is #120 end to end: a record the sink
+// cannot deliver stops the run with exit 1, its cause on stderr and the Stats
+// of the run so far, instead of an exit 0 and a bare failed=N.
+func TestRunStopsOnFirstFailedRecord(t *testing.T) {
+	sink := &closingSink{err: errors.New("broker unreachable")}
+	withSink(t, sink)
+	var stdout, stderr strings.Builder
+
+	code := run(context.Background(), "ktg", failingRunArgs(t), &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if sink.sent != 1 {
+		t.Errorf("sink received %d records, want the run to stop after 1", sink.sent)
+	}
+	for _, want := range []string{"broker unreachable", "Stats [dry-run]: total=1 acked=0 failed=1"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to contain %q", stderr.String(), want)
+		}
+	}
+	if !sink.wasClosed() {
+		t.Error("the sink was not closed on the failure path")
+	}
+}
+
+// TestRunContinueOnError is #120 decisions 1, 2 and 4: -continueOnError
+// attempts every record, writes one stderr line per failure, prints the
+// Stats, and still exits 1 because records failed.
+func TestRunContinueOnError(t *testing.T) {
+	sink := &closingSink{err: errors.New("broker unreachable")}
+	withSink(t, sink)
+	var stdout, stderr strings.Builder
+
+	code := run(context.Background(), "ktg", failingRunArgs(t, "-continueOnError"), &stdout, &stderr)
+
+	if code != 1 {
+		t.Errorf("exit code = %d, want 1 when any record failed", code)
+	}
+	if sink.sent != 3 {
+		t.Errorf("sink received %d records, want all 3", sink.sent)
+	}
+	if got := strings.Count(stderr.String(), "broker unreachable"); got != 3 {
+		t.Errorf("stderr names the cause %d times, want once per failure (3): %q", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "total=3 acked=0 failed=3") {
+		t.Errorf("stderr = %q, want the Stats", stderr.String())
+	}
+
+	// With nothing failing the flag changes nothing: exit 0.
+	withSink(t, &closingSink{})
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), "ktg", failingRunArgs(t, "-continueOnError"), &stdout, &stderr); code != 0 {
+		t.Errorf("exit code = %d, want 0 when no record failed\nstderr: %s", code, stderr.String())
+	}
+}
+
+// blockingSink holds its first Send until the run's context is cancelled.
+type blockingSink struct {
+	closingSink
+	blocked chan struct{}
+}
+
+func (s *blockingSink) Send(ctx context.Context, o pipeline.Outgoing) error {
+	close(s.blocked)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestRunInterruptExits130 is #120 decision 5: SIGINT during a delivery ends
+// the run with exit 130, and the record cancelled in flight is not a failure.
+func TestRunInterruptExits130(t *testing.T) {
+	sink := &blockingSink{blocked: make(chan struct{})}
+	withSink(t, sink)
+	var stdout, stderr strings.Builder
+	done := make(chan int, 1)
+	go func() {
+		done <- run(context.Background(), "ktg", failingRunArgs(t, "-count", "0"), &stdout, &stderr)
+	}()
+
+	select {
+	case <-sink.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send never blocked")
+	}
+	if err := syscall.Kill(syscall.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case code := <-done:
+		if code != 130 {
+			t.Errorf("exit code = %d, want 130", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after SIGINT")
+	}
+	if !strings.Contains(stderr.String(), "failed=0") {
+		t.Errorf("stderr = %q, want the interrupted record not counted as failed", stderr.String())
 	}
 }

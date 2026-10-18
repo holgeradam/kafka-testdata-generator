@@ -76,7 +76,7 @@ The validated description of one run, built from the command line before anythin
 _Avoid_: config, options, args
 
 **Pipeline**:
-The deep module driving a run: generates each message for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. Format-blind: it never knows JSON from AVRO. Depends on a single-method **PayloadGenerator** seam that hands it whole messages, every Planting in place; the Wire format's generator satisfies it, and tests substitute fakes. It holds no schema of any language and knows no Key path.
+The deep module driving a run: generates each message for the active Wire format, hands it to the format's Encoder for byte encoding, and delivers the bytes to the configured Output sink until Count is reached or the context is cancelled. Owns signal-safe looping, rate limiting, and stats. A record that cannot be encoded or delivered stops the run with its cause and the stats so far, unless `-continueOnError` finishes the run and prints one line per failure; an Avro message that does not fit its avsc is a Conformance violation and stops the run either way. Pacing separates every attempt, failed or not, and an interrupt ends the wait and drops the record in flight uncounted. Format-blind: it never knows JSON from AVRO. Depends on a single-method **PayloadGenerator** seam that hands it whole messages, every Planting in place; the Wire format's generator satisfies it, and tests substitute fakes. It holds no schema of any language and knows no Key path.
 _Avoid_: runner, loop, producer loop
 
 **PayloadGenerator**:

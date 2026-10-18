@@ -165,20 +165,23 @@ func TestRunCancellationMidRun(t *testing.T) {
 // TestRunCancellationInterruptsBlockedSend proves the produce-path teardown: a
 // cancellation while a Sink.Send is blocked in-flight (as KafkaSink.Send is,
 // via ProduceSync(ctx, ...)) must be observed by the blocked send and must not
-// hang the pipeline. This is the #4 gap - TestRunCancellationMidRun covers
-// cancellation only between sends, not during one. The blocked send returns the
-// context error (matching the real produce path), so the interrupted payload is
-// counted as failed, not acked.
+// hang the pipeline. The blocked send returns the context error (matching the
+// real produce path); the interrupted record was neither delivered nor failed,
+// so it is not counted at all (#120 decision 5).
 func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := newBlockingSink()
 	p := pipeline.New(pipeline.Config{Generator: gen, Count: 100000, Encoder: fakeEncoder{}}, sink)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan pipeline.Stats, 1)
+	type result struct {
+		stats pipeline.Stats
+		err   error
+	}
+	done := make(chan result, 1)
 	go func() {
-		s, _ := p.Run(ctx)
-		done <- s
+		s, err := p.Run(ctx)
+		done <- result{s, err}
 	}()
 
 	// Wait until the first Send is blocked in-flight, then cancel.
@@ -189,31 +192,131 @@ func TestRunCancellationInterruptsBlockedSend(t *testing.T) {
 	}
 	cancel()
 
-	// The pipeline must observe the cancelled send and shut down cleanly. The
-	// in-flight payload is a failure (context-cancelled), not an ack - the same
-	// accounting a real Kafka produce hit by cancellation produces.
 	select {
-	case stats := <-done:
-		if stats.Total < 1 {
-			t.Errorf("expected at least one payload to be in flight before cancellation, got %+v", stats)
+	case r := <-done:
+		if r.err != nil {
+			t.Errorf("an interrupted run is not an error, got %v", r.err)
 		}
-		if stats.Failed != 1 {
-			t.Errorf("expected the interrupted send to count as 1 failure, got %+v", stats)
+		if r.stats.Total != 0 || r.stats.Acked != 0 || r.stats.Failed != 0 {
+			t.Errorf("the interrupted record must not be counted, got %+v", r.stats)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return after cancel interrupting a blocked send")
 	}
 }
 
-func TestRunCountsSendFailures(t *testing.T) {
-	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
-	sink := &fakeSink{err: errors.New("boom")}
-	p := pipeline.New(pipeline.Config{Generator: gen, Count: 3, Encoder: fakeEncoder{}}, sink)
+// errEncoder fails every Encode with err.
+type errEncoder struct{ err error }
 
-	stats, _ := p.Run(context.Background())
+func (e errEncoder) Encode(pipeline.Generated) ([]byte, []byte, error) { return nil, nil, e.err }
 
+// TestRunStopsOnTheFirstFailedRecord is #120 decision 1: by default a record
+// that cannot be encoded or delivered stops the run, returning the cause with
+// the Stats so far, instead of being counted and looped past.
+func TestRunStopsOnTheFirstFailedRecord(t *testing.T) {
+	boom := errors.New("boom")
+	cases := []struct {
+		name    string
+		encoder pipeline.Encoder
+		sink    *fakeSink
+	}{
+		{"send", fakeEncoder{}, &fakeSink{err: boom}},
+		{"encode", errEncoder{boom}, &fakeSink{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var warn bytes.Buffer
+			stats, err := pipeline.New(pipeline.Config{
+				Generator: &fakeGenerator{payload: map[string]any{"id": "a"}},
+				Count:     3,
+				Encoder:   c.encoder,
+				Warn:      &warn,
+			}, c.sink).Run(context.Background())
+
+			if !errors.Is(err, boom) {
+				t.Fatalf("err = %v, want the cause", err)
+			}
+			if stats.Total != 1 || stats.Acked != 0 || stats.Failed != 1 {
+				t.Errorf("stats = %+v, want Total 1, Acked 0, Failed 1", stats)
+			}
+			if strings.Contains(warn.String(), "boom") {
+				t.Errorf("the stopping error is returned, not also warned: %q", warn.String())
+			}
+		})
+	}
+}
+
+// TestRunContinueOnErrorFinishesTheRun is #120 decisions 1 and 2:
+// ContinueOnError attempts every record, reports each failure's cause on
+// Warn, and ends without an error; the caller reads the failures from Stats.
+func TestRunContinueOnErrorFinishesTheRun(t *testing.T) {
+	boom := errors.New("boom")
+	var warn bytes.Buffer
+	stats, err := pipeline.New(pipeline.Config{
+		Generator:       &fakeGenerator{payload: map[string]any{"id": "a"}},
+		Count:           3,
+		Encoder:         fakeEncoder{},
+		ContinueOnError: true,
+		Warn:            &warn,
+	}, &fakeSink{err: boom}).Run(context.Background())
+
+	if err != nil {
+		t.Fatalf("err = %v, want nil: failures are in Stats", err)
+	}
 	if stats.Total != 3 || stats.Acked != 0 || stats.Failed != 3 {
-		t.Errorf("expected Total 3, Acked 0, Failed 3, got %+v", stats)
+		t.Errorf("stats = %+v, want Total 3, Acked 0, Failed 3", stats)
+	}
+	if got := strings.Count(warn.String(), "boom"); got != 3 {
+		t.Errorf("warn has %d lines naming the cause, want 3: %q", got, warn.String())
+	}
+}
+
+// TestRunStopsOnConformanceErrorEvenWhenContinuing is #120 decision 3: an
+// Encoder's ConformanceError signals a tool bug, not a delivery hiccup, so it
+// stops the run under ContinueOnError too.
+func TestRunStopsOnConformanceErrorEvenWhenContinuing(t *testing.T) {
+	stats, err := pipeline.New(pipeline.Config{
+		Generator:       &fakeGenerator{payload: map[string]any{"id": "a"}},
+		Count:           3,
+		Encoder:         errEncoder{&pipeline.ConformanceError{Err: errors.New("value does not fit the avsc")}},
+		ContinueOnError: true,
+	}, &fakeSink{}).Run(context.Background())
+
+	var ce *pipeline.ConformanceError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want a *pipeline.ConformanceError", err)
+	}
+	if stats.Total != 1 {
+		t.Errorf("stats = %+v, want the run stopped after the first record", stats)
+	}
+}
+
+// TestRunPacesFailedRecords is #120 decision 6: the rate limit separates every
+// attempt, failed or not, so a failing run cannot spin hot, and a
+// cancellation ends the wait rather than outlasting it.
+func TestRunPacesFailedRecords(t *testing.T) {
+	cfg := func(rate time.Duration, count int) pipeline.Config {
+		return pipeline.Config{
+			Generator:       &fakeGenerator{payload: map[string]any{"id": "a"}},
+			Count:           count,
+			RateLimit:       rate,
+			Encoder:         fakeEncoder{},
+			ContinueOnError: true,
+		}
+	}
+	sink := &fakeSink{err: errors.New("boom")}
+
+	stats, _ := pipeline.New(cfg(30*time.Millisecond, 3), sink).Run(context.Background())
+	if stats.Elapsed < 90*time.Millisecond {
+		t.Errorf("3 failed records at 30ms took %s, want at least 90ms", stats.Elapsed)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(50*time.Millisecond, cancel)
+	start := time.Now()
+	pipeline.New(cfg(time.Hour, 3), sink).Run(ctx)
+	if time.Since(start) > 5*time.Second {
+		t.Error("cancel did not interrupt the rate-limit wait")
 	}
 }
 

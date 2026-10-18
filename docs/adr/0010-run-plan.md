@@ -29,3 +29,5 @@ Two defects came from the same shape. `os.Exit(1)` after `defer sink.Close()` sk
 - The package's test suite goes from 47 process spawns (~38s) to 28 (~2.4s).
 - Error wording is free to change; tests assert flags and typed causes.
 - A future wire format module (#29) has a single place to plug into, and a test surface to land against.
+
+Amended (2026-10-18, issue #120): the process edge's exit codes are 0 for success, 1 for a runtime failure, 2 for a usage error (a `runplan.Error` with `Usage` set) and 130 for an interrupt. A record that fails to encode or deliver now stops the run, in Dry run and produce alike, unless the plan carries `-continueOnError`, which finishes the run and exits 1 if any record failed; the Pipeline reports each cause, and `main` prints the Stats after a stopping error too.

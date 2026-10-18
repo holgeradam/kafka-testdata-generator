@@ -71,7 +71,7 @@ type flags struct {
 	count, recordsPerKey                   *int
 	rateLimit                              *time.Duration
 	keyPath, renamedKey, renamedChannel    *string
-	dryRun                                 *bool
+	dryRun, continueOnError                *bool
 	seed                                   *int64
 	now                                    *nowFlag
 	acks                                   *acksFlag
@@ -85,17 +85,18 @@ func newFlags() *flags {
 	fs := flag.NewFlagSet("kafka-testdata-generator", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	f := &flags{
-		set:            fs,
-		specPath:       fs.String("spec", "", "Path to AsyncAPI spec file (required)"),
-		topic:          fs.String("topic", "", "Kafka topic to produce to (required)"),
-		broker:         fs.String("broker", "localhost:9092", "Kafka broker address"),
-		count:          fs.Int("count", 10, "Number of payloads to generate (0 = infinite)"),
-		recordsPerKey:  fs.Int("records-per-key", 1, "Average number of records sharing one Key, i.e. one Entity (requires a key schema)"),
-		rateLimit:      fs.Duration("rate", 10*time.Millisecond, "Minimum time between messages"),
-		keyPath:        fs.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)"),
-		renamedKey:     fs.String("key", "", "deprecated: renamed to -keyPath"),
-		renamedChannel: fs.String("channel", "", "deprecated: renamed to -topic"),
-		dryRun:         fs.Bool("dry-run", false, "Generate payloads without producing to Kafka"),
+		set:             fs,
+		specPath:        fs.String("spec", "", "Path to AsyncAPI spec file (required)"),
+		topic:           fs.String("topic", "", "Kafka topic to produce to (required)"),
+		broker:          fs.String("broker", "localhost:9092", "Kafka broker address"),
+		count:           fs.Int("count", 10, "Number of payloads to generate (0 = infinite)"),
+		recordsPerKey:   fs.Int("records-per-key", 1, "Average number of records sharing one Key, i.e. one Entity (requires a key schema)"),
+		rateLimit:       fs.Duration("rate", 10*time.Millisecond, "Minimum time between messages"),
+		keyPath:         fs.String("keyPath", "", "Path in the payload where the generated Key is planted, e.g. customer.id or items[0].sku (requires a key schema)"),
+		renamedKey:      fs.String("key", "", "deprecated: renamed to -keyPath"),
+		renamedChannel:  fs.String("channel", "", "deprecated: renamed to -topic"),
+		dryRun:          fs.Bool("dry-run", false, "Generate payloads without producing to Kafka"),
+		continueOnError: fs.Bool("continueOnError", false, "Finish the run past a record that cannot be encoded or delivered, reporting each failure (default: stop at the first); exits 1 if any record failed"),
 		// 0 stands in for "random" so help states no seed that will not be used;
 		// Plan draws the real one when -seed is not given.
 		seed:          fs.Int64("seed", 0, "Random seed for reproducibility (default: random)"),
@@ -273,6 +274,8 @@ func (r *Run) build(f *flags, format wire.Format, flags wire.Flags, topic *async
 		Count:     *f.count,
 		RateLimit: *f.rateLimit,
 		Keyed:     parts.Keyed,
+
+		ContinueOnError: *f.continueOnError,
 	}
 	return nil
 }

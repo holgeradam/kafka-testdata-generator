@@ -181,6 +181,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
 | `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema) |
 | `-records-per-key` | `1` | Average number of records sharing one Key, i.e. one Entity (requires a key schema above 1) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
+| `-continueOnError` | `false` | Finish the run past a record that cannot be encoded or delivered, printing each failure; by default the run stops at the first |
 | `-seed` | random | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
 | `-acks` | `1` | Kafka acknowledgement level: `1` (leader) or `all` (all in-sync replicas) |
@@ -528,6 +529,17 @@ Or in dry-run mode:
 ```
 Stats [dry-run]: total=10 acked=10 failed=0 elapsed=12ms
 ```
+
+### Failed records and exit codes
+
+A record that cannot be encoded or delivered (an unknown topic, an authorisation error, a broker that is down, a write failure on stdout) stops the run: the cause is printed on stderr, followed by the statistics so far. With `-continueOnError` the run attempts every record instead and prints one line per failure. A message the Avro codec rejects for its avsc is a bug in the tool, and stops the run either way.
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | The run completed and every record was delivered |
+| `1` | A runtime failure: a rejected spec, a generation error, or a failed record (with `-continueOnError`, any failed record) |
+| `2` | A usage error: a missing, unknown or conflicting flag |
+| `130` | Interrupted with Ctrl-C or SIGTERM; the record in flight is not counted as failed |
 
 ## Development
 

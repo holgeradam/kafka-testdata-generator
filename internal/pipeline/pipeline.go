@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -69,6 +70,10 @@ type Config struct {
 	// one every record carries a null Key, which the Pipeline announces once.
 	Keyed   bool
 	Encoder Encoder
+	// ContinueOnError finishes the run past a record that cannot be encoded
+	// or delivered, reporting each cause on Warn; the default stops at the
+	// first (#120). A ConformanceError stops the run either way.
+	ContinueOnError bool
 	// Warn, when non-nil, receives per-message stream diagnostics such as a
 	// configured Key field that is missing from a generated Payload. Process
 	// edge (main) passes stderr; tests pass a buffer.
@@ -97,9 +102,13 @@ func New(cfg Config, sink Sink) *Pipeline {
 }
 
 // Run executes the pipeline until Count payloads are handled, ctx is done, or
-// generation of a Payload fails (ADR-0006): a schema the generator cannot
-// honour errors every Payload the same way, so the run stops and the error is
-// returned rather than being counted and looped past.
+// a record fails. Generation of a Payload failing (ADR-0006) always stops the
+// run: a schema the generator cannot honour errors every Payload the same way.
+// So does a record that cannot be encoded or delivered, unless ContinueOnError
+// is set, which counts it, writes its cause to Warn and goes on (#120); an
+// Encoder's ConformanceError stops the run regardless. A stopping error is
+// returned with the Stats so far. A cancellation is not a failure: the record
+// in flight is dropped uncounted.
 func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	var total, acked, failed int64
 	start := time.Now()
@@ -127,21 +136,43 @@ loop:
 		total++
 
 		keyBytes, data, err := p.cfg.Encoder.Encode(generated)
+		if err == nil {
+			err = p.sink.Send(ctx, Outgoing{Key: keyBytes, Headers: generated.Headers, Payload: data})
+			if err != nil && ctx.Err() != nil {
+				// Interrupted mid-send: neither delivered nor failed.
+				total--
+				break loop
+			}
+			if err != nil {
+				err = fmt.Errorf("record %d: sending: %w", total, err)
+			}
+		} else {
+			err = fmt.Errorf("record %d: encoding: %w", total, err)
+		}
+
 		if err != nil {
 			failed++
-			continue
+			var conformance *ConformanceError
+			if !p.cfg.ContinueOnError || errors.As(err, &conformance) {
+				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
+			}
+			p.warnf("Error: %v\n", err)
+		} else {
+			acked++
 		}
 
-		if err := p.sink.Send(ctx, Outgoing{Key: keyBytes, Headers: generated.Headers, Payload: data}); err != nil {
-			failed++
-			continue
+		// Rate limiting separates every attempt, failed or not, so a failing
+		// run cannot spin hot; Ctrl-C ends the wait. It stays an inline timer:
+		// a sleeper seam is deliberately deferred until a second consumer of
+		// pacing exists (ADR-0004).
+		if p.cfg.RateLimit > 0 {
+			timer := time.NewTimer(p.cfg.RateLimit)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+			}
 		}
-
-		acked++
-		// Rate limiting stays an inline sleep. A sleeper seam is deliberately
-		// deferred until a second consumer of pacing exists (ADR-0004); revisit
-		// only when pacing tests demand it.
-		time.Sleep(p.cfg.RateLimit)
 	}
 
 	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil

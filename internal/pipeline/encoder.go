@@ -12,3 +12,14 @@ type Encoder interface {
 	// the Key is nil) and Payload bytes.
 	Encode(generated Generated) (keyBytes []byte, payloadBytes []byte, err error)
 }
+
+// ConformanceError is an Encoder's report that a generated message does not
+// fit the schema it encodes against, such as a value the Avro codec rejects
+// for the avsc. It is the generator breaking its Conformance promise, a tool
+// bug rather than a delivery failure, so it stops the run even when the run
+// continues past failed records (#120).
+type ConformanceError struct{ Err error }
+
+func (e *ConformanceError) Error() string { return e.Err.Error() }
+
+func (e *ConformanceError) Unwrap() error { return e.Err }
