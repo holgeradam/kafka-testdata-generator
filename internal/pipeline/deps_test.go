@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestPipelineIsFormatBlind locks the claim CONTEXT.md makes about the
+// TestPipelineIsFormatBlind locks the claim GLOSSARY.md makes about the
 // Pipeline at package level: the wire-format adapters live in internal/wire, so
 // neither the avsc model nor the Confluent client is among its dependencies.
 func TestPipelineIsFormatBlind(t *testing.T) {
