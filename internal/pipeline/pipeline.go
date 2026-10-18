@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
+
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 )
 
 // Outgoing is a fully-marshalled message ready for a sink: the raw Payload
@@ -74,10 +75,9 @@ type Config struct {
 	// or delivered, reporting each cause on Warn; the default stops at the
 	// first (#120). A ConformanceError stops the run either way.
 	ContinueOnError bool
-	// Warn, when non-nil, receives per-message stream diagnostics such as a
-	// configured Key field that is missing from a generated Payload. Process
-	// edge (main) passes stderr; tests pass a buffer.
-	Warn io.Writer
+	// Logger receives the run's diagnostics: the null-Key notice and, under
+	// ContinueOnError, the cause of each failed record. Nil discards them.
+	Logger logging.Logger
 }
 
 // Stats reports the outcome of a run.
@@ -98,6 +98,9 @@ type Pipeline struct {
 
 // New returns a Pipeline that sends generated payloads to the given sink.
 func New(cfg Config, sink Sink) *Pipeline {
+	if cfg.Logger == nil {
+		cfg.Logger = logging.Nop()
+	}
 	return &Pipeline{cfg: cfg, sink: sink}
 }
 
@@ -105,7 +108,7 @@ func New(cfg Config, sink Sink) *Pipeline {
 // a record fails. Generation of a Payload failing (ADR-0006) always stops the
 // run: a schema the generator cannot honour errors every Payload the same way.
 // So does a record that cannot be encoded or delivered, unless ContinueOnError
-// is set, which counts it, writes its cause to Warn and goes on (#120); an
+// is set, which counts it, logs its cause and goes on (#120); an
 // Encoder's ConformanceError stops the run regardless. A stopping error is
 // returned with the Stats so far. A cancellation is not a failure: the record
 // in flight is dropped uncounted.
@@ -114,7 +117,7 @@ func (p *Pipeline) Run(ctx context.Context) (Stats, error) {
 	start := time.Now()
 
 	if !p.cfg.Keyed {
-		p.warnf("no key configured, generating messages with a null key\n")
+		p.cfg.Logger.Info("no key configured, generating messages with a null key")
 	}
 
 loop:
@@ -135,28 +138,27 @@ loop:
 		}
 		total++
 
+		var cause error
+		stage := "encoding"
 		keyBytes, data, err := p.cfg.Encoder.Encode(generated)
 		if err == nil {
+			stage = "sending"
 			err = p.sink.Send(ctx, Outgoing{Key: keyBytes, Headers: generated.Headers, Payload: data})
 			if err != nil && ctx.Err() != nil {
 				// Interrupted mid-send: neither delivered nor failed.
 				total--
 				break loop
 			}
-			if err != nil {
-				err = fmt.Errorf("record %d: sending: %w", total, err)
-			}
-		} else {
-			err = fmt.Errorf("record %d: encoding: %w", total, err)
 		}
+		cause = err
 
-		if err != nil {
+		if cause != nil {
 			failed++
 			var conformance *ConformanceError
-			if !p.cfg.ContinueOnError || errors.As(err, &conformance) {
-				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, err
+			if !p.cfg.ContinueOnError || errors.As(cause, &conformance) {
+				return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, fmt.Errorf("record %d: %s: %w", total, stage, cause)
 			}
-			p.warnf("Error: %v\n", err)
+			p.cfg.Logger.Error("record failed", "record", total, "stage", stage, "error", cause)
 		} else {
 			acked++
 		}
@@ -176,10 +178,4 @@ loop:
 	}
 
 	return Stats{Total: total, Acked: acked, Failed: failed, Elapsed: time.Since(start)}, nil
-}
-
-func (p *Pipeline) warnf(format string, args ...any) {
-	if p.cfg.Warn != nil {
-		fmt.Fprintf(p.cfg.Warn, format, args...)
-	}
 }

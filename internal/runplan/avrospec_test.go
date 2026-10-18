@@ -278,8 +278,8 @@ channels:
 	if r.Config.Keyed {
 		t.Error("no Key binding and no -avro-key-schema: the run must not be keyed")
 	}
-	if len(r.Warnings) != 0 {
-		t.Errorf("warnings = %v, want none: the Key binding is read, not ignored", r.Warnings)
+	if len(r.Diagnostics) != 0 {
+		t.Errorf("diagnostics = %+v, want none: the Key binding is read, not ignored", r.Diagnostics)
 	}
 
 	r = plan("-spec", keyed, "-topic", "orders", "-keyPath", "id")

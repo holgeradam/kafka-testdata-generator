@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/ordered"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/planting"
@@ -245,9 +246,10 @@ func TestPlanAccepts(t *testing.T) {
 	}
 }
 
-// TestPlanWarnings proves the diagnostics a run carries are data on the plan,
-// not writes to stderr during planning.
-func TestPlanWarnings(t *testing.T) {
+// TestPlanDiagnostics proves the diagnostics a run carries are data on the
+// plan, at warn level and with no "Warning:" baked into the text, not writes
+// to stderr during planning.
+func TestPlanDiagnostics(t *testing.T) {
 	spec := write(t, "spec.yaml", plainSpec)
 	bound := write(t, "bound.yaml", bindingSpec)
 	value := write(t, "value.avsc", valueAvsc)
@@ -267,8 +269,13 @@ func TestPlanWarnings(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Plan: %v", err)
 			}
-			if !slicesContain(r.Warnings, c.want) {
-				t.Errorf("Warnings = %q, want one mentioning %q", r.Warnings, c.want)
+			if !diagnosticsContain(r.Diagnostics, c.want) {
+				t.Errorf("Diagnostics = %+v, want a warning mentioning %q", r.Diagnostics, c.want)
+			}
+			for _, d := range r.Diagnostics {
+				if strings.HasPrefix(d.Msg, "Warning:") {
+					t.Errorf("diagnostic %q bakes its level into the text", d.Msg)
+				}
 			}
 		})
 	}
@@ -277,18 +284,43 @@ func TestPlanWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(r.Warnings) != 0 {
-		t.Errorf("a plain dry run must warn about nothing, got %q", r.Warnings)
+	if len(r.Diagnostics) != 0 {
+		t.Errorf("a plain dry run must warn about nothing, got %+v", r.Diagnostics)
 	}
 }
 
-func slicesContain(all []string, want string) bool {
-	for _, s := range all {
-		if strings.Contains(s, want) {
+func diagnosticsContain(all []logging.Diagnostic, want string) bool {
+	for _, d := range all {
+		if d.Level == logging.Warn && strings.Contains(d.Msg, want) {
 			return true
 		}
 	}
 	return false
+}
+
+// TestPlanLogLevel is #121 decision 3: -log-level takes debug, info, warn or
+// error, defaults to info, and a bad value is a usage error like any flag
+// rule.
+func TestPlanLogLevel(t *testing.T) {
+	spec := write(t, "spec.yaml", plainSpec)
+	base := []string{"-spec", spec, "-topic", "orders", "-dry-run"}
+
+	r, err := runplan.Plan(base)
+	if err != nil || r.LogLevel != logging.Info {
+		t.Fatalf("default: level = %v, err = %v; want info, nil", r.LogLevel, err)
+	}
+	for name, want := range map[string]logging.Level{"debug": logging.Debug, "info": logging.Info, "warn": logging.Warn, "error": logging.Error} {
+		r, err := runplan.Plan(append([]string{"-log-level", name}, base...))
+		if err != nil || r.LogLevel != want {
+			t.Errorf("-log-level %s: level = %v, err = %v; want %v, nil", name, r.LogLevel, err, want)
+		}
+	}
+
+	_, err = runplan.Plan(append([]string{"-log-level", "loud"}, base...))
+	var pe *runplan.Error
+	if !errors.As(err, &pe) || pe.Flag != "log-level" || !pe.Usage {
+		t.Errorf("-log-level loud: err = %v, want a usage error on log-level", err)
+	}
 }
 
 // TestPlanRejects is the rule table: one row per rejected run, asserting the

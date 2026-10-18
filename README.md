@@ -181,6 +181,7 @@ kafka-testdata-generator -spec examples/order.asyncapi.yaml -topic orders.create
 | `-keyPath` | `` | Path in the payload where the generated Key is planted, e.g. `customer.id` (requires a key schema) |
 | `-records-per-key` | `1` | Average number of records sharing one Key, i.e. one Entity (requires a key schema above 1) |
 | `-dry-run` | `false` | Generate without producing to Kafka |
+| `-log-level` | `info` | Diagnostics to show on stderr: `debug`, `info`, `warn` or `error` |
 | `-continueOnError` | `false` | Finish the run past a record that cannot be encoded or delivered, printing each failure; by default the run stops at the first |
 | `-seed` | random | Random seed for reproducibility |
 | `-now` | current time | Clock for date fields (RFC3339) |
@@ -529,6 +530,10 @@ Or in dry-run mode:
 ```
 Stats [dry-run]: total=10 acked=10 failed=0 elapsed=12ms
 ```
+
+### Logging
+
+Diagnostics (warnings about ignored spec declarations or disregarded options, the cause of each failed record, the interrupt notice) are written to stderr as console text, one line per record, such as `WARN	dry-run mode disregards Kafka options`. `-log-level` hides those below the chosen level. It never hides what the tool produces: the Dry run records on stdout, the `Key:` and `Headers:` echo, the Stats line, or the plain `Error: ...` line that ends a failed run (which is also logged at error level).
 
 ### Failed records and exit codes
 

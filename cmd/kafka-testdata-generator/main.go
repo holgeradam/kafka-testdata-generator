@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging/zaplog"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/runplan"
 )
@@ -38,13 +40,15 @@ var buildSink = func(ctx context.Context, r *runplan.Run, stdout, stderr io.Writ
 // flushed and closed whether the run succeeds, fails to encode, or is
 // interrupted (ADR-0010).
 func run(ctx context.Context, name string, args []string, stdout, stderr io.Writer) int {
+	// Until a plan names the level, diagnostics go out at the default one.
+	log := zaplog.New(stderr, logging.Info)
 	plan, err := runplan.Plan(args)
 	if errors.Is(err, flag.ErrHelp) {
 		runplan.Usage(stdout, name)
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		fatal(stderr, log, err)
 		// A rule about the flags themselves is worth a reminder of the flag
 		// surface; a rejected spec, avsc or key path is not.
 		var pe *runplan.Error
@@ -54,8 +58,9 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		}
 		return exitFailure
 	}
-	for _, w := range plan.Warnings {
-		fmt.Fprintln(stderr, w)
+	log = zaplog.New(stderr, plan.LogLevel)
+	for _, d := range plan.Diagnostics {
+		d.Emit(log)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -69,7 +74,7 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 		select {
 		case <-sigCh:
 			interrupted.Store(true)
-			fmt.Fprintln(stderr, "\nInterrupted, shutting down...")
+			log.Warn("Interrupted, shutting down...")
 			cancel()
 		case <-ctx.Done():
 		}
@@ -79,24 +84,24 @@ func run(ctx context.Context, name string, args []string, stdout, stderr io.Writ
 	// cannot produce never registers a schema (ADR-0010).
 	sink, err := buildSink(ctx, plan, stdout, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		fatal(stderr, log, err)
 		return exitFailure
 	}
 	defer sink.Close()
 
 	enc, err := plan.NewEncoder(ctx)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		fatal(stderr, log, err)
 		return exitFailure
 	}
 
 	cfg := plan.Config
 	cfg.Encoder = enc
-	cfg.Warn = stderr
+	cfg.Logger = log
 
 	stats, err := pipeline.New(cfg, sink).Run(ctx)
 	if err != nil {
-		fmt.Fprintf(stderr, "Error: %v\n", err)
+		fatal(stderr, log, err)
 	}
 	printStats(stderr, stats, plan.DryRun)
 	switch {
@@ -116,6 +121,13 @@ const (
 	exitUsage       = 2
 	exitInterrupted = 130
 )
+
+// fatal reports a run-ending error: the plain Error line, whatever the log
+// level, and an error-level record beside it (#121 decision 7).
+func fatal(stderr io.Writer, log logging.Logger, err error) {
+	fmt.Fprintf(stderr, "Error: %v\n", err)
+	log.Error("run failed", "error", err)
+}
 
 func printStats(w io.Writer, s pipeline.Stats, dryRun bool) {
 	mode := "kafka"

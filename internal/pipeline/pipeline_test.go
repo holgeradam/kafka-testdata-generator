@@ -1,18 +1,17 @@
 package pipeline_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/generator"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 )
 
@@ -225,12 +224,13 @@ func TestRunStopsOnTheFirstFailedRecord(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			var warn bytes.Buffer
+			log := &logging.Recorder{}
 			stats, err := pipeline.New(pipeline.Config{
 				Generator: &fakeGenerator{payload: map[string]any{"id": "a"}},
 				Count:     3,
+				Keyed:     true,
 				Encoder:   c.encoder,
-				Warn:      &warn,
+				Logger:    log,
 			}, c.sink).Run(context.Background())
 
 			if !errors.Is(err, boom) {
@@ -239,25 +239,26 @@ func TestRunStopsOnTheFirstFailedRecord(t *testing.T) {
 			if stats.Total != 1 || stats.Acked != 0 || stats.Failed != 1 {
 				t.Errorf("stats = %+v, want Total 1, Acked 0, Failed 1", stats)
 			}
-			if strings.Contains(warn.String(), "boom") {
-				t.Errorf("the stopping error is returned, not also warned: %q", warn.String())
+			if got := log.Entries(); len(got) != 0 {
+				t.Errorf("the stopping error is returned, not also logged: %+v", got)
 			}
 		})
 	}
 }
 
 // TestRunContinueOnErrorFinishesTheRun is #120 decisions 1 and 2:
-// ContinueOnError attempts every record, reports each failure's cause on
-// Warn, and ends without an error; the caller reads the failures from Stats.
+// ContinueOnError attempts every record, logs each failure's cause at error
+// level, and ends without an error; the caller reads the failures from Stats.
 func TestRunContinueOnErrorFinishesTheRun(t *testing.T) {
 	boom := errors.New("boom")
-	var warn bytes.Buffer
+	log := &logging.Recorder{}
 	stats, err := pipeline.New(pipeline.Config{
 		Generator:       &fakeGenerator{payload: map[string]any{"id": "a"}},
 		Count:           3,
 		Encoder:         fakeEncoder{},
+		Keyed:           true,
 		ContinueOnError: true,
-		Warn:            &warn,
+		Logger:          log,
 	}, &fakeSink{err: boom}).Run(context.Background())
 
 	if err != nil {
@@ -266,8 +267,15 @@ func TestRunContinueOnErrorFinishesTheRun(t *testing.T) {
 	if stats.Total != 3 || stats.Acked != 0 || stats.Failed != 3 {
 		t.Errorf("stats = %+v, want Total 3, Acked 0, Failed 3", stats)
 	}
-	if got := strings.Count(warn.String(), "boom"); got != 3 {
-		t.Errorf("warn has %d lines naming the cause, want 3: %q", got, warn.String())
+	entries := log.Entries()
+	if len(entries) != 3 {
+		t.Fatalf("logged %d records, want one per failure (3): %+v", len(entries), entries)
+	}
+	for i, e := range entries {
+		want := []any{"record", int64(i + 1), "stage", "sending", "error", boom}
+		if e.Level != logging.Error || e.Msg != "record failed" || !reflect.DeepEqual(e.Attrs, want) {
+			t.Errorf("entry %d = %+v, want an error-level %q with %v", i, e, "record failed", want)
+		}
 	}
 }
 
@@ -351,12 +359,12 @@ func TestRunAbortsOnGenerationError(t *testing.T) {
 func TestRunNullKeyInfoMessage(t *testing.T) {
 	gen := &fakeGenerator{payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	var warn bytes.Buffer
+	log := &logging.Recorder{}
 	p := pipeline.New(pipeline.Config{
 		Generator: gen,
 		Count:     1,
 		Encoder:   fakeEncoder{},
-		Warn:      &warn,
+		Logger:    log,
 	}, sink)
 
 	stats, err := p.Run(context.Background())
@@ -366,8 +374,9 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 	if stats.Acked != 1 {
 		t.Errorf("expected 1 acked, got %d", stats.Acked)
 	}
-	if want := "no key configured, generating messages with a null key\n"; warn.String() != want {
-		t.Errorf("null-key info message = %q, want %q", warn.String(), want)
+	got := log.Entries()
+	if len(got) != 1 || got[0].Level != logging.Info || got[0].Msg != "no key configured, generating messages with a null key" {
+		t.Errorf("logged = %+v, want the null-key notice once, at info", got)
 	}
 	for _, o := range sink.recorded {
 		if len(o.Key) != 0 {
@@ -381,8 +390,8 @@ func TestRunNullKeyInfoMessage(t *testing.T) {
 func TestRunCarriesTheKey(t *testing.T) {
 	gen := &fakeGenerator{key: "generated-key", payload: map[string]any{"id": "a"}}
 	sink := &fakeSink{}
-	var warn bytes.Buffer
-	p := pipeline.New(pipeline.Config{Generator: gen, Count: 2, Keyed: true, Encoder: fakeEncoder{}, Warn: &warn}, sink)
+	log := &logging.Recorder{}
+	p := pipeline.New(pipeline.Config{Generator: gen, Count: 2, Keyed: true, Encoder: fakeEncoder{}, Logger: log}, sink)
 
 	stats, err := p.Run(context.Background())
 	if err != nil {
@@ -396,8 +405,8 @@ func TestRunCarriesTheKey(t *testing.T) {
 			t.Errorf("key bytes = %q, want the message's Key encoded", o.Key)
 		}
 	}
-	if strings.Contains(warn.String(), "no key configured") {
-		t.Errorf("a keyed run must not announce a null key, got %q", warn.String())
+	if got := log.Entries(); len(got) != 0 {
+		t.Errorf("a keyed run must not announce a null key, got %+v", got)
 	}
 }
 

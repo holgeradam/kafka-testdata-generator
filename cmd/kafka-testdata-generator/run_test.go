@@ -404,3 +404,66 @@ func TestRunInterruptExits130(t *testing.T) {
 		t.Errorf("stderr = %q, want the interrupted record not counted as failed", stderr.String())
 	}
 }
+
+// TestRunLogLevelFiltersDiagnosticsOnly is #121 decisions 1, 3 and 7:
+// -log-level hides diagnostics below it, but never the plain Error line, the
+// Stats, or the Dry run output, which are the tool's product and not logs.
+func TestRunLogLevelFiltersDiagnosticsOnly(t *testing.T) {
+	// A dry run given -broker draws the "disregards Kafka options" warning.
+	args := func(level string, extra ...string) []string {
+		return append([]string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-count", "2", "-broker", "other:9092", "-log-level", level}, extra...)
+	}
+	const warning = "dry-run mode disregards Kafka options"
+
+	var stdout, stderr strings.Builder
+	if code := run(context.Background(), "ktg", args("warn"), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), warning) || !strings.Contains(stderr.String(), "WARN") {
+		t.Errorf("-log-level warn: stderr = %q, want the warning at level WARN", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Warning:") {
+		t.Errorf("stderr = %q: the level is the logger's, not baked into the text", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), "ktg", args("error"), &stdout, &stderr); code != 0 {
+		t.Fatalf("exit code = %d\nstderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), warning) {
+		t.Errorf("-log-level error: stderr = %q, want the warning hidden", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Stats [dry-run]: total=2") {
+		t.Errorf("-log-level error: stderr = %q, want the Stats kept", stderr.String())
+	}
+	if strings.Count(stdout.String(), "orderId") != 2 || strings.Contains(stdout.String(), "WARN") {
+		t.Errorf("-log-level error: stdout = %q, want the two records and nothing else", stdout.String())
+	}
+
+	// A fatal error keeps its plain line at any level, beside the log record.
+	withSink(t, &closingSink{err: errors.New("broker unreachable")})
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), "ktg", args("error"), &stdout, &stderr); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "Error: record 1: sending: broker unreachable") {
+		t.Errorf("stderr = %q, want the plain Error line", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ERROR") {
+		t.Errorf("stderr = %q, want the error-level log record too", stderr.String())
+	}
+}
+
+// TestRunRejectsUnknownLogLevel proves a bad -log-level is a usage error.
+func TestRunRejectsUnknownLogLevel(t *testing.T) {
+	var stdout, stderr strings.Builder
+	code := run(context.Background(), "ktg", []string{"-spec", writeSpec(t, runnableSpec), "-topic", "orders", "-dry-run", "-log-level", "loud"}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "debug, info, warn or error") || !strings.Contains(stderr.String(), "Usage: ktg") {
+		t.Errorf("stderr = %q, want the accepted levels and the usage block", stderr.String())
+	}
+}

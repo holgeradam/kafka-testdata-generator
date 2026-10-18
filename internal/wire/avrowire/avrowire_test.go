@@ -5,12 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
 )
@@ -232,8 +234,9 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if len(parts.Warnings) != 1 || parts.Warnings[0] != "Warning: key bindings are ignored under -format avro" {
-		t.Errorf("warnings = %q, want the ignored-binding warning", parts.Warnings)
+	want := logging.Diagnostic{Level: logging.Warn, Msg: "key bindings are ignored under -format avro"}
+	if len(parts.Diagnostics) != 1 || !reflect.DeepEqual(parts.Diagnostics[0], want) {
+		t.Errorf("diagnostics = %+v, want %+v", parts.Diagnostics, want)
 	}
 
 	opts.MessageTypes[0].Key = nil
@@ -241,8 +244,8 @@ func TestBuildWarnsOfIgnoredBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if len(parts.Warnings) != 0 {
-		t.Errorf("warnings = %q, want none without a binding", parts.Warnings)
+	if len(parts.Diagnostics) != 0 {
+		t.Errorf("diagnostics = %+v, want none without a binding", parts.Diagnostics)
 	}
 }
 
