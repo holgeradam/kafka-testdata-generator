@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/producer"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
@@ -41,8 +42,8 @@ func init() {
 }
 
 // Run is a validated plan: everything one generation run needs, with the two
-// pieces that touch the network left to NewSink and NewEncoder. Config.Warn is
-// left nil for the caller to point at its own stderr.
+// pieces that touch the network left to NewSink and NewEncoder. Config.Logger is
+// left nil for the caller to supply.
 type Run struct {
 	// Config drives the Pipeline; its Encoder is supplied by NewEncoder.
 	Config pipeline.Config
@@ -56,9 +57,13 @@ type Run struct {
 	Topic  string
 	// RegistryURL is the Confluent Schema Registry base URL (AVRO produce).
 	RegistryURL string
-	// Warnings are diagnostics the run carries, for the caller to print:
-	// disregarded Kafka options in dry run, a key binding ignored under AVRO.
-	Warnings []string
+	// LogLevel is the level -log-level selects, for the caller to build its
+	// Logger from.
+	LogLevel logging.Level
+	// Diagnostics are what the run asks the caller to log: disregarded Kafka
+	// options in dry run, a key binding ignored under AVRO. Planning does no
+	// I/O, so they are data until the caller has a Logger.
+	Diagnostics []logging.Diagnostic
 
 	encoder func(ctx context.Context) (pipeline.Encoder, error)
 }
@@ -72,6 +77,7 @@ type flags struct {
 	rateLimit                              *time.Duration
 	keyPath, renamedKey, renamedChannel    *string
 	dryRun, continueOnError                *bool
+	logLevel                               *string
 	seed                                   *int64
 	now                                    *nowFlag
 	acks                                   *acksFlag
@@ -96,6 +102,7 @@ func newFlags() *flags {
 		renamedKey:      fs.String("key", "", "deprecated: renamed to -keyPath"),
 		renamedChannel:  fs.String("channel", "", "deprecated: renamed to -topic"),
 		dryRun:          fs.Bool("dry-run", false, "Generate payloads without producing to Kafka"),
+		logLevel:        fs.String("log-level", "info", "Diagnostics to show on stderr: debug, info, warn or error"),
 		continueOnError: fs.Bool("continueOnError", false, "Finish the run past a record that cannot be encoded or delivered, reporting each failure (default: stop at the first); exits 1 if any record failed"),
 		// 0 stands in for "random" so help states no seed that will not be used;
 		// Plan draws the real one when -seed is not given.
@@ -181,7 +188,13 @@ func Plan(args []string) (*Run, error) {
 		return nil, &Error{Usage: true, Flag: "key", Detail: "-key was renamed to -keyPath and changed meaning: the Key is generated from the key schema and planted into the payload at that path, never extracted from it. Use -keyPath, together with a key schema (bindings.kafka.key in JSON mode, -avro-key-schema under -format avro)."}
 	}
 
+	level, err := logging.ParseLevel(*f.logLevel)
+	if err != nil {
+		return nil, &Error{Usage: true, Flag: "log-level", Detail: "-log-level: " + err.Error()}
+	}
+
 	run := &Run{
+		LogLevel:    level,
 		DryRun:      *f.dryRun,
 		Broker:      *f.broker,
 		Acks:        f.acks.acks,
@@ -253,7 +266,7 @@ func wireFormat(f *flags, topic *asyncapi.Topic) (string, error) {
 // registry count as disregarded.
 func (r *Run) warnDisregardedOptions(f *flags) {
 	if r.DryRun && (f.isSet("broker") || f.isSet("acks") || r.RegistryURL != "") {
-		r.Warnings = append(r.Warnings, "Warning: dry-run mode disregards Kafka options")
+		r.Diagnostics = append(r.Diagnostics, logging.Diagnostic{Level: logging.Warn, Msg: "dry-run mode disregards Kafka options"})
 	}
 }
 
@@ -268,7 +281,7 @@ func (r *Run) build(f *flags, format wire.Format, flags wire.Flags, topic *async
 		return err
 	}
 	r.encoder = parts.Encoder
-	r.Warnings = append(r.Warnings, parts.Warnings...)
+	r.Diagnostics = append(r.Diagnostics, parts.Diagnostics...)
 	r.Config = pipeline.Config{
 		Generator: parts.Values,
 		Count:     *f.count,

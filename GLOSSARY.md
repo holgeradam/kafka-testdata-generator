@@ -87,6 +87,14 @@ _Avoid_: generator interface, data source, ValueGenerator (its former name)
 The seeded, clock-aware source of every leaf value and random decision in a run, shared by the Payload and the Key. The schema walkers decide the shape a schema demands; the Synthesizer decides the values inside it, including readable values chosen from field names.
 _Avoid_: faker, value source, random generator
 
+**Diagnostic**:
+A message about the run itself rather than its product: a warning about an ignored spec declaration or a disregarded option, the cause of a failed record, the interrupt notice. Reported through the **Logger** at a level (`-log-level`), as text on stderr. The Run plan and the Wire formats carry theirs as data and the process edge emits them. Not product output: the Dry run Key and Headers lines and the Stats line are unaffected by the level. See ADR-0012.
+_Avoid_: warning (for the whole class), log line
+
+**Logger**:
+The seam diagnostics go through: a small interface of our own (Debug, Info, Warn, Error with key/value attrs) that the Pipeline and the process edge depend on, with one zap-backed console adapter in production and a recorder in tests. There is no global logger.
+_Avoid_: log, stderr writer
+
 **Encoder**:
 The Wire-format seam that turns a generated message's Key and Payload into the bytes of a Kafka record. Headers do not pass through it: every Wire format encodes them alike, plain-scalar, when they are generated. Every encoding writes an object's keys in the order its schema declares them (#96): a JSON Schema's `properties` as the spec writes them, which the spec reader records under an extension keyword because decoding forgets it, and an avsc's `fields`; values stay as generated. One adapter exists per format: JsonEncoder for JSON mode (its Encode serves both Dry run and produce), and under AVRO two - AvroEncoder for producing, and AvroDisplayEncoder for Dry run. Each adapter owns how both the Key and the Payload are encoded for that format, and how they render for Dry run. AvroEncoder also owns the schema-registry interaction: it registers the exact value avsc under `<topic>-value` - or, for several Avro Message types, each record under its full name and their union under `<topic>-value`, referencing them - and, when a key avsc is supplied, the key avsc under `<topic>-key`, then frames payloads and keys with the registry-assigned schema IDs. AvroDisplayEncoder renders the Avro JSON encoding from the local avsc of each record's Message type and never touches a registry. The Pipeline never sees format conventions.
 _Avoid_: serializer, marshaler, codec

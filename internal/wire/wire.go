@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 )
@@ -56,9 +57,9 @@ type Parts struct {
 	// Encoder builds the run's Encoder. It is called after the sink exists, so
 	// a run that cannot reach its broker never contacts a registry (ADR-0010).
 	Encoder func(ctx context.Context) (pipeline.Encoder, error)
-	// Warnings are diagnostics for the caller to print, such as a spec
-	// declaration the format ignores.
-	Warnings []string
+	// Diagnostics are what the caller should log, such as a spec declaration
+	// the format ignores. They are data: building Parts does no logging.
+	Diagnostics []logging.Diagnostic
 }
 
 // Error reports a run a Wire format rejects. Flag names the option at fault

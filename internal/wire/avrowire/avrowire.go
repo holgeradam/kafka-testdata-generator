@@ -13,6 +13,7 @@ import (
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
 	"github.com/holgeradam/kafka-testdata-generator/internal/avro"
 	"github.com/holgeradam/kafka-testdata-generator/internal/keyplan"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
@@ -170,14 +171,14 @@ func (Format) Build(flags wire.Flags, topic *asyncapi.Topic, s *synth.Synthesize
 	// Records from -avro-schema are of no Message type in the spec, so no
 	// Message type's headers apply to them: they are ignored, out loud.
 	if len(spec) == 0 && slices.ContainsFunc(topic.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Headers != nil }) {
-		parts.Warnings = append(parts.Warnings, "Warning: headers are ignored under -avro-schema: its records are of no Message type in the spec")
+		parts.Diagnostics = append(parts.Diagnostics, logging.Diagnostic{Level: logging.Warn, Msg: "headers are ignored under -avro-schema: its records are of no Message type in the spec"})
 	}
 	// A JSON Schema payload's key binding declares a JSON-schema-shaped Key;
 	// generating one would silently violate the avsc key contract, so it is
 	// ignored, out loud. The spec's Message types play no other part: the
 	// avsc governs the Payload.
 	if topic.Format == asyncapi.JSONSchemaFormat && slices.ContainsFunc(topic.MessageTypes, func(mt asyncapi.MessageType) bool { return mt.Key != nil }) {
-		parts.Warnings = append(parts.Warnings, "Warning: key bindings are ignored under -format avro")
+		parts.Diagnostics = append(parts.Diagnostics, logging.Diagnostic{Level: logging.Warn, Msg: "key bindings are ignored under -format avro"})
 	}
 	return parts, nil
 }

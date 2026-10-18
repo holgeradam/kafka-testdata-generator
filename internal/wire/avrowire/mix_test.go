@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	codec "github.com/confluentinc/confluent-avro-go/v2"
 	"github.com/holgeradam/kafka-testdata-generator/internal/asyncapi"
+	"github.com/holgeradam/kafka-testdata-generator/internal/logging"
 	"github.com/holgeradam/kafka-testdata-generator/internal/pipeline"
 	"github.com/holgeradam/kafka-testdata-generator/internal/synth"
 	"github.com/holgeradam/kafka-testdata-generator/internal/wire"
@@ -292,7 +294,9 @@ func TestBuildGeneratesHeadersUnderAvro(t *testing.T) {
 	if g, _ := parts.Values.Generate(); g.Headers != nil {
 		t.Errorf("headers = %v, want none under -avro-schema", g.Headers)
 	}
-	if !strings.Contains(strings.Join(parts.Warnings, "\n"), "headers are ignored under -avro-schema") {
-		t.Errorf("warnings = %v, want the ignored headers reported", parts.Warnings)
+	if !slices.ContainsFunc(parts.Diagnostics, func(d logging.Diagnostic) bool {
+		return d.Level == logging.Warn && strings.Contains(d.Msg, "headers are ignored under -avro-schema")
+	}) {
+		t.Errorf("diagnostics = %+v, want the ignored headers reported at warn", parts.Diagnostics)
 	}
 }
